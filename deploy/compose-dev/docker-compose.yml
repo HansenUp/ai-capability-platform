@@ -33,6 +33,8 @@ services:
       REDIS_HOST: redis
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}   # 从宿主机环境读取，未设置则为空
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}         # embed-default 别名使用
+      COHERE_API_KEY: ${COHERE_API_KEY:-}         # rerank-default 别名使用
     volumes: ["../../services/model-gateway/config.yaml:/app/config.yaml:ro"]
     ports: ["4000:4000"]
     depends_on: [litellm-db, redis]

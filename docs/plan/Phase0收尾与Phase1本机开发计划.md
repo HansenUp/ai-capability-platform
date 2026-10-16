@@ -44,7 +44,7 @@
 | A9 | 补齐 ADR 0002（Langfuse）、0003（APISIX 插件）、0004（stdio Harness 首选）、0006（模型别名）文件；ADR-0005 数据面 POC 范围完成评审 | P0-3.1、P0-3.2 | 按 `docs/adr/0000-template.md` 补写，内容与 README 已采纳结论一致 | `docs/adr/` 0001–0011 齐全，0005 为已采纳 |
 | A10 | 确认首个场景为工单总结；业务系统只读 API 负责人未到位时，本机先以 mock 数据源实现 `mcp-servers/ticket` | P0-3.3 | 选型确认纪要 | 纪要入库，含负责人与接口约定 |
 | A11 | P0-5.4～5.8 补专项测试并把计划状态改为已完成 | P0-5 | 针对写前记录、审批绑定失效、能力等级闸门各加用例 | 用例通过，`实施计划.md` 状态列更新 |
-| A12 | 启动 Docker Desktop，`make compose-up --profile langfuse`；配置 `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` 给 LiteLLM | P0-4.1 本机替代 | `.env.example` 入库，真实 Key 只放本机 `.env`，不入库 | MySQL / Redis / Keycloak / LiteLLM / Langfuse / OTel 全部 healthy，`curl localhost:4000/health` 通过 |
+| A12 | 启动 Docker Desktop，`make compose-up`（含 observe profile）；配置 `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` 给 LiteLLM | P0-4.1 本机替代 | `.env.example` 入库，真实 Key 只放本机 `.env`，不入库 | MySQL / Redis / Keycloak / LiteLLM / Langfuse / OTel 全部 healthy，`curl localhost:4000/health` 通过 |
 
 与 S1 并行、不阻塞的文档项：P0-5.9 四项决策纪要、P0-5.10 文档一致性修订、P0-5.11 非功能测量口径。
 
@@ -74,3 +74,28 @@
 | 工单系统只读 API 与负责人 | 业务系统团队 | S3 末（否则 S4 继续用 mock） |
 | Vault、K8s / Argo CD、预发布环境 | 运维 | S4 投产前 |
 | 模型 API Key（Anthropic / DeepSeek）预算 | 产品负责人 | S1 开始前 |
+
+---
+
+## 6. 执行结果（2026-10-16）
+
+| # | 结果 | 说明 |
+|---|---|---|
+| A1 | 完成 | 本机 git 仓库、`main` 分支、PR 模板；远端与分支保护待运维提供代码平台 |
+| A2 | 完成 | mypy 严格模式 `packages/contract`、`services/runtime` 零错误；`make lint` 一次通过 |
+| A3 | 完成 | `.pre-commit-config.yaml`：ruff / ruff-format / mypy 本机通过；gitleaks 在本机 DLP 环境无法编译，改为 manual 阶段并由 CI `secrets` job 强制 |
+| A4 | 完成（本机未验证镜像） | 5 个 Dockerfile 与 CI `images` job（build + trivy）；本机 Docker 经代理拉取基础镜像卡住，镜像由 CI 验证 |
+| A5 | 完成 | Contract V1.0.0 冻结：新增 `input_required` 事件、`ThinkingEvent.visibility`、`CardType` 枚举、`CONTRACT_VERSION`；`packages/contract/CONTRACT_V1.md` |
+| A6 | 完成 | `docs/api/runtime-openapi.json`（v1）；schemathesis 契约测试；`make openapi-check` 进 CI |
+| A7 | 完成 | `docs/api/gateway-openapi.json`（v1）；契约测试 |
+| A8 | 完成 | `make sdk-types`：Python（datamodel-codegen）与 Web（openapi-typescript）类型骨架，SDK 已引用 |
+| A9 | 完成 | ADR 0002～0006 补齐，0005 范围评审通过（结论待 S6 回填）；索引更新 |
+| A10 | 完成 | `docs/decisions/2026-10-16-首个垂直切片场景确认.md`（负责人栏待填） |
+| A11 | 完成 | P0-5.4～5.8 专项测试 22 个；另按属性测试结果修复 Run API 三处 5xx，业务拒绝统一 409 |
+| A12 | 受阻 | `.env.example` 已入库、compose 已补密钥透传与 `.env` 读取；本机 `docker pull` 经 Docker Desktop 代理（http.docker.internal:3128）卡住约 30 分钟无进展，需修复宿主机代理设置后重跑 `make compose-up` |
+
+验证基线：`make test` 119 通过 / 1 跳过；`make lint` 通过；`make openapi-check` 通过；`pnpm -r build` 通过；`make precommit` 通过。
+本机环境发现：透明加密（DLP）使 ruff 等原生二进制读到密文，已用 `scripts/lint_ruff.py` 绕过，git 提交内容不受影响（见决策纪要 D12）。
+
+**进入 S1 的前置：** 修复 Docker 代理后完成 A12（compose 全部 healthy、LiteLLM `/health` 通过），并在 `.env` 中配置模型 Key。S1.2～S1.6 可在 A12 完成前先行开发（mock Harness 与 SQLite 不依赖 compose）。
+

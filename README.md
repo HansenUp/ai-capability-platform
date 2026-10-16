@@ -150,7 +150,7 @@ make run-runtime  # 启动 Runtime（默认 mock Harness、SQLite、无鉴权）
 
 ```bash
 curl -s localhost:8080/admin/agents -H 'content-type: application/json' -H 'X-AI-Subject: human:dev' \
-  -d '{"agent_id":"demo","version":"1","model_alias":"chat-2026-06","system_prompt":"你是企业助手","config":{"tools":["echo","ticket.search","ticket.close_batch"],"skills":[{"name":"ticket-summary"}]}}'
+  -d '{"agent_id":"demo","version":"1","model_alias":"claude-sonnet-2026-06","system_prompt":"你是企业助手","config":{"tools":["echo","ticket.search","ticket.close_batch"],"skills":[{"name":"ticket-summary"}]}}'
 ```
 
 ```bash
@@ -188,7 +188,7 @@ pnpm install && pnpm -r dev
 make compose-up
 ```
 
-启动 MySQL、Redis、MinIO、Elasticsearch、Keycloak、LiteLLM、OTel Collector；加 `--profile langfuse` 启动 Langfuse。
+启动 MySQL、Redis、MinIO、Elasticsearch、Keycloak、LiteLLM、OTel Collector；加 `--profile observe` 启动 Langfuse。
 
 ---
 
