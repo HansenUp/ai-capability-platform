@@ -10,6 +10,13 @@ line-length = 140                        # 行宽上限
 target-version = "py311"
 # 让 Ruff 识别各包的 src 布局，正确判断 first-party 导入排序
 src = ["packages/*/src", "services/*/src", "harness-adapters/*/src", "mcp-servers/*/src"]
+# 由 OpenAPI 自动生成的 SDK 类型（scripts/gen_sdk_types.sh）不做静态检查
+extend-exclude = ["packages/sdk-python/src/ai_platform_sdk/types_*.py"]
+
+[tool.ruff.format]
+quote-style = "double"                   # 与现有代码一致：字符串使用双引号
+indent-style = "space"
+line-ending = "lf"
 
 [tool.ruff.lint]
 # E/F 基础错误，I 导入排序，B 常见坑，UP 现代语法，ASYNC 异步误用，S 安全（bandit）

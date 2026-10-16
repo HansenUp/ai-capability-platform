@@ -2,7 +2,7 @@
 name: ci
 on: [push, pull_request]
 jobs:
-  python:                                 # Python：安装全部包 → ruff 静态检查 → pytest
+  python:                                 # Python：安装全部包 → ruff 静态检查 → OpenAPI 一致性 → pytest（含契约测试）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -10,6 +10,7 @@ jobs:
         with: { python-version: "3.12" }
       - run: make setup
       - run: .venv/bin/ruff check .
+      - run: make openapi-check             # docs/api 下的 OpenAPI 必须与代码一致
       - run: .venv/bin/python -m pytest -q
   web:                                    # 前端：pnpm 工作区安装 → 构建 sdk-web / portal-web / console-web
     runs-on: ubuntu-latest
@@ -21,3 +22,26 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile || pnpm install   # lockfile 不一致时退回普通安装
       - run: pnpm -r build
+  images:                                 # 镜像：5 个服务逐个构建（不推送）并用 Trivy 扫描 CRITICAL / HIGH 漏洞
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [runtime, console-api, capability-gateway, policy, observe-adapter]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f services/${{ matrix.service }}/Dockerfile -t ai-platform/${{ matrix.service }}:ci .
+      - uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          image-ref: ai-platform/${{ matrix.service }}:ci
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true            # 仅关注已有修复版本的漏洞，避免基础镜像无补丁项造成噪声
+  secrets:                                # 密钥扫描：gitleaks 全历史扫描（本机 DLP 环境无法编译 hook，故在 CI 强制）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

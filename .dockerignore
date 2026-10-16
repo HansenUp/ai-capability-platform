@@ -1,0 +1,26 @@
+# Docker 构建上下文为仓库根目录，排除不需要的大目录与本地产物
+.git
+.venv
+.idea
+.omc
+.github
+node_modules
+**/node_modules
+dist
+**/dist
+**/__pycache__
+*.pyc
+*.egg-info
+**/*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.db
+.env
+.env.local
+runtime-workspace
+# 设计文档（docx / html 等大文件）与镜像无关
+docs
+# 前端与其它非服务代码
+apps
+evals

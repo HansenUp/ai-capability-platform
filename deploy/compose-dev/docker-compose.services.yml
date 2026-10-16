@@ -1,0 +1,25 @@
+# 5 个平台服务的镜像构建验证（仅用于本地确认镜像可构建 / 可启动，不是开发主路径；开发请用 make run-*）。
+# 构建上下文为仓库根目录（相对本文件为 ../..）。用法：
+#   docker compose -f deploy/compose-dev/docker-compose.services.yml build
+#   docker compose -f deploy/compose-dev/docker-compose.services.yml up -d   # 可选启动
+services:
+  runtime:
+    build: { context: ../.., dockerfile: services/runtime/Dockerfile }
+    image: ai-platform/runtime:dev
+    ports: ["8080:8080"]
+  console-api:
+    build: { context: ../.., dockerfile: services/console-api/Dockerfile }
+    image: ai-platform/console-api:dev
+    ports: ["8081:8081"]
+  capability-gateway:
+    build: { context: ../.., dockerfile: services/capability-gateway/Dockerfile }
+    image: ai-platform/capability-gateway:dev
+    ports: ["8082:8082"]
+  policy:
+    build: { context: ../.., dockerfile: services/policy/Dockerfile }
+    image: ai-platform/policy:dev
+    ports: ["8083:8083"]
+  observe-adapter:
+    build: { context: ../.., dockerfile: services/observe-adapter/Dockerfile }
+    image: ai-platform/observe-adapter:dev
+    ports: ["8084:8084"]
