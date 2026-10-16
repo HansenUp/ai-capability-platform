@@ -1,0 +1,1914 @@
+{
+  "components": {
+    "schemas": {
+      "AgentVersionIn": {
+        "description": "创建/更新一个 Agent 版本快照的请求体。",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "harness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness"
+          },
+          "model_alias": {
+            "default": "default-chat",
+            "title": "Model Alias",
+            "type": "string"
+          },
+          "system_prompt": {
+            "default": "",
+            "title": "System Prompt",
+            "type": "string"
+          },
+          "tenant_id": {
+            "default": "default",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "version"
+        ],
+        "title": "AgentVersionIn",
+        "type": "object"
+      },
+      "ApprovalBody": {
+        "description": "审批/拒绝工具调用请求体。\n\nparams_hash 是必填项：审批附着于具体参数与资源，审批人必须回传卡片上展示的那一份参数指纹，\n否则无从判断\"批的到底是哪一组参数\"。",
+        "properties": {
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "comment": {
+            "default": "",
+            "title": "Comment",
+            "type": "string"
+          },
+          "params_hash": {
+            "title": "Params Hash",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 900,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "call_id",
+          "params_hash"
+        ],
+        "title": "ApprovalBody",
+        "type": "object"
+      },
+      "ApprovalView": {
+        "description": "批准后返回：Run 回到 working，需调用 resume 指向的地址继续执行。",
+        "properties": {
+          "resume": {
+            "title": "Resume",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          }
+        },
+        "required": [
+          "run_id",
+          "state",
+          "resume"
+        ],
+        "title": "ApprovalView",
+        "type": "object"
+      },
+      "CardEvent": {
+        "additionalProperties": false,
+        "description": "富交互卡片事件，用于向客户端展示结构化内容（如高风险操作的影响预览）。",
+        "properties": {
+          "card_type": {
+            "$ref": "#/components/schemas/CardType"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "type": {
+            "const": "card",
+            "default": "card",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "card_type"
+        ],
+        "title": "CardEvent",
+        "type": "object"
+      },
+      "CardType": {
+        "description": "卡片类型枚举（Contract V1 冻结范围内的全部取值），序列化为字符串。",
+        "enum": [
+          "impact_preview",
+          "form",
+          "choice",
+          "reconciliation_required"
+        ],
+        "title": "CardType",
+        "type": "string"
+      },
+      "DoneEvent": {
+        "additionalProperties": false,
+        "description": "标记一次 turn（或整个 run）结束，携带停止原因。",
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "stop_reason": {
+            "default": "end_turn",
+            "enum": [
+              "end_turn",
+              "tool_use",
+              "max_tokens",
+              "cancelled",
+              "error",
+              "awaiting"
+            ],
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trace Id"
+          },
+          "type": {
+            "const": "done",
+            "default": "done",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "DoneEvent",
+        "type": "object"
+      },
+      "ErrorDetail": {
+        "description": "HTTPException 的响应体：detail 为可读的错误说明。",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorDetail",
+        "type": "object"
+      },
+      "ErrorEvent": {
+        "additionalProperties": false,
+        "description": "运行期错误事件。",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "error",
+            "default": "error",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorEvent",
+        "type": "object"
+      },
+      "Event": {
+        "discriminator": {
+          "mapping": {
+            "card": "#/components/schemas/CardEvent",
+            "done": "#/components/schemas/DoneEvent",
+            "error": "#/components/schemas/ErrorEvent",
+            "input_required": "#/components/schemas/InputRequiredEvent",
+            "text": "#/components/schemas/TextEvent",
+            "thinking": "#/components/schemas/ThinkingEvent",
+            "tool_result": "#/components/schemas/ToolResultEvent",
+            "tool_use": "#/components/schemas/ToolUseEvent",
+            "usage": "#/components/schemas/UsageEvent"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TextEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ThinkingEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ToolUseEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ToolResultEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CardEvent"
+          },
+          {
+            "$ref": "#/components/schemas/InputRequiredEvent"
+          },
+          {
+            "$ref": "#/components/schemas/UsageEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ErrorEvent"
+          },
+          {
+            "$ref": "#/components/schemas/DoneEvent"
+          }
+        ],
+        "title": "Event"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InputRequiredEvent": {
+        "additionalProperties": false,
+        "description": "Run 需要用户补充输入（对应 RunState.INPUT_REQUIRED）。\n\n协议字段名为 schema；Python 侧属性名用 input_schema，避免遮蔽 BaseModel 自带的 schema 属性。\n构造时两种名字都接受，序列化时统一输出 schema。",
+        "properties": {
+          "call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Call Id"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schema"
+          },
+          "type": {
+            "const": "input_required",
+            "default": "input_required",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "InputRequiredEvent",
+        "type": "object"
+      },
+      "MessagesRequest": {
+        "description": "/v1/messages 的请求体：类似通用对话补全接口，但绑定到具体 agent_id/agent_version。",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "attachments": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "stream": {
+            "default": true,
+            "title": "Stream",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent_id",
+          "messages"
+        ],
+        "title": "MessagesRequest",
+        "type": "object"
+      },
+      "PublishIn": {
+        "description": "发布一个 Agent 版本的请求体，携带评测网关的评测结果引用。",
+        "properties": {
+          "eval_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eval Passed"
+          },
+          "eval_run_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eval Run Ref"
+          }
+        },
+        "title": "PublishIn",
+        "type": "object"
+      },
+      "ResumeBody": {
+        "description": "续跑请求体：messages: the original initial messages (clients keep them; workers read from session store)\n（客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。）",
+        "properties": {
+          "messages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "title": "ResumeBody",
+        "type": "object"
+      },
+      "RunCreate": {
+        "description": "/v1/runs 的创建请求体：面向 A2A 风格的任务提交场景。",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "input": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Input",
+            "type": "array"
+          },
+          "mode": {
+            "default": "async",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "input"
+        ],
+        "title": "RunCreate",
+        "type": "object"
+      },
+      "RunEvent": {
+        "additionalProperties": false,
+        "description": "One row of the append-only event log. (run_id, seq) is the primary key.\n（追加写事件日志中的一行记录；(run_id, seq) 组合为主键，seq 在同一 run 内严格递增，\n是重放/断点续跑与幂等判断的基础。）",
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "ts": {
+            "format": "date-time",
+            "title": "Ts",
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/RunEventType"
+          }
+        },
+        "required": [
+          "run_id",
+          "seq",
+          "type"
+        ],
+        "title": "RunEvent",
+        "type": "object"
+      },
+      "RunEventType": {
+        "description": "Run 事件日志中每一行记录的事件类型，覆盖 Run 生命周期的全部关键节点。",
+        "enum": [
+          "run.created",
+          "run.state_changed",
+          "context.assembled",
+          "model.request",
+          "model.response",
+          "tool.requested",
+          "tool.decision",
+          "tool.approved",
+          "tool.rejected",
+          "tool.executing",
+          "tool.executed",
+          "tool.result",
+          "context.compacted",
+          "input.requested",
+          "input.provided",
+          "run.error",
+          "run.done"
+        ],
+        "title": "RunEventType",
+        "type": "string"
+      },
+      "RunEventView": {
+        "additionalProperties": false,
+        "description": "事件日志中的一行，字段与契约 RunEvent 完全相同。\n\n单独起名是为了避开 OpenAPI 组件重名：FastAPI 生成响应 schema 时会省略 `default: null`，\n与导出脚本合并进来的契约 RunEvent schema 不再逐字相同，同名会被导出脚本判为冲突。",
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "ts": {
+            "format": "date-time",
+            "title": "Ts",
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/RunEventType"
+          }
+        },
+        "required": [
+          "run_id",
+          "seq",
+          "type"
+        ],
+        "title": "RunEventView",
+        "type": "object"
+      },
+      "RunEventsView": {
+        "description": "GET /v1/runs/{run_id}/events：按 seq 升序的 Run 事件日志。",
+        "items": {
+          "$ref": "#/components/schemas/RunEventView"
+        },
+        "title": "RunEventsView",
+        "type": "array"
+      },
+      "RunState": {
+        "description": "States named after the A2A task lifecycle. Naming alignment only; A2A protocol compatibility\nstill requires a separate adapter layer for messages, artifacts and stream events.\n（状态命名与 A2A 任务生命周期对齐；仅命名对齐，协议兼容仍需独立适配层。）\n（状态命名对齐 A2A task 生命周期，使 Run API 同时可作为 A2A task 端点使用。）",
+        "enum": [
+          "submitted",
+          "working",
+          "auth-required",
+          "input-required",
+          "completed",
+          "failed",
+          "canceled"
+        ],
+        "title": "RunState",
+        "type": "string"
+      },
+      "RunStateView": {
+        "description": "创建 / 拒绝 / 取消 Run 后返回的状态快照。",
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          }
+        },
+        "required": [
+          "run_id",
+          "state"
+        ],
+        "title": "RunStateView",
+        "type": "object"
+      },
+      "RunView": {
+        "description": "GET /v1/runs/{run_id}：单个 Run 的当前状态与元信息。",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_version": {
+            "title": "Agent Version",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "last_seq": {
+            "title": "Last Seq",
+            "type": "integer"
+          },
+          "model_alias": {
+            "title": "Model Alias",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "state",
+          "agent_id",
+          "agent_version",
+          "model_alias",
+          "subject",
+          "last_seq",
+          "created_at"
+        ],
+        "title": "RunView",
+        "type": "object"
+      },
+      "TextEvent": {
+        "additionalProperties": false,
+        "description": "模型文本输出的增量片段（流式追加）。",
+        "properties": {
+          "delta": {
+            "title": "Delta",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "default": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "delta"
+        ],
+        "title": "TextEvent",
+        "type": "object"
+      },
+      "ThinkingEvent": {
+        "additionalProperties": false,
+        "description": "模型思维链/推理过程的增量片段（流式追加）。\n\nvisibility 默认 internal（失败关闭）：runtime 按 Agent 版本配置的 thinking_visibility 覆写该字段，\n并在 SSE 输出处丢弃 internal 级别的事件，使其只保留在事件日志中。",
+        "properties": {
+          "delta": {
+            "title": "Delta",
+            "type": "string"
+          },
+          "type": {
+            "const": "thinking",
+            "default": "thinking",
+            "title": "Type",
+            "type": "string"
+          },
+          "visibility": {
+            "default": "internal",
+            "enum": [
+              "internal",
+              "summary",
+              "full"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "delta"
+        ],
+        "title": "ThinkingEvent",
+        "type": "object"
+      },
+      "ToolResultEvent": {
+        "additionalProperties": false,
+        "description": "工具执行结果（或被拒绝/待审批的状态），回传给模型继续对话。",
+        "properties": {
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "output": {
+            "default": null,
+            "title": "Output"
+          },
+          "output_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Output Ref"
+          },
+          "status": {
+            "default": "ok",
+            "enum": [
+              "ok",
+              "error",
+              "denied",
+              "pending_approval"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_result",
+            "default": "tool_result",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id"
+        ],
+        "title": "ToolResultEvent",
+        "type": "object"
+      },
+      "ToolUseEvent": {
+        "additionalProperties": false,
+        "description": "模型请求调用某个工具（harness 产出，经由 gate 判定后由 runtime 执行）。",
+        "properties": {
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "input": {
+            "additionalProperties": true,
+            "title": "Input",
+            "type": "object"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_use",
+            "default": "tool_use",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "tool_name"
+        ],
+        "title": "ToolUseEvent",
+        "type": "object"
+      },
+      "UsageEvent": {
+        "additionalProperties": false,
+        "description": "一轮模型调用的 token 用量与成本统计，用于计费和观测。",
+        "properties": {
+          "cache_read_tokens": {
+            "default": 0,
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cost": {
+            "default": 0.0,
+            "title": "Cost",
+            "type": "number"
+          },
+          "input_tokens": {
+            "default": 0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "output_tokens": {
+            "default": 0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "type": {
+            "const": "usage",
+            "default": "usage",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "UsageEvent",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "AI Capability Platform · Agent Runtime",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/admin/agents": {
+      "get": {
+        "description": "列出所有已登记的 Agent 版本快照概要信息。",
+        "operationId": "list_agents_admin_agents_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Agents Admin Agents Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Agents"
+      },
+      "post": {
+        "description": "创建或更新一个草稿态 Agent 版本；已发布（published）版本不可变，需要新建版本。",
+        "operationId": "upsert_agent_version_admin_agents_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentVersionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Upsert Agent Version Admin Agents Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upsert Agent Version"
+      }
+    },
+    "/admin/agents/{agent_id}/versions/{version}/publish": {
+      "post": {
+        "description": "将草稿版本置为已发布状态，并冻结可复现快照（技能摘要、harness 版本）。\n\n两道闸门依次生效，任一不满足都按业务规则拒绝返回 409（422 只保留给请求参数校验）：\n1) 评测闸门——eval_passed=False 直接阻断；\n2) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，\n   否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障。",
+        "operationId": "publish_admin_agents__agent_id__versions__version__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publish Admin Agents  Agent Id  Versions  Version  Publish Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish"
+      }
+    },
+    "/admin/node": {
+      "get": {
+        "description": "返回当前节点的基本状态：节点标识、拓扑、默认 harness、已加载的 harness 列表。",
+        "operationId": "node_status_admin_node_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Node Status Admin Node Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Node Status"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "description": "健康检查端点，返回节点状态与节点标识。",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz"
+      }
+    },
+    "/v1/messages": {
+      "post": {
+        "description": "对话式入口：创建 Run 并驱动一次执行；支持流式（SSE）与非流式（聚合后一次性返回）两种模式。",
+        "operationId": "messages_v1_messages_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessagesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Messages V1 Messages Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Messages"
+      }
+    },
+    "/v1/runs": {
+      "post": {
+        "description": "创建一个 Run 并立即返回 202（已接受）；实际驱动在后台任务中异步执行。",
+        "operationId": "create_run_v1_runs_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStateView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Run"
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "description": "查询单个 Run 的当前状态与元信息。",
+        "operationId": "get_run_v1_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run"
+      }
+    },
+    "/v1/runs/{run_id}/approve": {
+      "post": {
+        "description": "批准一次挂起中的高风险工具调用：仅在 Run 处于 auth-required 状态时允许，\n记录 TOOL_APPROVED 事件并把状态迁回 working，随后需调用 /resume 才能真正继续执行。\n\n批准会绑定\"参数指纹 + 有效期\"：参数一旦变化或审批超时，闸口不会放行，必须重新审批。",
+        "operationId": "approve_v1_runs__run_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve"
+      }
+    },
+    "/v1/runs/{run_id}/cancel": {
+      "post": {
+        "description": "取消一个 Run；Run 不存在返回 404（RunNotFound 由应用级异常处理器映射），\n当前状态不允许迁移到 canceled（如已是终态）返回 409。",
+        "operationId": "cancel_v1_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStateView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel"
+      }
+    },
+    "/v1/runs/{run_id}/events": {
+      "get": {
+        "description": "按 seq 增量查询 Run 的事件日志（自 since_seq 之后的所有事件）。\n\nsince_seq 限定在 [0, 2^53]：既覆盖任何现实的 seq，又保证 JS 客户端可精确表示，超界由 FastAPI 返回 422。",
+        "operationId": "run_events_v1_runs__run_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since_seq",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 9007199254740992,
+              "minimum": 0,
+              "title": "Since Seq",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunEventsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Events"
+      }
+    },
+    "/v1/runs/{run_id}/reject": {
+      "post": {
+        "description": "拒绝一次挂起中的高风险工具调用：记录 TOOL_REJECTED 事件并将 Run 直接置为 failed。\n与 approve 同样要求 Run 处于 auth-required 且参数指纹匹配，否则 409；Run 不存在 404。",
+        "operationId": "reject_v1_runs__run_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStateView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject"
+      }
+    },
+    "/v1/runs/{run_id}/resume": {
+      "post": {
+        "description": "Continue a run after approval by replaying its event log (checkpoint via replay).\n（在审批通过后续跑一个 Run：通过重放该 Run 的事件日志实现 checkpoint 续跑，\n只允许对处于 working 状态的 Run 发起。）",
+        "operationId": "resume_v1_runs__run_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume"
+      }
+    }
+  },
+  "x-sse-event-schema": "#/components/schemas/Event"
+}

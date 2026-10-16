@@ -1,6 +1,7 @@
 """Messages/Run API 的集成测试：覆盖普通对话流式响应、只读工具执行与大结果外置、
 高风险写操作的挂起/审批/续跑闭环、结果未知窗口转人工对账、非法状态迁移拒绝，
-以及评测未通过 / harness 能力等级不足时阻断发布。"""
+以及评测未通过 / harness 能力等级不足时阻断发布（业务规则拒绝统一 409）、
+Run API 对不存在的 Run / 非法参数的错误码与响应视图。"""
 
 import json
 import time
@@ -81,10 +82,10 @@ def test_illegal_transition_rejected(client):
 
 
 def test_publish_blocked_when_eval_fails(client):
-    """当评测未通过（eval_passed=False）时，发布接口应被评测闸门阻断，返回 422。"""
+    """当评测未通过（eval_passed=False）时，发布接口应被评测闸门阻断，按业务规则拒绝返回 409。"""
     client.post("/admin/agents", json={"agent_id": "bad", "version": "1"})
     r = client.post("/admin/agents/bad/versions/1/publish", json={"eval_passed": False})
-    assert r.status_code == 422
+    assert r.status_code == 409 and isinstance(r.json()["detail"], str)
 
 
 def _wait_for(client, run_id, predicate, timeout=5.0):
@@ -132,7 +133,7 @@ def test_unknown_tool_result_window_requires_reconciliation(client, monkeypatch)
 
 
 def test_publish_blocked_when_harness_tier_too_low(client):
-    """能力等级闸门：声明了高风险写工具的 Agent，配 L0 档 harness 时发布应被 422 拒绝。
+    """能力等级闸门：声明了高风险写工具的 Agent，配 L0 档 harness 时发布应被 409 拒绝。
 
     mock harness 由平台持有循环，属 L2，因此这里注册一个 harness 自持循环且只有 advisory 拦截的
     适配器来构造 L0 场景，验证闸门确实按能力等级而非按 harness 名称判断。
@@ -154,7 +155,7 @@ def test_publish_blocked_when_harness_tier_too_low(client):
         json={"agent_id": "risky", "version": "1", "harness": "weak", "config": {"tools": ["ticket.close_batch"]}},
     )
     r = client.post("/admin/agents/risky/versions/1/publish", json={"eval_passed": True})
-    assert r.status_code == 422 and "能力等级" in r.json()["detail"]
+    assert r.status_code == 409 and "能力等级" in r.json()["detail"]
 
     # 同一个 Agent 换成平台持有循环的 mock harness（L2）后可以正常发布
     client.post(
@@ -162,3 +163,60 @@ def test_publish_blocked_when_harness_tier_too_low(client):
         json={"agent_id": "risky", "version": "1", "harness": "mock", "config": {"tools": ["ticket.close_batch"]}},
     )
     assert client.post("/admin/agents/risky/versions/1/publish", json={"eval_passed": True}).status_code == 200
+
+
+# ---------------- Run API 错误码与响应视图 ----------------
+
+H = {"X-AI-Subject": "human:dev"}
+
+
+def test_get_run_view_fields_unchanged(client):
+    """挂上 RunView 后 GET /v1/runs/{id} 的返回字段与原字典完全一致。"""
+    with client.stream("POST", "/v1/messages", json={"agent_id": "demo", "messages": [{"role": "user", "content": "hi"}]}) as r:
+        run_id = r.headers["x-run-id"]
+        _events(r)
+    run = client.get(f"/v1/runs/{run_id}").json()
+    assert set(run) == {"run_id", "state", "agent_id", "agent_version", "model_alias", "subject", "last_seq", "created_at"}
+    assert run["state"] == "completed" and isinstance(run["created_at"], str)
+    log = client.get(f"/v1/runs/{run_id}/events").json()
+    assert set(log[0]) == {"run_id", "seq", "type", "payload", "idempotency_key", "ts"}
+    assert client.get(f"/v1/runs/{run_id}/events", params={"since_seq": run["last_seq"]}).json() == []
+
+
+def test_unknown_run_returns_404(client):
+    """不存在的 Run：查询 / 取消 / 批准 / 拒绝 / 续跑一律 404（不再 500）。"""
+    approval = {"call_id": "c", "params_hash": "h"}
+    assert client.get("/v1/runs/no-such-run", headers=H).status_code == 404
+    assert client.post("/v1/runs/no-such-run/cancel", headers=H).status_code == 404
+    assert client.post("/v1/runs/no-such-run/approve", json=approval, headers=H).status_code == 404
+    assert client.post("/v1/runs/no-such-run/reject", json=approval, headers=H).status_code == 404
+    assert client.post("/v1/runs/no-such-run/resume", json={"messages": []}, headers=H).status_code == 404
+    assert client.get("/v1/runs/no-such-run/events", headers=H).json() == []
+
+
+@pytest.mark.parametrize("since_seq", [-1, 2**53 + 1, 2**63])
+def test_events_since_seq_out_of_range_is_422(client, since_seq):
+    """since_seq 超出 [0, 2^53] 由 FastAPI 参数校验返回 422（不再因 SQLite 溢出 500）。"""
+    r = client.get("/v1/runs/no-such-run/events", params={"since_seq": since_seq}, headers=H)
+    assert r.status_code == 422 and isinstance(r.json()["detail"], list)
+
+
+def test_reject_requires_pending_approval_and_matching_params_hash(client):
+    """reject 与 approve 同样的前置校验：非 auth-required 或参数指纹不符 409；校验通过后 Run 置为 failed。"""
+    with client.stream("POST", "/v1/messages", json={"agent_id": "demo", "messages": [{"role": "user", "content": "hi"}]}) as r:
+        done_run = r.headers["x-run-id"]
+        _events(r)
+    assert client.post(f"/v1/runs/{done_run}/reject", json={"call_id": "c", "params_hash": "h"}).status_code == 409
+
+    msgs = [{"role": "user", "content": '!tool ticket.close_batch {"ids":["T-7"]}'}]
+    with client.stream("POST", "/v1/messages", json={"agent_id": "demo", "messages": msgs}) as r:
+        run_id = r.headers["x-run-id"]
+        card = next(e for e in _events(r) if e["type"] == "card")
+    call_id, phash = card["payload"]["call_id"], card["payload"]["params_hash"]
+    assert client.post(f"/v1/runs/{run_id}/reject", json={"call_id": call_id, "params_hash": "0" * 16}).status_code == 409
+    assert client.get(f"/v1/runs/{run_id}").json()["state"] == "auth-required"
+
+    r = client.post(f"/v1/runs/{run_id}/reject", json={"call_id": call_id, "params_hash": phash, "comment": "no"})
+    assert r.status_code == 200 and r.json() == {"run_id": run_id, "state": "failed"}
+    rejected = next(e for e in client.get(f"/v1/runs/{run_id}/events").json() if e["type"] == "tool.rejected")
+    assert rejected["payload"]["params_hash"] == phash

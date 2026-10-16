@@ -10,10 +10,10 @@ TADMIN = {"X-Console-User": "root", "X-Console-Role": "TENANT_ADMIN"}  # 租户�
 
 
 def test_publish_gate_and_assignment():
-    """评测未通过时发布 422；通过后记录灰度；未分配的 ADMIN 不能改可见性；审计留痕。"""
+    """评测未通过时发布 409；通过后记录灰度；未分配的 ADMIN 不能改可见性；审计留痕。"""
     assert c.post("/agents", json={"agent_id": "a1", "version": "1"}, headers=ADMIN).status_code == 201
     r = c.post("/agents/a1/versions/1/publish", json={"eval_passed": False}, headers=ADMIN)
-    assert r.status_code == 422
+    assert r.status_code == 409
     r = c.post("/agents/a1/versions/1/publish", json={"eval_passed": True, "eval_run_ref": "lf_run_1", "canary_percent": 10}, headers=ADMIN)
     assert r.status_code == 200 and r.json()["canary"]["percent"] == 10
     # 另一个未被分配 a1 的 ADMIN 不能操作它

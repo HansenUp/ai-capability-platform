@@ -3,7 +3,7 @@ name = "ai-contract"
 version = "0.1.0"
 description = "Runtime Contract: events, Run states (A2A naming), tool specs, harness adapter protocol"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.6"]
+dependencies = ["pydantic>=2.11"]  # InputRequiredEvent 使用的 serialize_by_alias 配置需要 2.11+
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]

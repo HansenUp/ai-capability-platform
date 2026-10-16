@@ -25,14 +25,19 @@ from typing import Any
 
 from ai_contract import (
     CardEvent,
+    CardType,
     DoneEvent,
     ErrorEvent,
     Event,
     HookSet,
+    InputRequiredEvent,
     RunEventType,
     RunState,
     SessionSpec,
     TextEvent,
+    ThinkingEvent,
+    ThinkingVisibility,
+    ToolResultEvent,
     ToolUseEvent,
     TurnInput,
     UsageEvent,
@@ -42,12 +47,20 @@ from runtime.config import settings
 from runtime.context import budget as ctx
 from runtime.guard.gate import GateContext
 from runtime.harness import registry
-from runtime.loop.toolbroker import RunCtx, handle_tool
+from runtime.loop.toolbroker import RunCtx, handle_tool, record_unknown_result
 from runtime.run import invariant
 from runtime.state.db import AgentVersion, Run, SessionLocal
 from runtime.state.eventlog import EventLog
 
 MAX_TOOL_ROUNDS = 8  # 单次 drive 调用内允许的最大模型-工具往返轮数，超出则判为失败，避免死循环
+# 只允许平台产出的事件类型：harness 若产出这些事件，runner 丢弃并记 HARNESS_FORGED_PLATFORM_EVENT。
+PLATFORM_ONLY_EVENTS = (ToolResultEvent, CardEvent, InputRequiredEvent)
+
+
+def thinking_visibility(agent: AgentVersion) -> ThinkingVisibility:
+    """读取 Agent 版本配置中的 thinking_visibility；缺省或取值非法时按 internal 处理（失败关闭）。"""
+    value = (agent.config or {}).get("thinking_visibility", "internal")
+    return value if value in ("internal", "summary", "full") else "internal"
 
 
 async def create_run(agent: AgentVersion, subject: str, session_id: str | None) -> str:
@@ -131,16 +144,10 @@ async def drive(run_id: str, agent: AgentVersion, subject: str, messages: list[d
                     "operation_id": e.payload.get("operation_id"),
                 }
         if unknown is not None:
-            await log.append(
-                run_id,
-                RunEventType.RUN_ERROR,
-                {"code": "UNKNOWN_TOOL_RESULT", "message": f"tool {unknown['tool']} result unknown; manual reconciliation required"}
-                | unknown,
-            )
-            await log.transition(run_id, RunState.INPUT_REQUIRED, "unknown tool result")
+            await record_unknown_result(log, run_id, unknown)
             await s.commit()
     if unknown is not None:
-        yield CardEvent(card_type="reconciliation_required", payload=unknown)
+        yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown)
         yield DoneEvent(run_id=run_id, stop_reason="awaiting")
         return
 
@@ -210,17 +217,40 @@ async def drive(run_id: str, agent: AgentVersion, subject: str, messages: list[d
 
         tool_call: ToolUseEvent | None = None
         text_parts: list[str] = []
+        thinking_parts: list[str] = []
         async for ev in harness.run_turn(session, TurnInput(messages=rc.history), assembled.tools, assembled.skills, hooks):
             if isinstance(ev, TextEvent):
                 text_parts.append(ev.delta)
                 yield ev
+            elif isinstance(ev, ThinkingEvent):
+                # 思维链一律随 MODEL_RESPONSE 进事件日志；可见性以 Agent 版本配置为准覆写，
+                # 是否下发给客户端由 API 层按 visibility 决定（internal 不下发）。
+                thinking_parts.append(ev.delta)
+                yield ev.model_copy(update={"visibility": thinking_visibility(agent)})
             elif isinstance(ev, ToolUseEvent):
                 tool_call = ev
                 yield ev
+            elif isinstance(ev, PLATFORM_ONLY_EVENTS):
+                # 工具结果、卡片、补充输入请求只能由平台（工具代理 / runner）产出：harness 产出的一律丢弃，
+                # 不转发客户端、不进模型历史，只记一条错误供审计，Run 继续执行。
+                async with SessionLocal() as s:
+                    await EventLog(s).append(
+                        run_id,
+                        RunEventType.RUN_ERROR,
+                        {
+                            "code": "HARNESS_FORGED_PLATFORM_EVENT",
+                            "message": f"harness emitted platform-only event '{ev.type}'; dropped",
+                            "event_type": ev.type.value,
+                        },
+                    )
+                    await s.commit()
             elif isinstance(ev, UsageEvent):
                 # 收到用量事件视为本轮模型输出结束：落盘 MODEL_RESPONSE 事件，并把完整文本追加进历史。
+                payload: dict[str, Any] = {"text": "".join(text_parts), "usage": ev.model_dump()}
+                if thinking_parts:
+                    payload["thinking"] = "".join(thinking_parts)
                 async with SessionLocal() as s:
-                    await EventLog(s).append(run_id, RunEventType.MODEL_RESPONSE, {"text": "".join(text_parts), "usage": ev.model_dump()})
+                    await EventLog(s).append(run_id, RunEventType.MODEL_RESPONSE, payload)
                     await s.commit()
                 if text_parts:
                     rc.history.append({"role": "assistant", "content": "".join(text_parts)})

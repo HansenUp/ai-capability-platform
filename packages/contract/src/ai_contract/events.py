@@ -22,6 +22,7 @@ class EventType(StrEnum):
     TOOL_USE = "tool_use"  # 模型请求调用一个工具
     TOOL_RESULT = "tool_result"  # 工具执行结果回传给模型
     CARD = "card"  # 富交互卡片（如审批预览）
+    INPUT_REQUIRED = "input_required"  # Run 进入 input-required，等待用户补充输入
     USAGE = "usage"  # 本轮的 token 用量与成本统计
     ERROR = "error"  # 错误事件
     DONE = "done"  # 本次 turn/run 结束标记
@@ -40,11 +41,20 @@ class TextEvent(_Base):
     delta: str  # 本次追加的文本片段
 
 
+# 思维链可见性：internal 只进事件日志、不下发客户端；summary 下发摘要；full 下发原文。
+ThinkingVisibility = Literal["internal", "summary", "full"]
+
+
 class ThinkingEvent(_Base):
-    """模型思维链/推理过程的增量片段（流式追加）。"""
+    """模型思维链/推理过程的增量片段（流式追加）。
+
+    visibility 默认 internal（失败关闭）：runtime 按 Agent 版本配置的 thinking_visibility 覆写该字段，
+    并在 SSE 输出处丢弃 internal 级别的事件，使其只保留在事件日志中。
+    """
 
     type: Literal[EventType.THINKING] = EventType.THINKING
     delta: str  # 本次追加的思维文本片段
+    visibility: ThinkingVisibility = "internal"  # 客户端可见性
 
 
 class ToolUseEvent(_Base):
@@ -66,12 +76,36 @@ class ToolResultEvent(_Base):
     output_ref: str | None = None  # set when the raw output was offloaded to the run workspace（原始结果外置到工作区时的引用）
 
 
+class CardType(StrEnum):
+    """卡片类型枚举（Contract V1 冻结范围内的全部取值），序列化为字符串。"""
+
+    IMPACT_PREVIEW = "impact_preview"  # 高风险写的影响预览，配合审批使用
+    FORM = "form"  # 结构化表单，收集用户输入
+    CHOICE = "choice"  # 单选/多选项，让用户在若干候选中做决定
+    RECONCILIATION_REQUIRED = "reconciliation_required"  # 工具结果未知，需要人工对账
+
+
 class CardEvent(_Base):
     """富交互卡片事件，用于向客户端展示结构化内容（如高风险操作的影响预览）。"""
 
     type: Literal[EventType.CARD] = EventType.CARD
-    card_type: str  # e.g. "impact_preview", "table", "link"（卡片类型）
+    card_type: CardType  # 卡片类型
     payload: dict[str, Any] = Field(default_factory=dict)  # 卡片渲染所需的数据
+
+
+class InputRequiredEvent(_Base):
+    """Run 需要用户补充输入（对应 RunState.INPUT_REQUIRED）。
+
+    协议字段名为 schema；Python 侧属性名用 input_schema，避免遮蔽 BaseModel 自带的 schema 属性。
+    构造时两种名字都接受，序列化时统一输出 schema。
+    """
+
+    model_config = {"extra": "forbid", "validate_by_name": True, "validate_by_alias": True, "serialize_by_alias": True}
+
+    type: Literal[EventType.INPUT_REQUIRED] = EventType.INPUT_REQUIRED
+    prompt: str  # 展示给用户的提示语
+    input_schema: dict[str, Any] | None = Field(default=None, alias="schema")  # 期望输入的 JSON Schema，None 表示自由文本
+    call_id: str | None = None  # 若因某次工具调用而需要输入，关联该调用标识
 
 
 class UsageEvent(_Base):
@@ -106,6 +140,6 @@ class DoneEvent(_Base):
 
 # Event 为带判别字段的联合类型：Pydantic 依据 "type" 字段自动选择具体子类型进行解析/校验。
 Event = Annotated[
-    TextEvent | ThinkingEvent | ToolUseEvent | ToolResultEvent | CardEvent | UsageEvent | ErrorEvent | DoneEvent,
+    TextEvent | ThinkingEvent | ToolUseEvent | ToolResultEvent | CardEvent | InputRequiredEvent | UsageEvent | ErrorEvent | DoneEvent,
     Field(discriminator="type"),
 ]

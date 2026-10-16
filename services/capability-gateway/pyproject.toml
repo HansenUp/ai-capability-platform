@@ -5,7 +5,7 @@ description = "Capability registry, two-level discovery, authz proxy, token exch
 requires-python = ">=3.11"
 dependencies = ["ai-contract", "fastapi>=0.110", "uvicorn[standard]>=0.29", "httpx>=0.27", "pydantic>=2.6"]
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx"]
+dev = ["pytest>=8", "httpx", "schemathesis>=3.30"]
 mcp = ["mcp>=1.0"]
 search = ["elasticsearch>=8"]
 [build-system]

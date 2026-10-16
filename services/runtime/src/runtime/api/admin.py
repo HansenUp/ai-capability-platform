@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from ai_contract import RiskLevel, capability_tier
 from runtime.api.auth import Principal, current_principal
+from runtime.api.views import ErrorDetail
 from runtime.assemble.assembler import LOCAL_TOOLS, load_skills, skills_digest
 from runtime.config import settings
 from runtime.harness import registry
@@ -34,7 +35,7 @@ class AgentVersionIn(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)  # tools, skills, budgets, redlines（工具/技能/预算/红线等配置）
 
 
-@router.post("/agents", status_code=201)
+@router.post("/agents", status_code=201, responses={409: {"model": ErrorDetail}})
 async def upsert_agent_version(body: AgentVersionIn, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """创建或更新一个草稿态 Agent 版本；已发布（published）版本不可变，需要新建版本。"""
     async with SessionLocal() as s:
@@ -66,11 +67,11 @@ class PublishIn(BaseModel):
     eval_passed: bool | None = None  # 评测是否通过
 
 
-@router.post("/agents/{agent_id}/versions/{version}/publish")
+@router.post("/agents/{agent_id}/versions/{version}/publish", responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
 async def publish(agent_id: str, version: str, body: PublishIn, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """将草稿版本置为已发布状态，并冻结可复现快照（技能摘要、harness 版本）。
 
-    两道闸门依次生效：
+    两道闸门依次生效，任一不满足都按业务规则拒绝返回 409（422 只保留给请求参数校验）：
     1) 评测闸门——eval_passed=False 直接阻断；
     2) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，
        否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障。
@@ -84,7 +85,7 @@ async def publish(agent_id: str, version: str, body: PublishIn, principal: Princ
         if av is None:
             raise HTTPException(404)
         if body.eval_passed is False:
-            raise HTTPException(422, "evaluation gate failed; publish blocked")
+            raise HTTPException(409, "evaluation gate failed; publish blocked")
         caps = registry.get(av.harness).capabilities()
         tier = capability_tier(caps)
         cfg = av.config or {}
@@ -92,7 +93,7 @@ async def publish(agent_id: str, version: str, body: PublishIn, principal: Princ
         high_risk = [n for n in cfg.get("tools", []) if n in LOCAL_TOOLS and LOCAL_TOOLS[n].risk_level == RiskLevel.WRITE_HIGH]
         if high_risk and tier != "L2":
             raise HTTPException(
-                422,
+                409,
                 f"所选 Harness 不满足高风险写所需的能力等级（harness={caps.name}，当前 {tier}，需要 L2）；"
                 f"涉及的高风险写工具：{', '.join(high_risk)}",
             )

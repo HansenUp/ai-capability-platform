@@ -33,8 +33,9 @@ class MockHarness:
     def capabilities(self) -> HarnessCapabilities:
         """声明本 harness 的能力：进程内传输，不支持原生续跑（依赖事件日志重放实现 checkpoint）。
 
-        可治理性方面 mock 是最低档（L0）：它不提供任何执行前拦截，也不能由平台事件日志重建会话，
-        因此只适合跑只读路径，不应被用于承载高风险写。
+        可治理性方面 mock 判定为 L2：轮次循环由平台的 loop.runner 驱动（loop_owner="platform"），
+        工具一律经平台工具代理执行、闸口必然生效，恢复由平台事件日志重放完成；mock 自身虽不提供
+        执行前拦截也不支持原生续跑，但这两项此时由平台保证，因此可以承载高风险写的审批挂起与续跑。
         """
         return HarnessCapabilities(
             name="mock",

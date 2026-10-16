@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import builtins
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -15,6 +16,10 @@ from ai_contract import Event, RunEvent, RunEventType, RunState, can_transition
 from runtime.state.db import Run, RunEventRow
 
 _EVENTS = TypeAdapter(list[Event])  # 用于把投影出的 dict 列表按判别字段校验/解析为统一 Event 列表
+
+
+class RunNotFound(KeyError):
+    """事件日志操作的目标 Run 不存在。继承 KeyError 保持兼容；API 层统一映射为 HTTP 404。"""
 
 
 class EventLog:
@@ -30,7 +35,7 @@ class EventLog:
         保证同一 run 内的 seq 严格单调递增、不重不漏。"""
         run = await self.s.get(Run, run_id)
         if run is None:
-            raise KeyError(run_id)
+            raise RunNotFound(run_id)
         seq = run.last_seq + 1
         row = RunEventRow(run_id=run_id, seq=seq, type=type_.value, payload=payload or {}, idempotency_key=idempotency_key)
         self.s.add(row)
@@ -43,7 +48,7 @@ class EventLog:
         （非法迁移抛 ValueError），合法时更新 Run.state 并追加一条 RUN_STATE_CHANGED 事件。"""
         run = await self.s.get(Run, run_id)
         if run is None:
-            raise KeyError(run_id)
+            raise RunNotFound(run_id)
         src = RunState(run.state)
         if src == dst:
             return dst
@@ -75,13 +80,13 @@ class EventLog:
         return row is not None
 
     @staticmethod
-    def project_unified_events(log: list[RunEvent]) -> list[Event]:
+    def project_unified_events(log: builtins.list[RunEvent]) -> builtins.list[Event]:
         """Turn the Run event log into the unified Event stream a harness can be resumed from.
         （把 Run 事件日志投影为统一的 Event 流，供 harness.resume 用于重放重建会话——
         这是"checkpoint 通过重放实现"这一机制在数据层面的具体转换：只挑选模型文本响应、
         工具请求、工具结果三类事件转换为对应的统一事件，其余管理类事件（如状态迁移）不参与投影。）
         """
-        out: list[dict[str, Any]] = []
+        out: builtins.list[dict[str, Any]] = []  # 本类的 list 方法遮蔽了内置名，故用 builtins.list
         for ev in log:
             if ev.type == RunEventType.MODEL_RESPONSE and ev.payload.get("text"):
                 out.append({"type": "text", "delta": ev.payload["text"]})

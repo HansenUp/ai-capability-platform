@@ -25,10 +25,12 @@ def test_second_level_search_filters_by_policy():
 
 
 def test_skill_store_enforces_supply_chain_rules():
-    """缺评测集或缺签名均 422；齐全时 201。"""
+    """缺评测集、缺签名或扫描未通过均按业务规则 409 拒绝（detail 为字符串）；齐全时 201。"""
     base = {"name": "s", "version": "1.0.0", "owner": "o", "package_uri": "s3://x", "signature": "sig", "scan_passed": True}
-    assert c.post("/skills", json=base | {"eval_dataset_ref": None}).status_code == 422
-    assert c.post("/skills", json=base | {"signature": "", "eval_dataset_ref": "ds1"}).status_code == 422
+    rejects = [{"eval_dataset_ref": None}, {"signature": "", "eval_dataset_ref": "ds1"}, {"scan_passed": False, "eval_dataset_ref": "ds1"}]
+    for bad in rejects:
+        r = c.post("/skills", json=base | bad)
+        assert r.status_code == 409 and isinstance(r.json()["detail"], str)
     assert c.post("/skills", json=base | {"eval_dataset_ref": "ds1"}).status_code == 201
 
 

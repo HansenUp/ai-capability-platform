@@ -17,8 +17,10 @@ from typing import Any
 
 from ai_contract import (
     CardEvent,
+    CardType,
     DoneEvent,
     Event,
+    RiskLevel,
     RunEventType,
     RunState,
     SessionSpec,
@@ -49,6 +51,22 @@ async def execute_tool(tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool
             return {"impact_preview": {"tickets": len(ids), "notifications": len(ids)}}
         return {"closed": ids}
     return {"error": f"tool {tool.name} not available in dev executor"}
+
+
+async def record_unknown_result(log: EventLog, run_id: str, unknown: dict[str, Any], cause: str | None = None) -> None:
+    """结果未知路径的落日志部分：记 UNKNOWN_TOOL_RESULT 错误并把 Run 迁移到 input-required（调用方负责提交）。
+
+    unknown 至少含 call_id / tool / operation_id，原样作为对账卡片的 payload。禁止盲目重试：
+    是否补做由人工对账决定。
+    """
+    payload: dict[str, Any] = {
+        "code": "UNKNOWN_TOOL_RESULT",
+        "message": f"tool {unknown['tool']} result unknown; manual reconciliation required",
+    } | unknown
+    if cause:
+        payload["cause"] = cause
+    await log.append(run_id, RunEventType.RUN_ERROR, payload)
+    await log.transition(run_id, RunState.INPUT_REQUIRED, "unknown tool result")
 
 
 @dataclass
@@ -126,7 +144,7 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             await s.commit()
             rc.suspended = True
             yield CardEvent(
-                card_type="impact_preview",
+                card_type=CardType.IMPACT_PREVIEW,
                 # params_hash 必须推给前端：审批接口要求回传同一份参数指纹，参数变化则审批无效。
                 payload={"call_id": call.call_id, "tool": tool.name, "preview": preview, "run_id": rc.run_id, "params_hash": phash},
             )
@@ -146,7 +164,20 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
                 {"call_id": call.call_id, "tool": tool.name, "operation_id": gate.idempotency_key, "params_hash": phash},
             )
             await s.commit()
-            result = await execute_tool(tool, call.input)
+            try:
+                result = await execute_tool(tool, call.input)
+            except Exception as exc:
+                if tool.risk_level == RiskLevel.READ:
+                    raise
+                # 写操作执行抛异常：副作用是否已发生无从判断，当场走结果未知路径——
+                # 记错误、迁移到 input-required、推对账卡片，SSE 流以 done 正常收尾，不自动重试。
+                unknown = {"call_id": call.call_id, "tool": tool.name, "operation_id": gate.idempotency_key}
+                await record_unknown_result(log, rc.run_id, unknown, cause=type(exc).__name__)
+                await s.commit()
+                rc.suspended = True
+                yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown)
+                yield DoneEvent(run_id=rc.run_id, stop_reason="awaiting")
+                return
             await log.append(
                 rc.run_id, RunEventType.TOOL_EXECUTED, {"call_id": call.call_id, "tool": tool.name}, idempotency_key=gate.idempotency_key
             )

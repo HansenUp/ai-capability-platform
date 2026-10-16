@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import Header, HTTPException
 
@@ -39,7 +40,7 @@ async def current_principal(
     return Principal(subject=x_ai_subject or "human:dev", tenant_id=x_ai_tenant or "default")
 
 
-def _verify_jwt(token: str) -> dict:
+def _verify_jwt(token: str) -> dict[str, Any]:
     """JWKS verification hook. Wire python-jose/PyJWT + cached JWKS from settings.jwks_url in S2.
     （JWT 验签占位钩子：S2 工作包实现——接入 python-jose/PyJWT，并基于 settings.jwks_url
     做带缓存的 JWKS 拉取与验签。当前直接返回 501，表示该能力尚未接线。）

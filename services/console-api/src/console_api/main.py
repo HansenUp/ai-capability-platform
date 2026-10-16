@@ -76,7 +76,7 @@ async def publish(agent_id: str, version: str, body: PublishIn, op: Operator = D
     if key not in AGENTS:
         raise HTTPException(404)
     if body.eval_passed is not True:
-        raise HTTPException(422, "publish gate: evaluation must pass (eval_passed=true with eval_run_ref)")
+        raise HTTPException(409, "publish gate: evaluation must pass (eval_passed=true with eval_run_ref)")  # 业务规则拒绝统一用 409
     draft = AGENTS[key]
     # 先把快照推到 Runtime 管理接口（写入 + 发布），再在 Console 侧标记发布
     try:

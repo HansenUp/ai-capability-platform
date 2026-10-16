@@ -10,9 +10,12 @@
  */
 import { LitElement, css, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import type { components } from "./types/runtime";
 
-/** SSE 事件的宽松类型：与 packages/contract 的统一事件流字段对应。 */
-type Ev = { type: string; delta?: string; card_type?: string; payload?: any; call_id?: string; tool_name?: string; status?: string; output?: any; run_id?: string; stop_reason?: string };
+/** SSE data 帧的类型：由 docs/api/runtime-openapi.json 生成的契约统一事件（按 type 判别的联合，见 pnpm gen:types）。 */
+type Ev = components["schemas"]["Event"];
+/** 审批卡片事件（impact_preview 等），payload 为卡片渲染数据。 */
+type CardEv = components["schemas"]["CardEvent"];
 
 /** 用法：<ai-assistant agent-id="demo" base-url="https://gw.example.com"></ai-assistant>
  *  通过 `tokenProvider`（async () => string）提供用户 OAuth 令牌。 */
@@ -34,7 +37,7 @@ export class AiAssistant extends LitElement {
   /** 令牌提供者：返回用户访问令牌，组件以 Bearer 方式附加。 */
   @property({ attribute: false }) tokenProvider?: () => Promise<string>;
   /** 对话记录：u = 用户，a = 助手，card = 审批卡片。 */
-  @state() private items: { role: string; text?: string; card?: Ev }[] = [];
+  @state() private items: { role: string; text?: string; card?: CardEv }[] = [];
   /** 会话 id：取自上一轮 done 事件的 run_id，用于多轮续接。 */
   @state() private sessionId?: string;
 
@@ -69,16 +72,20 @@ export class AiAssistant extends LitElement {
     }
   }
 
-  /** 审批通过：调用 Run API 的 approve；之后由宿主页面或后续版本调用 resume 继续执行。 */
-  async approve(ev: Ev) {
-    await fetch(`${this.baseUrl}/v1/runs/${ev.payload.run_id}/approve`, { method: "POST", headers: await this.headers(), body: JSON.stringify({ call_id: ev.payload.call_id }) });
+  /** 审批通过：调用 Run API 的 approve；之后由宿主页面或后续版本调用 resume 继续执行。
+   *  params_hash 必填，取自卡片 payload：审批绑定具体参数，指纹不一致时 Runtime 返回 409。 */
+  async approve(ev: CardEv) {
+    const p = ev.payload ?? {};
+    const body = { call_id: p.call_id, params_hash: p.params_hash };
+    const res = await fetch(`${this.baseUrl}/v1/runs/${p.run_id}/approve`, { method: "POST", headers: await this.headers(), body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`approve failed: HTTP ${res.status}`);
   }
 
   /** 渲染对话记录与输入框。 */
   render() {
     return html`
       <div class="log">${this.items.map((i) => i.role === "card"
-        ? html`<div class="m card">审批：${i.card!.payload.tool} · 影响 ${JSON.stringify(i.card!.payload.preview)} <button @click=${() => this.approve(i.card!)}>通过</button></div>`
+        ? html`<div class="m card">审批：${i.card!.payload?.tool} · 影响 ${JSON.stringify(i.card!.payload?.preview)} <button @click=${() => this.approve(i.card!)}>通过</button></div>`
         : html`<div class="m ${i.role}">${i.text}</div>`)}</div>
       <form @submit=${(e: Event) => { e.preventDefault(); const inp = (e.target as HTMLFormElement).querySelector("input")!; this.send(inp.value); inp.value = ""; }}>
         <input placeholder="输入…" /><button>发送</button>

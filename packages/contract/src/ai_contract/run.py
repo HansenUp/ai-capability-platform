@@ -67,6 +67,8 @@ class RunEventType(StrEnum):
     TOOL_EXECUTED = "tool.executed"  # 工具已实际执行
     TOOL_RESULT = "tool.result"  # 工具执行结果已产生
     CONTEXT_COMPACTED = "context.compacted"  # 上下文历史被压缩/摘要
+    INPUT_REQUESTED = "input.requested"  # Run 请求用户补充输入（与 InputRequiredEvent 对应）
+    INPUT_PROVIDED = "input.provided"  # 用户已补充输入，Run 可由 input-required 续跑
     RUN_ERROR = "run.error"  # Run 出现错误
     RUN_DONE = "run.done"  # Run 正常结束
 

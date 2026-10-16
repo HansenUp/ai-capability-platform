@@ -37,6 +37,12 @@ MCP_SERVERS: dict[str, dict[str, Any]] = {}  # MCP Server 登记表（内存）
 SKILLS: dict[str, dict[str, Any]] = {}  # Skill 商店（内存），键为 name@version
 
 
+class ErrorDetail(BaseModel):
+    """HTTPException 的响应体。业务规则拒绝统一用 409 + ErrorDetail，422 只保留给 FastAPI 参数校验。"""
+
+    detail: str
+
+
 # ---- 能力发现 ----
 @app.get("/capabilities")
 async def core_capabilities(subject: str, agent: str) -> dict[str, Any]:
@@ -222,15 +228,15 @@ class SkillIn(BaseModel):
     scan_passed: bool = False  # 静态扫描是否通过（必须为 True）
 
 
-@app.post("/skills", status_code=201)
+@app.post("/skills", status_code=201, responses={409: {"model": ErrorDetail}})
 async def submit_skill(body: SkillIn) -> dict[str, Any]:
-    """上架 Skill；供应链硬规则任一不满足即 422 拒绝。"""
+    """上架 Skill；供应链硬规则（签名、静态扫描、评测集）任一不满足即 409 拒绝。"""
     if not body.signature:
-        raise HTTPException(422, "signature required")
+        raise HTTPException(409, "signature required")
     if not body.scan_passed:
-        raise HTTPException(422, "static scan must pass before listing")
+        raise HTTPException(409, "static scan must pass before listing")
     if body.eval_dataset_ref is None:
-        raise HTTPException(422, "skills must ship an evaluation dataset")
+        raise HTTPException(409, "skills must ship an evaluation dataset")
     SKILLS[f"{body.name}@{body.version}"] = body.model_dump() | {"status": "listed"}
     return SKILLS[f"{body.name}@{body.version}"]
 

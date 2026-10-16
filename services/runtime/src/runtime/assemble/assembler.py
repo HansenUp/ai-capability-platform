@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from ai_contract import SkillDir, ToolSpec
+from ai_contract import RiskLevel, SkillDir, ToolSpec
 from runtime.config import settings
 from runtime.state.db import AgentVersion
 
@@ -41,7 +41,7 @@ LOCAL_TOOLS: dict[str, ToolSpec] = {
         name="ticket.close_batch",
         description="批量关闭工单（高风险写）",
         capability_id="cap.ticket.close_batch",
-        risk_level="write_high",
+        risk_level=RiskLevel.WRITE_HIGH,
         supports_dry_run=True,
         requires_idempotency_key=True,
     ),

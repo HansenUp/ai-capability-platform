@@ -1,0 +1,825 @@
+{
+  "components": {
+    "schemas": {
+      "AuthzIn": {
+        "description": "授权判定请求。",
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approved": {
+            "default": false,
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "taint": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Taint",
+            "type": "array"
+          }
+        },
+        "required": [
+          "subject",
+          "agent",
+          "capability"
+        ],
+        "title": "AuthzIn",
+        "type": "object"
+      },
+      "Capability": {
+        "description": "一条能力登记记录；`to_tool_spec()` 输出 Runtime 需要的 ToolSpec 字段。",
+        "properties": {
+          "core_for_agents": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Core For Agents",
+            "type": "array"
+          },
+          "data_class": {
+            "default": "internal",
+            "enum": [
+              "public",
+              "internal",
+              "confidential"
+            ],
+            "title": "Data Class",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "owner": {
+            "default": "",
+            "title": "Owner",
+            "type": "string"
+          },
+          "requires_idempotency_key": {
+            "default": false,
+            "title": "Requires Idempotency Key",
+            "type": "boolean"
+          },
+          "risk_level": {
+            "default": "read",
+            "enum": [
+              "read",
+              "write_low",
+              "write_high"
+            ],
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "status": {
+            "default": "published",
+            "enum": [
+              "draft",
+              "published",
+              "retired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "supports_dry_run": {
+            "default": false,
+            "title": "Supports Dry Run",
+            "type": "boolean"
+          },
+          "system": {
+            "default": "",
+            "title": "System",
+            "type": "string"
+          },
+          "tenant": {
+            "default": "default",
+            "title": "Tenant",
+            "type": "string"
+          },
+          "type": {
+            "default": "mcp_tool",
+            "enum": [
+              "mcp_tool",
+              "skill",
+              "knowledge",
+              "dataset",
+              "model",
+              "composite"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "version": {
+            "default": "1.0.0",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description"
+        ],
+        "title": "Capability",
+        "type": "object"
+      },
+      "ErrorDetail": {
+        "description": "HTTPException 的响应体。业务规则拒绝统一用 409 + ErrorDetail，422 只保留给 FastAPI 参数校验。",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorDetail",
+        "type": "object"
+      },
+      "ExchangeIn": {
+        "description": "令牌交换请求。执行者身份不在此声明：请求体里即使混入 actor 等字段也会被忽略。",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_version": {
+            "title": "Agent Version",
+            "type": "string"
+          },
+          "audience": {
+            "title": "Audience",
+            "type": "string"
+          },
+          "subject_token": {
+            "title": "Subject Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject_token",
+          "audience",
+          "agent_id",
+          "agent_version"
+        ],
+        "title": "ExchangeIn",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "McpServerIn": {
+        "description": "MCP Server 登记信息。",
+        "properties": {
+          "auth_type": {
+            "default": "inherit",
+            "title": "Auth Type",
+            "type": "string"
+          },
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "protocol": {
+            "default": "streamable-http",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "system": {
+            "default": "",
+            "title": "System",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "endpoint"
+        ],
+        "title": "McpServerIn",
+        "type": "object"
+      },
+      "SearchIn": {
+        "description": "第二级发现请求，由 Runtime 的 search_capabilities 元工具发起。",
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "intent": {
+            "title": "Intent",
+            "type": "string"
+          },
+          "limit": {
+            "default": 5,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "agent",
+          "intent"
+        ],
+        "title": "SearchIn",
+        "type": "object"
+      },
+      "SkillIn": {
+        "description": "Skill 上架申请。",
+        "properties": {
+          "capabilities_declared": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities Declared",
+            "type": "array"
+          },
+          "eval_dataset_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eval Dataset Ref"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "package_uri": {
+            "title": "Package Uri",
+            "type": "string"
+          },
+          "risk_level": {
+            "default": "read",
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "scan_passed": {
+            "default": false,
+            "title": "Scan Passed",
+            "type": "boolean"
+          },
+          "signature": {
+            "title": "Signature",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "owner",
+          "package_uri",
+          "signature"
+        ],
+        "title": "SkillIn",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "AI Capability Platform · Capability Gateway",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/authz/check": {
+      "post": {
+        "description": "对已登记能力执行授权判定。",
+        "operationId": "authz_check_authz_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthzIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Authz Check Authz Check Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Authz Check"
+      }
+    },
+    "/capabilities": {
+      "get": {
+        "description": "第一级发现：返回该 Agent 需要预载的核心工具（受 CORE_LIMIT 限制）。",
+        "operationId": "core_capabilities_capabilities_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subject",
+            "required": true,
+            "schema": {
+              "title": "Subject",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Core Capabilities Capabilities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Core Capabilities"
+      },
+      "post": {
+        "description": "登记或更新一条能力（生产由 Console 管理员操作）。",
+        "operationId": "upsert_capability_capabilities_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Capability"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capability"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upsert Capability"
+      }
+    },
+    "/capabilities/search": {
+      "post": {
+        "description": "第二级发现：按意图检索并用策略引擎过滤掉会被直接拒绝的能力。",
+        "operationId": "search_capabilities_capabilities_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Search Capabilities Capabilities Search Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Capabilities"
+      }
+    },
+    "/capabilities/{cid}": {
+      "get": {
+        "description": "按 id 查询能力详情。",
+        "operationId": "get_capability_capabilities__cid__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "title": "Cid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capability"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Capability"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "description": "健康检查。",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz"
+      }
+    },
+    "/mcp/servers": {
+      "get": {
+        "description": "列出已登记的 MCP Server。",
+        "operationId": "list_mcp_mcp_servers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Mcp Mcp Servers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Mcp"
+      },
+      "post": {
+        "description": "登记一个 MCP Server（健康状态由 S6 工作包的探活任务维护）。",
+        "operationId": "register_mcp_mcp_servers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Register Mcp Mcp Servers Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Mcp"
+      }
+    },
+    "/skills": {
+      "get": {
+        "description": "列出已上架 Skill。",
+        "operationId": "list_skills_skills_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Skills Skills Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Skills"
+      },
+      "post": {
+        "description": "上架 Skill；供应链硬规则（签名、静态扫描、评测集）任一不满足即 409 拒绝。",
+        "operationId": "submit_skill_skills_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Submit Skill Skills Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Skill"
+      }
+    },
+    "/token/exchange": {
+      "post": {
+        "description": "用用户令牌换取面向目标系统的短期 OBO 令牌；未配置 Keycloak 时返回开发桩。",
+        "operationId": "token_exchange_token_exchange_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Token Exchange Token Exchange Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Token Exchange"
+      }
+    }
+  }
+}

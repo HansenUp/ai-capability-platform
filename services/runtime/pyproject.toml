@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff", "mypy"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff", "mypy", "schemathesis>=3.30"]
 mysql = ["asyncmy>=0.2"]
 claude = ["ai-harness-claude-sdk"]
 otel = ["opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp>=1.25"]

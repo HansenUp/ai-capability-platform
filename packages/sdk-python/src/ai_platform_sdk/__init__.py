@@ -11,7 +11,10 @@ from pydantic import TypeAdapter
 
 from ai_contract import Event
 
+from .types_runtime import RunEvent
+
 _EVENT = TypeAdapter(Event)  # 用于解析 SSE 流中每一行 data: 后的 Event JSON
+_RUN_EVENTS = TypeAdapter(list[RunEvent])  # 用 OpenAPI 生成类型解析 Run 事件日志
 
 
 class PlatformClient:
@@ -49,9 +52,19 @@ class PlatformClient:
         r.raise_for_status()
         return r.json()
 
-    async def approve(self, run_id: str, call_id: str, comment: str = "") -> dict[str, Any]:
-        """对某次运行中挂起的工具调用（call_id）给予人工审批放行。"""
-        r = await self._c.post(f"/v1/runs/{run_id}/approve", json={"call_id": call_id, "comment": comment})
+    async def run_events(self, run_id: str, since_seq: int = 0) -> list[RunEvent]:
+        """按 seq 增量拉取 Run 事件日志（自 since_seq 之后），解析为由 OpenAPI 生成的 RunEvent 类型。"""
+        r = await self._c.get(f"/v1/runs/{run_id}/events", params={"since_seq": since_seq})
+        r.raise_for_status()
+        return _RUN_EVENTS.validate_python(r.json())
+
+    async def approve(self, run_id: str, call_id: str, params_hash: str, comment: str = "", ttl_seconds: int = 900) -> dict[str, Any]:
+        """对某次运行中挂起的工具调用（call_id）给予人工审批放行。
+
+        params_hash 必填：取自审批卡片（CardEvent.payload.params_hash）。审批绑定具体参数，
+        指纹与待审批调用不一致时 Runtime 返回 409；ttl_seconds 为审批有效期，过期后需重新审批。"""
+        body = {"call_id": call_id, "params_hash": params_hash, "comment": comment, "ttl_seconds": ttl_seconds}
+        r = await self._c.post(f"/v1/runs/{run_id}/approve", json=body)
         r.raise_for_status()
         return r.json()
 
