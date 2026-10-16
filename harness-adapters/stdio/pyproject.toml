@@ -1,0 +1,13 @@
+[project]
+name = "ai-harness-stdio"
+version = "0.1.0"
+description = "Sub-process stdio Harness adapter (transport mode B, NDJSON) for dsh / Goose / any CLI harness"
+requires-python = ">=3.11"
+dependencies = ["ai-contract", "pydantic>=2.6"]
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,8 @@
+# 平台 Umbrella Chart：Runtime 节点组、Console API、能力网关、策略服务、观测适配器。
+# 基础设施（MySQL / Redis / Keycloak / LiteLLM / Langfuse）由各自官方 Chart 或托管服务提供，不在本 Chart 内。
+apiVersion: v2
+name: ai-platform
+description: Umbrella chart — runtime node groups, console-api, capability-gateway, policy, observe-adapter
+type: application
+version: 0.1.0          # Chart 版本
+appVersion: "0.1.0"     # 应用版本，与镜像 tag 对齐

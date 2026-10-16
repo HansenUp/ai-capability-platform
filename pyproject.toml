@@ -1,0 +1,26 @@
+# 根级 Python 工具配置。各服务 / 包各自有 pyproject.toml 声明依赖，这里只放 Ruff、mypy、pytest 的统一规则。
+[project]
+name = "ai-capability-platform"
+version = "0.1.0"
+description = "Enterprise AI capability platform monorepo"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 140                        # 行宽上限
+target-version = "py311"
+# 让 Ruff 识别各包的 src 布局，正确判断 first-party 导入排序
+src = ["packages/*/src", "services/*/src", "harness-adapters/*/src", "mcp-servers/*/src"]
+
+[tool.ruff.lint]
+# E/F 基础错误，I 导入排序，B 常见坑，UP 现代语法，ASYNC 异步误用，S 安全（bandit）
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
+ignore = ["S101", "B008"]                # S101 允许测试中的 assert；B008 允许 FastAPI 的 Depends() 默认参数
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"                    # async 测试无需逐个标记
+testpaths = ["packages", "services", "harness-adapters", "mcp-servers", "evals"]

@@ -1,0 +1,10 @@
+# Argo CD Application：GitOps 方式持续同步 deploy/helm/ai-platform 到集群（main 分支）。
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: { name: ai-platform, namespace: argocd }
+spec:
+  project: default
+  source: { repoURL: https://git.example.com/ai/ai-capability-platform.git, targetRevision: main, path: deploy/helm/ai-platform }   # 代码仓库与 Chart 路径
+  destination: { server: https://kubernetes.default.svc, namespace: ai-platform }   # 目标集群与命名空间
+  # 自动同步：prune 删除仓库中已移除的资源，selfHeal 纠正集群内的手工漂移
+  syncPolicy: { automated: { prune: true, selfHeal: true }, syncOptions: [CreateNamespace=true] }

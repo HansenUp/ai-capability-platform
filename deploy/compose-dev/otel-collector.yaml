@@ -1,0 +1,10 @@
+# OpenTelemetry Collector 配置：接收 OTLP（gRPC 4317 / HTTP 4318），Trace 转发到 Langfuse 的 OTel 端点。
+receivers: { otlp: { protocols: { grpc: { endpoint: 0.0.0.0:4317 }, http: { endpoint: 0.0.0.0:4318 } } } }
+processors: { batch: {} }                # 批量发送，降低请求数
+exporters:
+  otlphttp/langfuse: { endpoint: http://langfuse-web:3000/api/public/otel }   # Langfuse 作为 Trace 事实源（ADR-0002）
+  debug: { verbosity: basic }            # 控制台打印，便于本地排查
+service:
+  pipelines:
+    traces: { receivers: [otlp], processors: [batch], exporters: [otlphttp/langfuse, debug] }   # Trace → Langfuse + 控制台
+    metrics: { receivers: [otlp], processors: [batch], exporters: [debug] }                     # 指标暂只打印；生产接 Prometheus

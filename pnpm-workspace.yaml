@@ -1,0 +1,9 @@
+# pnpm 工作区：前端应用与 Web SDK。Python 包不在此管理（见 Makefile）。
+packages:
+  - "apps/*"                # portal-web、console-web、desktop
+  - "packages/sdk-web"      # <ai-assistant> Lit 组件
+
+# pnpm 11 默认禁止依赖的构建脚本；esbuild 与 vue-demi 需要安装后编译，这里显式允许
+allowBuilds:
+  esbuild: true
+  vue-demi: true

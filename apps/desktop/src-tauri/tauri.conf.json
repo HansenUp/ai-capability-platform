@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AI Assistant",
+  "version": "0.1.0",
+  "identifier": "com.example.ai-assistant",
+  "build": { "frontendDist": "../../portal-web/dist" },
+  "bundle": { "externalBin": ["binaries/ai-runtime"] },
+  "app": { "windows": [{ "title": "AI Assistant", "width": 1100, "height": 760 }] }
+}

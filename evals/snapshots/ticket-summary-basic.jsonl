@@ -1,0 +1,11 @@
+{"run_id":"snap-1","seq":1,"type":"run.created","payload":{"agent_id":"demo","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-1","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
+{"run_id":"snap-1","seq":3,"type":"model.request","payload":{"n_messages":1}}
+{"run_id":"snap-1","seq":4,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.search","input":{"q":"all"},"risk_level":"read"}}
+{"run_id":"snap-1","seq":5,"type":"tool.decision","payload":{"call_id":"c1","decision":"allow","reason":"ok"}}
+{"run_id":"snap-1","seq":6,"type":"tool.executed","payload":{"call_id":"c1","tool":"ticket.search"}}
+{"run_id":"snap-1","seq":7,"type":"tool.result","payload":{"call_id":"c1","status":"ok","output":{"tickets":[{"id":"T-1"}]}}}
+{"run_id":"snap-1","seq":8,"type":"model.request","payload":{"n_messages":3}}
+{"run_id":"snap-1","seq":9,"type":"model.response","payload":{"text":"共 1 张工单。"}}
+{"run_id":"snap-1","seq":10,"type":"run.done","payload":{"stop_reason":"end_turn"}}
+{"run_id":"snap-1","seq":11,"type":"run.state_changed","payload":{"from":"working","to":"completed","reason":"end_turn"}}

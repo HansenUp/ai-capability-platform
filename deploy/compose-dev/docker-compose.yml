@@ -1,0 +1,92 @@
+# 本地开发依赖。平台自身服务从源码启动（make run-*），这里只提供基础设施。
+# profile：默认（core）启动 MySQL / Redis / MinIO / ES / Keycloak / LiteLLM；`--profile observe` 追加 OTel Collector 与 Langfuse。
+# 所有口令均为开发默认值，生产由 Vault 注入。
+services:
+  mysql:                                  # 平台主库（Runtime / Console / 网关，S8 / S10 迁移后使用）
+    image: mysql:8.4
+    environment: { MYSQL_ROOT_PASSWORD: root, MYSQL_DATABASE: ai_platform }
+    ports: ["3306:3306"]
+  redis:                                  # Run 队列（Redis Streams，S7）、LiteLLM 响应缓存
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  minio:                                  # 对象存储：工具结果外置、Skill 包、Langfuse 事件
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment: { MINIO_ROOT_USER: minio, MINIO_ROOT_PASSWORD: minio12345 }
+    ports: ["9000:9000", "9001:9001"]
+  elasticsearch:                          # 能力目录检索索引、知识库混合检索
+    image: elasticsearch:8.15.0
+    environment: { discovery.type: single-node, xpack.security.enabled: "false", ES_JAVA_OPTS: "-Xms512m -Xmx512m" }
+    ports: ["9200:9200"]
+  keycloak:                               # 身份中心：OIDC 登录、Token Exchange；启动时自动导入 realm
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    environment: { KC_BOOTSTRAP_ADMIN_USERNAME: admin, KC_BOOTSTRAP_ADMIN_PASSWORD: admin }
+    volumes: ["../../services/identity/realm-export.json:/opt/keycloak/data/import/realm.json:ro"]
+    ports: ["8180:8080"]                  # 宿主机 8180 避免与 Runtime 的 8080 冲突
+  litellm:                                # 模型网关（LiteLLM Proxy），配置来自 services/model-gateway/config.yaml
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: sk-dev-master
+      LITELLM_DATABASE_URL: postgresql://litellm:litellm@litellm-db:5432/litellm
+      REDIS_HOST: redis
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}   # 从宿主机环境读取，未设置则为空
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    volumes: ["../../services/model-gateway/config.yaml:/app/config.yaml:ro"]
+    ports: ["4000:4000"]
+    depends_on: [litellm-db, redis]
+  litellm-db:                             # LiteLLM 自用库：虚拟 Key、预算、spend 表
+    image: postgres:16
+    environment: { POSTGRES_USER: litellm, POSTGRES_PASSWORD: litellm, POSTGRES_DB: litellm }
+  otel-collector:                         # OTLP 接收器，Trace 转发到 Langfuse（observe profile）
+    image: otel/opentelemetry-collector-contrib:0.110.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: ["./otel-collector.yaml:/etc/otelcol/config.yaml:ro"]
+    ports: ["4317:4317", "4318:4318"]
+    profiles: [observe]
+  # Langfuse v3 自托管（postgres + clickhouse + redis + minio）—— 参见 https://langfuse.com/self-hosting
+  langfuse-web:                           # Langfuse Web / API（observe profile）
+    image: langfuse/langfuse:3
+    profiles: [observe]
+    ports: ["3000:3000"]
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      REDIS_HOST: redis
+      NEXTAUTH_SECRET: dev-secret
+      SALT: dev-salt
+      NEXTAUTH_URL: http://localhost:3000
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: minio12345
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+    depends_on: [langfuse-db, clickhouse, redis, minio]
+  langfuse-worker:                        # Langfuse 异步处理 Worker（observe profile）
+    image: langfuse/langfuse-worker:3
+    profiles: [observe]
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      REDIS_HOST: redis
+      SALT: dev-salt
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: minio12345
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+    depends_on: [langfuse-db, clickhouse, redis, minio]
+  langfuse-db:                            # Langfuse 元数据库（observe profile）
+    image: postgres:16
+    profiles: [observe]
+    environment: { POSTGRES_USER: langfuse, POSTGRES_PASSWORD: langfuse, POSTGRES_DB: langfuse }
+  clickhouse:                             # Langfuse 事件 / 观测数据分析库（observe profile）
+    image: clickhouse/clickhouse-server:24.8
+    profiles: [observe]
+    environment: { CLICKHOUSE_PASSWORD: clickhouse }
+    ports: ["8123:8123"]

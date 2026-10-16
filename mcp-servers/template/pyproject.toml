@@ -1,0 +1,14 @@
+[project]
+name = "mcp-template"
+version = "0.1.0"
+description = "MCP Server template for business systems: OBO token verification, idempotency, dry-run impact preview, cards"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "pydantic>=2.6"]
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+dev = ["pytest>=8", "httpx"]
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]

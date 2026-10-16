@@ -1,0 +1,9 @@
+{
+  "name": "@ai-platform/console-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "vite --port 5174", "build": "vue-tsc --noEmit && vite build", "lint": "vue-tsc --noEmit" },
+  "dependencies": { "vue": "^3.5.0", "vue-router": "^4.4.0", "pinia": "^2.2.0", "@ai-platform/sdk-web": "workspace:*" },
+  "devDependencies": { "@vitejs/plugin-vue": "^5.1.0", "typescript": "^5.6.0", "vite": "^6.0.0", "vue-tsc": "^2.1.0" }
+}

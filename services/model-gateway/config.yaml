@@ -1,0 +1,44 @@
+# LiteLLM Proxy 配置：平台统一模型出口（默认端口 4000）。
+# 别名规范见 ADR-0006：<family>-<yyyy-mm>；Agent 发布快照锁定别名，模型升级 = 新增别名 + 灰度切换。
+# 所有密钥通过环境变量注入（os.environ/...），生产由 Vault 下发。
+
+model_list:
+  - model_name: default-chat            # 平台默认别名（Agent 未指定时使用）
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-sonnet-2026-06   # 版本锁定别名：升级模型时新增别名而不是改这里
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: deepseek-v4-pro-2026-08 # 国产模型别名，同时作为 default-chat 的回退
+    litellm_params:
+      model: deepseek/deepseek-v4-pro
+      api_key: os.environ/DEEPSEEK_API_KEY
+  - model_name: embed-default           # 向量化模型（知识检索）
+    litellm_params:
+      model: openai/text-embedding-3-large
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: rerank-default          # 重排模型（混合检索后精排）
+    litellm_params:
+      model: cohere/rerank-v3.5
+      api_key: os.environ/COHERE_API_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle      # 同别名多部署时随机分流
+  fallbacks:                            # 主模型失败时的回退链
+    - { default-chat: ["deepseek-v4-pro-2026-08"] }
+  allowed_fails: 3                      # 连续失败 3 次后进入冷却
+  cooldown_time: 60                     # 冷却秒数
+
+litellm_settings:
+  drop_params: true                     # 丢弃目标模型不支持的参数而不是报错
+  cache: true                           # 响应缓存（Redis）
+  cache_params: { type: redis, host: os.environ/REDIS_HOST, port: 6379 }
+  success_callback: ["langfuse"]        # 调用成功后把 Trace 回调到 Langfuse（ADR-0002）
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY        # 管理密钥；业务侧使用虚拟 Key
+  database_url: os.environ/LITELLM_DATABASE_URL    # 虚拟 Key、预算与 spend 表的存储
+  max_budget: 10000                     # 全局月预算（单位随计费货币）
+  budget_duration: 30d                  # 预算周期

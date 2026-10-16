@@ -1,0 +1,14 @@
+[project]
+name = "ai-harness-claude-sdk"
+version = "0.1.0"
+description = "In-process Harness adapter for the Claude Agent SDK (transport mode A)"
+requires-python = ">=3.11"
+dependencies = ["ai-contract"]
+[project.optional-dependencies]
+sdk = ["claude-agent-sdk"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]

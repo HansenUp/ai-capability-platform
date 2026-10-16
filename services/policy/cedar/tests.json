@@ -1,0 +1,10 @@
+[
+  {"name": "sales reads CRM", "principal": {"role": "sales", "tenant": "t1"}, "resource": {"system": "CRM", "risk_level": "read", "data_class": "internal", "tenant": "t1"}, "context": {"approved": false, "taint": []}, "expect": "allow"},
+  {"name": "cross-tenant read denied", "principal": {"role": "sales", "tenant": "t2"}, "resource": {"system": "CRM", "risk_level": "read", "data_class": "internal", "tenant": "t1"}, "context": {"approved": false, "taint": []}, "expect": "deny"},
+  {"name": "high write needs approval", "principal": {"role": "sales", "tenant": "t1"}, "resource": {"system": "CRM", "risk_level": "write_high", "data_class": "internal", "tenant": "t1"}, "context": {"approved": false, "taint": []}, "expect": "require_approval"},
+  {"name": "tainted outbound blocked", "principal": {"role": "sales", "tenant": "t1"}, "resource": {"system": "outbound", "risk_level": "write_low", "data_class": "internal", "tenant": "t1"}, "context": {"approved": false, "taint": ["confidential"]}, "expect": "require_approval"},
+  {"name": "cross-tenant approved high write denied", "principal": {"role": "sales", "tenant": "t2"}, "resource": {"system": "CRM", "risk_level": "write_high", "data_class": "internal", "tenant": "t1"}, "context": {"approved": true, "taint": []}, "expect": "deny"},
+  {"name": "cross-tenant read denied again", "principal": {"role": "admin", "tenant": "t3"}, "resource": {"system": "CRM", "risk_level": "read", "data_class": "internal", "tenant": "t1"}, "context": {"approved": false, "taint": []}, "expect": "deny"},
+  {"name": "same-tenant approved high write allowed", "principal": {"role": "sales", "tenant": "t1"}, "resource": {"system": "CRM", "risk_level": "write_high", "data_class": "internal", "tenant": "t1"}, "context": {"approved": true, "taint": []}, "expect": "allow"},
+  {"name": "same-tenant unapproved high write needs approval", "principal": {"role": "sales", "tenant": "t1"}, "resource": {"system": "CRM", "risk_level": "write_high", "data_class": "internal", "tenant": "t1"}, "context": {"approved": false, "taint": []}, "expect": "require_approval"}
+]

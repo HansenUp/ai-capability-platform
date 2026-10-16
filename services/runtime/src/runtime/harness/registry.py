@@ -1,0 +1,48 @@
+"""Harness adapter registry. Adapters are selected per agent (falls back to the node default).
+（Harness 适配器注册表：按 agent 指定的 harness 名称选择适配器，未指定时回退到节点默认 harness；
+各适配器按需懒加载并缓存。）
+"""
+
+from __future__ import annotations
+
+from ai_contract import HarnessAdapter
+from runtime.config import settings
+
+_REGISTRY: dict[str, HarnessAdapter] = {}  # 进程内已加载的 harness 适配器缓存
+
+
+def register(name: str, adapter: HarnessAdapter) -> None:
+    """将一个已构造的适配器实例注册到全局注册表。"""
+    _REGISTRY[name] = adapter
+
+
+def get(name: str | None = None) -> HarnessAdapter:
+    """按名称获取一个适配器；若尚未加载则先懒加载，未指定名称时使用节点默认 harness。"""
+    key = name or settings.harness
+    if key not in _REGISTRY:
+        _load(key)
+    return _REGISTRY[key]
+
+
+def _load(key: str) -> None:
+    """按 key 懒加载并注册对应的 harness 适配器。claude-sdk/stdio 为可选依赖，
+    仅在实际选用时才导入，避免未安装对应扩展包时影响其他 harness 的可用性。"""
+    if key == "mock":
+        from runtime.harness.mock import MockHarness
+
+        register("mock", MockHarness())
+    elif key == "claude-sdk":
+        from ai_harness_claude_sdk import ClaudeSdkHarness  # optional dependency（可选依赖）
+
+        register("claude-sdk", ClaudeSdkHarness())
+    elif key == "stdio":
+        from ai_harness_stdio import StdioHarness  # optional dependency（可选依赖）
+
+        register("stdio", StdioHarness.from_env())
+    else:
+        raise KeyError(f"unknown harness '{key}'")
+
+
+def names() -> list[str]:
+    """返回当前已加载的 harness 名称列表（按字母序）。"""
+    return sorted(_REGISTRY)

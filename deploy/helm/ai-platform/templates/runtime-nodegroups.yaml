@@ -1,0 +1,40 @@
+# 按 values.runtime.nodeGroups 为每个节点组渲染一个 Deployment 与一个 ClusterIP Service。
+# 节点组标签（NODE_LABELS）在节点注册时上报给 Console，进入路由表分组。
+{{- range .Values.runtime.nodeGroups }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runtime-{{ .name }}
+  labels: { app: runtime, nodeGroup: {{ .name }} }
+spec:
+  replicas: {{ .replicas }}
+  selector: { matchLabels: { app: runtime, nodeGroup: {{ .name }} } }
+  template:
+    metadata: { labels: { app: runtime, nodeGroup: {{ .name }} } }
+    spec:
+      runtimeClassName: {{ $.Values.runtime.sandbox.runtimeClassName }}   # gVisor 沙箱
+      containers:
+        - name: runtime
+          image: "{{ $.Values.image.repository }}/runtime:{{ $.Values.image.tag }}"
+          args: ["uvicorn", "runtime.main:app", "--host", "0.0.0.0", "--port", "8080"]
+          env:
+            - { name: NODE_ID, valueFrom: { fieldRef: { fieldPath: metadata.name } } }   # 用 Pod 名作为节点 id
+            - { name: TOPOLOGY, value: {{ .topology | quote }} }
+            - { name: NODE_LABELS, value: {{ join "," .labels | quote }} }
+            # 展开 values.runtime.env 中的公共环境变量
+            {{- range $k, $v := $.Values.runtime.env }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 } }
+          resources: { requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: "2", memory: 4Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: runtime-{{ .name }} }
+spec:
+  type: ClusterIP                          # 只在集群内可达，APISIX 作为唯一入口
+  selector: { app: runtime, nodeGroup: {{ .name }} }
+  ports: [{ port: 8080, targetPort: 8080 }]
+{{- end }}

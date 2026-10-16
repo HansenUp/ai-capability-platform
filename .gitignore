@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+dist/
+*.egg-info/
+.env
+*.db
+runtime-workspace/
+.idea/
+.omc/
+.DS_Store
+.env.local

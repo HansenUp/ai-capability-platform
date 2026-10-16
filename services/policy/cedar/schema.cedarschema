@@ -1,0 +1,12 @@
+// Cedar 实体与动作 Schema。实体属性来自身份中心（Keycloak）与能力目录（能力网关）。
+
+// 人类用户：角色、租户、部门（用于按部门授权）
+entity User = { role: String, tenant: String, department: String };
+// Agent 主体：OBO 场景中 act 声明对应的代理者，owner 为其归属人
+entity Agent = { owner: String, tenant: String };
+// 能力：所属系统、风险级别（read / write_low / write_high）、数据分级、租户
+entity Capability = { system: String, risk_level: String, data_class: String, tenant: String };
+// invoke：调用一个能力；context.approved 为审批状态，context.taint 为本次 Run 的数据污点集合
+action invoke appliesTo { principal: [User, Agent], resource: [Capability], context: { approved: Bool, taint: Set<String> } };
+// read_data：读取能力返回的数据（为数据分级 / 脱敏规则预留）
+action read_data appliesTo { principal: [User, Agent], resource: [Capability], context: { approved: Bool, taint: Set<String> } };

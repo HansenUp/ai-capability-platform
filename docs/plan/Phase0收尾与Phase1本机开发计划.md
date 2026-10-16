@@ -1,0 +1,76 @@
+# Phase 0 收尾与 Phase 1 本机开发计划
+
+> 依据：`docs/plan/实施计划.md`（执行基线 V1.1）第 4、5 章；仓库现状核验日期 2026-10-16。
+> 结论：**当前处于 Phase 0 尾声，不能直接跳到 Phase 1。** 把 Phase 0 拆为"本机可完成的收尾"（约 1 周）与"环境类延后项"，收尾完成即进入 S1。本文件只做本机执行安排，不改变 `实施计划.md` 的任务定义。
+
+---
+
+## 1. 现状核验
+
+| 项目 | 结果 |
+|---|---|
+| Python 测试 | 52 通过，1 跳过（`make test`） |
+| ruff | 通过 |
+| mypy | **未安装到 .venv**，`make lint` 会失败（P0-1.5 未完成） |
+| git | **尚未初始化**（P0-1.2 未完成） |
+| ADR | 目录只有 0001、0007–0011；**0002–0006 文件缺失**，与 README 和计划 V1.1 的"已采纳"表述不一致（P0-3 缺口） |
+| Contract / OpenAPI | Contract 已定义但未冻结评审；OpenAPI 未导出、无契约测试（P0-2.2～2.5 未完成） |
+| P0-5 契约闭合 | 5.4 契约字段（`loop_owner` / `tool_interception` / `can_resume_from_events` / 能力等级判定）、5.5 工具代理 `loop/toolbroker.py`、5.6 写前记录与 `UNKNOWN_TOOL_RESULT` 转人工、5.7 审批绑定 `params_hash` + `expires_at`、5.8 能力等级发布闸门 **代码均已落地**，计划状态列仍为"进行中"，需补专项测试后改为已完成；5.9～5.11 为文档任务 |
+| 本机依赖 | Docker Desktop 已安装但 **daemon 未启动**，compose 尚未跑起来；LiteLLM 配置就绪，缺模型 API Key 环境变量 |
+| Phase 1 代码 | S1.1、S2.5、S3.1、S4.1、S4.4 已完成；`runtime/llm/`、`runtime/observe/`、Alembic 迁移、claude-sdk 回合循环、JWT 验签（当前 501）均未开始 |
+
+---
+
+## 2. 阶段判定
+
+- 关键路径是 P0-2 → S1 → S2 → S4。S1.2（LLM 客户端）与 S1.3（claude-sdk 适配器）都以冻结后的 Contract 与事件流为基础，先冻结再开发可避免 S1～S4 返工。
+- Phase 0 中的环境类任务（K8s / Harbor / Argo CD / 企业 IdP 联邦 / Vault / gVisor）既不能在本机完成，也不是本机开发的前置；用 compose 替代，延后到预发布环境可用时补做。
+- 因此：**Phase 0 本机收尾（第 1 周）→ 进入 Phase 1 S1（第 2 周起）**，S1～S4 按 2 周一个 Sprint 执行，本机出口标准见第 4 节。
+
+---
+
+## 3. Phase 0 本机收尾清单（第 1 周，约 3～5 个工作日）
+
+| # | 任务 | 对应计划项 | 本机做法 | 完成判定 |
+|---|---|---|---|---|
+| A1 | 初始化 git，`main` 分支，PR 模板 | P0-1.2 | 本机 git init；远端与分支保护在代码平台可用后补 | `git log` 有首个提交，`.github/PULL_REQUEST_TEMPLATE.md` 存在 |
+| A2 | mypy 装入 .venv，`packages/contract`、`services/runtime` 严格模式通过 | P0-1.5 | 加入各包 `[dev]` 依赖；修类型 | `make lint` 一次通过 |
+| A3 | pre-commit（ruff、ruff-format、mypy、gitleaks） | P0-1.4 | `.pre-commit-config.yaml` | `pre-commit run -a` 通过 |
+| A4 | 各服务 Dockerfile（多阶段、非 root） | P0-1.3 | 本机 `docker build` 验证；trivy 扫描进 CI | 5 个服务镜像可构建，`/healthz` 可访问 |
+| A5 | Contract V1 冻结评审：`input-required` 输入事件、`ThinkingEvent` 可见性策略、`CardEvent` 类型枚举（impact_preview / form / choice / reconciliation_required） | P0-2.2 | 改 `packages/contract`，契约测试同步 | 评审纪要入库，`packages/contract` 打 `v1` 标签 |
+| A6 | 导出 Runtime OpenAPI 到 `docs/api/runtime-openapi.json`，schemathesis 契约测试进 CI | P0-2.3 | FastAPI `app.openapi()` 导出脚本 + 测试 | CI 新增契约测试段并通过 |
+| A7 | 冻结 Discovery / authz / token exchange 接口，导出 `docs/api/gateway-openapi.json` | P0-2.4 | 同上 | 文件入库带版本 `v1` |
+| A8 | 由 OpenAPI 生成 Python / Web SDK 类型骨架 | P0-2.5 | 可与 S1 并行，不阻塞 | SDK 包含生成类型且构建通过 |
+| A9 | 补齐 ADR 0002（Langfuse）、0003（APISIX 插件）、0004（stdio Harness 首选）、0006（模型别名）文件；ADR-0005 数据面 POC 范围完成评审 | P0-3.1、P0-3.2 | 按 `docs/adr/0000-template.md` 补写，内容与 README 已采纳结论一致 | `docs/adr/` 0001–0011 齐全，0005 为已采纳 |
+| A10 | 确认首个场景为工单总结；业务系统只读 API 负责人未到位时，本机先以 mock 数据源实现 `mcp-servers/ticket` | P0-3.3 | 选型确认纪要 | 纪要入库，含负责人与接口约定 |
+| A11 | P0-5.4～5.8 补专项测试并把计划状态改为已完成 | P0-5 | 针对写前记录、审批绑定失效、能力等级闸门各加用例 | 用例通过，`实施计划.md` 状态列更新 |
+| A12 | 启动 Docker Desktop，`make compose-up --profile langfuse`；配置 `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` 给 LiteLLM | P0-4.1 本机替代 | `.env.example` 入库，真实 Key 只放本机 `.env`，不入库 | MySQL / Redis / Keycloak / LiteLLM / Langfuse / OTel 全部 healthy，`curl localhost:4000/health` 通过 |
+
+与 S1 并行、不阻塞的文档项：P0-5.9 四项决策纪要、P0-5.10 文档一致性修订、P0-5.11 非功能测量口径。
+
+**延后到环境可用时的任务（记入风险表，指定跟进人）：** P0-4.2 K8s / Harbor / Argo CD、P0-4.3 企业 IdP 联邦、P0-4.4 Vault 注入、P0-4.5 gVisor 申请。
+
+---
+
+## 4. Phase 1 本机执行安排（S1～S4，每 Sprint 2 周）
+
+| Sprint | 任务（编号同 `实施计划.md`） | 本机替代方式 | 本机出口标准 |
+|---|---|---|---|
+| S1 Runtime 骨架 | S1.2 `runtime/llm/` LiteLLM 客户端；S1.3 claude-sdk 适配器最小实现；S1.4 `HARNESS=claude-sdk` 可对话；S1.5 OTel → Langfuse；S1.6 Alembic 0001 + MySQL | LiteLLM / Langfuse / MySQL 全部来自 compose | mock 与 claude-sdk 各完成一次对话；Langfuse 可查到 Trace 且 seq 与 Run 事件对应；`DATABASE_URL` 指向 compose MySQL 时全部测试通过 |
+| S2 身份与上下文 | S2.1 JWT / JWKS 验签；S2.2 Client Credentials；S2.3 审计写 `t_audit` 并镜像 Langfuse；S2.4 密钥注入；S2.6 Prompt Cache 命中统计 | 验签对接 compose Keycloak 本地 realm（`services/identity/realm-export.json`），企业 IdP 联邦延后；密钥本机用 `.env` + compose secrets，Vault 延后 | `AUTH_REQUIRED=true` 下未带令牌 401；任一请求可在 `t_audit` 回答"谁、何时、以何身份、调了什么"；Langfuse 可统计命中率 |
+| S3 发布与灰度 | S3.2 哈希灰度；S3.3 Console 迁移 MySQL；S3.4 门户 OIDC（PKCE）登录；S3.5 反馈 → Langfuse score | 门户登录走本地 Keycloak | 演示 10% 灰度与一键回滚；门户登录后可对话；反馈在 Trace 上可见 |
+| S4 垂直切片 | S4.2 工单只读 MCP Server；S4.3 工具执行经网关分发；S4.5 快照 ≥ 5 条；S4.6 评测数据集 ≥ 30 条；S4.8 最小安全闭环；S4.9 数据分级最小矩阵；S4.10 幂等责任确认 | 工单数据源先 mock，真实只读 API 到位后切换；S4.7 投产本机只能做到"预发布就绪"（Helm values 与镜像齐备） | 跨用户访问、附件越权、非白名单工具、机密外发四类测试通过；快照与不变量在 CI 通过；M1 剩余项只差真实环境部署与业务方签字 |
+
+每个 Sprint 固定动作沿用 `实施计划.md` 第 9 章（安全评审、观测、文档、评测、演示录屏）。
+
+---
+
+## 5. 本机无法闭环、需要外部投入的事项
+
+| 事项 | 需要谁 | 最晚时点 |
+|---|---|---|
+| 代码平台远端仓库与 `main` 保护 | 运维 | 第 1 周末 |
+| 企业 IdP 联邦到 Keycloak | 运维 + IT | S2 末 |
+| 工单系统只读 API 与负责人 | 业务系统团队 | S3 末（否则 S4 继续用 mock） |
+| Vault、K8s / Argo CD、预发布环境 | 运维 | S4 投产前 |
+| 模型 API Key（Anthropic / DeepSeek）预算 | 产品负责人 | S1 开始前 |

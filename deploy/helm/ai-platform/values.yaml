@@ -1,0 +1,22 @@
+# Helm 默认值。生产按环境覆盖（values-prod.yaml），敏感值由 Vault / External Secrets 注入而不是写在这里。
+image: { repository: harbor.example.com/ai-platform, tag: "0.1.0", pullPolicy: IfNotPresent }   # 镜像仓库与版本
+runtime:
+  # 节点组：每组一个 Deployment + Service，labels 与 Console 路由表的分组对应；Agent 通过 bindings 绑定到组
+  nodeGroups:
+    - { name: general, replicas: 3, labels: [general], topology: central }        # 通用组
+    - { name: aftersales, replicas: 2, labels: [aftersales], topology: central }  # 售后专用组（隔离负载与能力）
+  env:                                    # 注入到每个 Runtime 容器的环境变量（与 services/runtime/config.py 对应）
+    DATABASE_URL: mysql+asyncmy://ai:ai@mysql:3306/ai_platform
+    MODEL_GATEWAY_URL: http://litellm:4000
+    CAPABILITY_GATEWAY_URL: http://capability-gateway:8082
+    POLICY_URL: http://policy:8083
+    AUTH_REQUIRED: "true"                 # 生产强制 JWT 验签
+    JWKS_URL: https://idp.example.com/realms/ai-platform/protocol/openid-connect/certs
+  sandbox: { runtimeClassName: gvisor }   # L2 沙箱：工具执行 Pod 使用 gVisor RuntimeClass
+  listen: 0.0.0.0:8080                     # 仅 ClusterIP；不对外暴露，流量经 APISIX 进入
+consoleApi: { replicas: 2 }               # Console API 副本数
+capabilityGateway: { replicas: 2 }        # 能力网关副本数
+policy: { replicas: 2 }                   # 策略服务副本数
+observeAdapter: { replicas: 1 }           # 观测适配器副本数
+# APISIX 路由插件（ADR-0003）：周期拉取 Console 路由表，按 Agent 绑定把请求转发到对应节点组
+apisix: { enabled: true, routingPlugin: { routingUrl: http://console-api:8081/routing, refreshSeconds: 15 } }
