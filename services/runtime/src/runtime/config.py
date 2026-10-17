@@ -46,6 +46,12 @@ class Settings:
     claude_sdk_auth_token: str | None = field(default_factory=lambda: secret_store.get("CLAUDE_SDK_AUTH_TOKEN"), repr=False)
     # post_tool hook 改写输出时原文指纹（TOOL_RESULT.raw_output_hmac）的 HMAC 密钥；开发默认值公开，生产必须另配
     hook_digest_key: str = field(default_factory=lambda: secret_store.get("HOOK_DIGEST_KEY", DEV_HOOK_DIGEST_KEY) or "", repr=False)
+    # Run 发起人令牌落库加密（AES-GCM，S7 D113）的主密钥材料；开发默认值公开，生产必须经 Vault / 挂载文件另配
+    credential_enc_key: str = field(
+        default_factory=lambda: secret_store.get("CREDENTIAL_ENC_KEY", DEV_CREDENTIAL_ENC_KEY) or "", repr=False
+    )
+    # 令牌剩余有效期低于该秒数即挂起为 input-required{kind:credential}（drive 开始与写工具 TOOL_EXECUTING 前检查）
+    credential_min_ttl_s: float = field(default_factory=lambda: float(_env("CREDENTIAL_MIN_TTL_S", "60")))
     llm_timeout_s: float = field(default_factory=lambda: float(_env("LLM_TIMEOUT_S", "120")))  # 单次模型请求超时（秒）
     llm_max_retries: int = field(default_factory=lambda: int(_env("LLM_MAX_RETRIES", "2")))  # 可重试错误（429/5xx/网络）的最大重试次数
     # OTLP/HTTP 端点（基址），未设置则只装 TracerProvider、不导出 Trace
@@ -101,13 +107,14 @@ class Settings:
 DEFAULT_DSH_BIN = "~/.local/share/ai-platform/dsh/node_modules/.bin/dsh"  # dsh 的平台约定安装位置（npm 锁定版本）
 DEV_GATEWAY_KEY = "sk-dev-master"  # noqa: S105 —— 本机 compose LiteLLM 的公开开发主密钥，生产禁止使用
 DEV_HOOK_DIGEST_KEY = "dev-hook-digest-key"  # noqa: S105 —— 开发用公开默认值，生产禁止使用
+DEV_CREDENTIAL_ENC_KEY = "dev-credential-enc-key"  # noqa: S105 —— 开发用公开默认值，生产禁止使用
 
 
 def production_problems(s: Settings) -> list[str]:
     """RUNTIME_ENV=prod 时的安全基线：返回不满足的条目（空列表表示通过）。
 
     - 必须强制 JWT 验签，且 JWKS 地址、签发者、受众齐全；
-    - 不得使用开发网关主密钥与开发 hook 指纹密钥；数据库连接必须经 Vault / 挂载文件注入且不是 SQLite；
+    - 不得使用开发网关主密钥、开发 hook 指纹密钥与开发凭据加密密钥；数据库连接必须经 Vault / 挂载文件注入且不是 SQLite；
     - 密钥项不得来自明文环境变量（只能经 Vault 或挂载文件注入）。
     """
     problems: list[str] = []
@@ -120,6 +127,8 @@ def production_problems(s: Settings) -> list[str]:
         problems.append("MODEL_GATEWAY_API_KEY 未配置或仍为开发主密钥")
     if not s.hook_digest_key or s.hook_digest_key == DEV_HOOK_DIGEST_KEY:
         problems.append("HOOK_DIGEST_KEY 未配置或仍为开发默认值")
+    if not s.credential_enc_key or s.credential_enc_key == DEV_CREDENTIAL_ENC_KEY:
+        problems.append("CREDENTIAL_ENC_KEY 未配置或仍为开发默认值")
     if secret_store.source("DATABASE_URL") not in ("vault", "file") or s.database_url.startswith("sqlite"):
         problems.append("DATABASE_URL 未经 Vault / DATABASE_URL_FILE 注入，或仍指向 SQLite")
     if s.tool_dispatch != "gateway":

@@ -10,9 +10,11 @@ PYTHON := $(VENV)/bin/python
 # stdio 另带 acp extra（goose / dsh 的 ACP 桥，S6）。
 # CI 需要 claude-sdk 的真实 SDK 时：make setup CLAUDE_SDK_EXTRAS=dev,sdk
 CLAUDE_SDK_EXTRAS ?= dev
-PKGS := packages/contract[dev] harness-adapters/probe[dev] packages/sdk-python[dev] services/runtime[dev,probe] services/console-api[dev] services/capability-gateway[dev] services/policy[dev] services/observe-adapter[dev] harness-adapters/claude-sdk[$(CLAUDE_SDK_EXTRAS)] harness-adapters/stdio[dev,probe,acp] mcp-servers/template[dev] mcp-servers/ticket[dev]
+# runtime 的 extras；需要 MySQL 驱动（asyncmy，如 CI 的 failover job、make test-mysql）时：make setup RUNTIME_EXTRAS=dev,probe,mysql
+RUNTIME_EXTRAS ?= dev,probe
+PKGS := packages/contract[dev] harness-adapters/probe[dev] packages/sdk-python[dev] services/runtime[$(RUNTIME_EXTRAS)] services/console-api[dev] services/capability-gateway[dev] services/policy[dev] services/observe-adapter[dev] harness-adapters/claude-sdk[$(CLAUDE_SDK_EXTRAS)] harness-adapters/stdio[dev,probe,acp] mcp-servers/template[dev] mcp-servers/ticket[dev]
 
-.PHONY: setup test test-mysql migrate migrate-new verify-s1 verify-s2 verify-s3 verify-s4 verify-s5 verify-s6 dataplane-poc probe probe-real eval-ticket-summary lint openapi openapi-check sdk-types run-runtime run-console run-gateway run-observe compose-up compose-down compose-ps precommit-install precommit images
+.PHONY: setup test test-mysql migrate migrate-new verify-s1 verify-s2 verify-s3 verify-s4 verify-s5 verify-s6 verify-s7 dataplane-poc probe probe-real eval-ticket-summary lint openapi openapi-check sdk-types run-runtime run-console run-gateway run-observe compose-up compose-down compose-ps precommit-install precommit images
 
 # 创建虚拟环境并一次性安装所有本地包（任一失败即整体失败，不静默降级）
 setup:
@@ -143,6 +145,9 @@ dataplane-poc:  ## ADR-0005 数据面 POC（需 keycloak + observe profile，镜
 
 verify-s6:  ## S6 本机出口验证：harness 切换演练 claude-sdk → goose → dsh → claude-sdk（需 litellm、observe、keycloak、DeepSeek Key 与本机 goose / dsh）
 	$(PYTHON) scripts/verify_s6_e2e.py
+
+verify-s7:  ## S7 本机出口验证：Run 持久化执行（API×2 + Worker×2、接管 / 对账 / 取消 / 迁移 / 凭据 / 预算；需 compose 的 mysql、redis、keycloak）
+	$(PYTHON) scripts/verify_s7_e2e.py
 
 verify-s2:  ## S2 本机出口验证：Keycloak JWT、统一审计、Vault 密钥注入、Prompt Cache 命中统计（需 keycloak、vault、observe profile）
 	$(PYTHON) scripts/verify_s2_e2e.py

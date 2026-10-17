@@ -201,8 +201,9 @@ def test_write_ahead_committed_before_high_risk_execution(client, monkeypatch):
     monkeypatch.setattr(toolbroker, "execute_tool", _probe)
     run_id, msgs, card = _suspend_high_risk(client)
     assert _approve(client, run_id, card).status_code == 200
+    # S7：持久化 Run 审批后 /resume 由 Worker 续跑、本接口尾随事件日志（日志行 + done）
     _, evs = _stream(client, f"/v1/runs/{run_id}/resume", {"messages": msgs})
-    assert next(e for e in evs if e["type"] == "tool_result")["status"] == "ok"
+    assert next(e for e in evs if e["type"] == "tool.result")["payload"]["status"] == "ok"
 
     assert len(seen_during_exec) == 1
     assert "tool.executing" in seen_during_exec[0] and "tool.executed" not in seen_during_exec[0]
@@ -238,15 +239,15 @@ def test_high_risk_unknown_result_requires_reconciliation_without_retry(client, 
     monkeypatch.setattr(toolbroker, "execute_tool", _crash)
     run_id, msgs, card = _suspend_high_risk(client)
     assert _approve(client, run_id, card).status_code == 200
-    # 同一次 resume 内当场转人工：SSE 流正常以 done(awaiting) 收尾，不再是服务端异常中断
+    # 同一次续跑内当场转人工：尾随的事件流以结果未知错误 + 迁入 input-required + done(awaiting) 收尾，不是服务端异常中断
     _, evs = _stream(client, f"/v1/runs/{run_id}/resume", {"messages": msgs})
-    assert [e["type"] for e in evs][-2:] == ["card", "done"]
-    rec = evs[-2]
-    assert rec["card_type"] == "reconciliation_required"
-    assert rec["payload"]["call_id"] == card["payload"]["call_id"] and rec["payload"]["tool"] == "ticket.close_batch"
-    assert rec["payload"]["operation_id"]
-    assert evs[-1]["stop_reason"] == "awaiting"
-    assert not [e for e in evs if e["type"] == "tool_result"]
+    assert [e["type"] for e in evs][-3:] == ["run.error", "run.state_changed", "done"]
+    rec = evs[-3]["payload"]
+    assert rec["code"] == "UNKNOWN_TOOL_RESULT"
+    assert rec["call_id"] == card["payload"]["call_id"] and rec["tool"] == "ticket.close_batch"
+    assert rec["operation_id"]
+    assert evs[-2]["payload"]["to"] == "input-required" and evs[-1]["stop_reason"] == "awaiting"
+    assert not [e for e in evs if e["type"] == "tool.result"]
     assert _state(client, run_id) == "input-required"
     assert len(attempts) == 1  # 没有自动重试
 
@@ -254,10 +255,11 @@ def test_high_risk_unknown_result_requires_reconciliation_without_retry(client, 
     assert "tool.executing" in _types(log) and not {"tool.executed", "tool.result"} & set(_types(log))
     (err,) = [e["payload"] for e in log if e["type"] == "run.error"]
     assert err["code"] == "UNKNOWN_TOOL_RESULT" and err["cause"] == "RuntimeError"
-    assert err["operation_id"] == rec["payload"]["operation_id"]
+    assert err["operation_id"] == rec["operation_id"]
 
-    # input-required 下不允许直接续跑，更不会再次执行
-    assert client.post(f"/v1/runs/{run_id}/resume", json={"messages": msgs}).status_code == 409
+    # input-required 下再 /resume 只是重放同一段日志（S7：持久化 Run 被唤醒过后 /resume 一律尾随），不会再次执行
+    _, again = _stream(client, f"/v1/runs/{run_id}/resume", {"messages": msgs})
+    assert [e["type"] for e in again] == [e["type"] for e in evs] and again[-1]["stop_reason"] == "awaiting"
     assert len(attempts) == 1
 
 
@@ -290,14 +292,14 @@ def test_expired_approval_requires_reapproval_on_resume(client, exec_calls):
     run_id, msgs, card = _suspend_high_risk(client)
     assert _approve(client, run_id, card, ttl_seconds=0).status_code == 200  # 批准即过期
     _, evs = _stream(client, f"/v1/runs/{run_id}/resume", {"messages": msgs})
-    again = next(e for e in evs if e["type"] == "card")
-    assert again["card_type"] == "impact_preview" and evs[-1]["stop_reason"] == "awaiting"
+    again = next(e for e in evs if e["type"] == "tool.decision")  # 闸口重新要求审批（卡片字段同 tool.decision）
+    assert again["payload"]["decision"] == "require_approval" and evs[-1]["stop_reason"] == "awaiting"
     assert _state(client, run_id) == "auth-required"
     assert exec_calls == [] and "tool.executing" not in _types(_log(client, run_id))
 
     assert _approve(client, run_id, again, ttl_seconds=600).status_code == 200
     _, evs = _stream(client, f"/v1/runs/{run_id}/resume", {"messages": msgs})
-    assert next(e for e in evs if e["type"] == "tool_result")["status"] == "ok"
+    assert next(e for e in evs if e["type"] == "tool.result")["payload"]["status"] == "ok"
     assert exec_calls == [("ticket.close_batch", {"ids": ["T-1", "T-2"]})]
 
 
@@ -331,7 +333,7 @@ def test_changed_params_invalidate_approval_on_resume(client, exec_calls):
     assert _approve(client, run_id, card).status_code == 200
     _tamper_requested_input(run_id, {"ids": ["T-1", "T-2", "T-999"]})
     _, evs = _stream(client, f"/v1/runs/{run_id}/resume", {"messages": msgs})
-    again = next(e for e in evs if e["type"] == "card")
+    again = next(e for e in evs if e["type"] == "tool.decision")
     assert again["payload"]["call_id"] == card["payload"]["call_id"]
     assert again["payload"]["params_hash"] != card["payload"]["params_hash"]
     assert _state(client, run_id) == "auth-required"

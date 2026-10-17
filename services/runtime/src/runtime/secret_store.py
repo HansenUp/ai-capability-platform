@@ -24,7 +24,7 @@ from pathlib import Path
 import httpx
 
 # Runtime 认作密钥的配置项：只能经 Vault / 挂载文件注入（生产），不得写进 Helm values 或明文环境变量
-SECRET_NAMES = ("DATABASE_URL", "MODEL_GATEWAY_API_KEY", "CLAUDE_SDK_AUTH_TOKEN", "HOOK_DIGEST_KEY")
+SECRET_NAMES = ("DATABASE_URL", "MODEL_GATEWAY_API_KEY", "CLAUDE_SDK_AUTH_TOKEN", "HOOK_DIGEST_KEY", "CREDENTIAL_ENC_KEY", "REDIS_URL")
 VAULT_TIMEOUT_S = 5.0  # 读取 Vault 的超时（秒）
 
 

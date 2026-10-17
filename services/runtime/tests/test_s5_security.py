@@ -246,7 +246,8 @@ def test_non_initiator_resume_is_refused_in_dev_mode(client: Any, drive_calls: l
     assert _resume(client, run_id, carol)[0] == 403
     assert _resume(client, run_id, bob)[0] == 403
     status, _ = _resume(client, run_id, alice)
-    assert status == 200 and drive_calls[-1]["credential_subject"] == "human:alice-dev"
+    # S7：审批后由 Worker 以发起人身份续跑（开发态无令牌，不存凭据），/resume 尾随至完成
+    assert status == 200 and drive_calls[-1]["run_id"] == run_id and drive_calls[-1]["subject"] == "human:alice-dev"
 
 
 # ---------------- D88 附件按源工件分级 ----------------

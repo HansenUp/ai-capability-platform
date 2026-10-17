@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import uuid
 from collections.abc import AsyncIterator
@@ -37,6 +38,15 @@ from ai_contract import (
 
 if TYPE_CHECKING:  # 探针包只在脚本模式 / 探针工厂中用到（可选依赖 ai-runtime[probe]），运行期按需导入
     from ai_harness_probe import ModelReply, ModelScript, ProbeTarget, ScriptedModel
+
+
+def turn_delay_s() -> float:
+    """MOCK_TURN_DELAY_S（故障注入，S7 §6）：回显模式每轮先等待这么多秒（可被 interrupt 打断），默认 0 不等待。
+    每轮读取环境变量，测试可随时调整。"""
+    try:
+        return max(0.0, float(os.environ.get("MOCK_TURN_DELAY_S", "0") or 0))
+    except ValueError:
+        return 0.0
 
 
 class MockHarness:
@@ -84,11 +94,16 @@ class MockHarness:
           产出一个 ToolUseEvent 并以 stop_reason="tool_use" 结束（触发 gate/execute 全流程）；
         - 若最新用户消息之后已经有工具结果，则回显工具结果；
         - 否则原样回显用户输入文本，附带用量统计事件，并以 end_turn 结束。
+        设置了 MOCK_TURN_DELAY_S 时每轮先等待该秒数（故障注入），期间被 interrupt 即以 Done(cancelled) 收尾。
         脚本模式见类说明。
         """
         if self._model is not None:
             async for ev in self._scripted_turn(session, turn):
                 yield ev
+            return
+        delay = turn_delay_s()
+        if delay > 0 and await self._delay_interrupted(session.session_id, delay):
+            yield DoneEvent(run_id=session.session_id, stop_reason="cancelled")
             return
         last_user_idx = max((i for i, m in enumerate(turn.messages) if m.get("role") == "user"), default=-1)
         content = str(turn.messages[last_user_idx].get("content", "")) if last_user_idx >= 0 else ""
@@ -108,6 +123,18 @@ class MockHarness:
             yield TextEvent(delta=f"[mock:{len(skills)} skills/{len(tools)} tools] 你说：{content}")
         yield UsageEvent(input_tokens=len(content) // 3, output_tokens=16, model="mock")
         yield DoneEvent(run_id=session.session_id, stop_reason="end_turn")
+
+    async def _delay_interrupted(self, sid: str, delay: float) -> bool:
+        """回显模式的注入延迟：等待 delay 秒，期间被 interrupt 则返回 True（本轮以 Done(cancelled) 收尾）。"""
+        cancel = self._active[sid] = asyncio.Event()
+        try:
+            await asyncio.wait_for(cancel.wait(), delay)
+            return True
+        except TimeoutError:
+            return False
+        finally:
+            if self._active.get(sid) is cancel:
+                del self._active[sid]
 
     async def _scripted_turn(self, session: SessionHandle, turn: TurnInput) -> AsyncIterator[Event]:
         """脚本模式的一轮：一次假模型调用。超出脚本（适配器之外的多余调用）以 Error → Usage → Done(error) 收尾。"""
@@ -144,7 +171,7 @@ class MockHarness:
                 del self._active[sid]
 
     async def interrupt(self, session: SessionHandle, run_id: str) -> None:
-        """回显模式无后台任务；脚本模式下若该会话有进行中的轮次，令其以 Done(cancelled) 收尾。对未知会话无副作用。"""
+        """若该会话有进行中的轮次（脚本模式，或回显模式的注入延迟），令其以 Done(cancelled) 收尾。对未知会话无副作用。"""
         cancel = self._active.get(session.session_id)
         if cancel is not None:
             cancel.set()

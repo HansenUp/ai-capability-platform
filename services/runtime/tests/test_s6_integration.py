@@ -221,7 +221,9 @@ def test_pool_exhausted_on_resume_keeps_run_resumable(client, pool_agent):
     harness.full = True
     with client.stream("POST", f"/v1/runs/{run_id}/resume", json={"messages": msgs}) as r:
         evs = _sse(r)
-    assert evs[0]["code"] == "POOL_EXHAUSTED" and evs[0]["retryable"] is True and evs[-1]["stop_reason"] == "error"
+    # S7：/resume 尾随 Worker 的续跑；可重试的池满错误以 run.error 日志行出现，随后 done(error)
+    err = next(e["payload"] for e in evs if e["type"] == "run.error")
+    assert err["code"] == "POOL_EXHAUSTED" and err["retryable"] is True and evs[-1]["stop_reason"] == "error"
     assert client.get(f"/v1/runs/{run_id}").json()["state"] == "working"
 
     harness.full = False

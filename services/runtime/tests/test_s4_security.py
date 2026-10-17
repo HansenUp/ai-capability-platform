@@ -297,7 +297,10 @@ def test_approved_high_risk_write_upstream_5xx_requires_reconciliation(client: A
             resumed = _sse_events(resp)
     finally:
         toolbroker.set_gateway_transport_for_tests(None)
-    _assert_reconciliation(client, resumed, run_id, "ticket.close_batch")
+    # S7：审批后 /resume 尾随事件日志——结果未知以 run.error(UNKNOWN_TOOL_RESULT) 出现，其负载即对账卡片的内容
+    err = next(e["payload"] for e in resumed if e["type"] == "run.error")
+    card = {"type": "card", "card_type": "reconciliation_required", "payload": err}
+    _assert_reconciliation(client, [card, resumed[-1]], run_id, "ticket.close_batch")
 
 
 def test_write_tool_upstream_4xx_is_a_tool_error(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -21,6 +21,7 @@ from runtime.assemble.assembler import LOCAL_TOOLS, load_skills, skills_digest
 from runtime.config import settings
 from runtime.guard.hooks import validate_hooks_config
 from runtime.harness import registry
+from runtime.loop import runner
 from runtime.observe import audit
 from runtime.state.db import AgentVersion, SessionLocal
 
@@ -105,7 +106,8 @@ async def publish(
        否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障；
     4) harness 持有循环的高风险写白名单（S5 §4-1，D79）——loop_owner=harness 的适配器即便达到 L2，
        声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）；
-    5) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
+    5) budget / user_input 配置闸门（S7）——budget 须为合规的双预算对象（DEF-1），user_input 须为布尔值；
+    6) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
        harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值。
 
     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
@@ -122,6 +124,12 @@ async def publish(
         hook_problems = validate_hooks_config(cfg.get("hooks"))
         if hook_problems:
             raise HTTPException(409, "hooks 配置不合规：" + "; ".join(hook_problems))
+        try:
+            runner.budget_of(av)  # DEF-1：budget 配置不合规时运行期失败关闭，发布时即拒绝
+        except ValueError as exc:
+            raise HTTPException(409, f"budget 配置不合规：{exc}") from None
+        if "user_input" in cfg and not isinstance(cfg["user_input"], bool):
+            raise HTTPException(409, "user_input 配置不合规：须为 true / false（是否注入平台工具 request_user_input）")
         await _check_model_alias(av)
         caps = registry.get(av.harness).capabilities()
         if caps.loop_owner == "harness" and not caps.version.strip():

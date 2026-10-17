@@ -554,7 +554,7 @@ def test_pending_call_resumes_with_effective_input_without_rerunning_hooks(clien
     log = _log(client, run_id)
     assert len([e for e in log if e["type"] == "tool.requested"]) == 1
     assert _one(log, "tool.executing")["params_hash"] == params_hash({"ids": ["T-9"]})
-    assert next(e for e in evs2 if e["type"] == "tool_result")["output"] == {"closed": ["T-9"]}
+    assert next(e for e in evs2 if e["type"] == "tool.result")["payload"]["output"] == {"closed": ["T-9"]}  # 尾随的日志行
 
 
 def _summary_client(monkeypatch: pytest.MonkeyPatch, seen: list[dict[str, Any]], status: int = 200) -> None:

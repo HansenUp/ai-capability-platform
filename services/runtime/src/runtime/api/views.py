@@ -30,6 +30,28 @@ class RunView(BaseModel):
     created_at: str  # 创建时间（ISO 8601 字符串）
 
 
+class RunListItem(RunView):
+    """GET /v1/runs 列表项：RunView 加关联会话标识（S7）。"""
+
+    session_id: str | None = None
+
+
+class RunListView(BaseModel):
+    """GET /v1/runs：按 (created_at, run_id) 倒序的键集分页；next_cursor 为不透明游标，无更多时为 null。"""
+
+    items: list[RunListItem]
+    next_cursor: str | None = None
+
+
+class InputView(BaseModel):
+    """POST /v1/runs/{run_id}/input：补充输入已记录，Run 回到 working 并已入队续跑。"""
+
+    run_id: str
+    state: RunState
+    kind: str  # answer | reconcile | credential
+    call_id: str | None = None  # 对应的工具调用（credential 且非写工具前挂起时为空）
+
+
 class RunStateView(BaseModel):
     """创建 / 拒绝 / 取消 Run 后返回的状态快照。"""
 
@@ -38,7 +60,8 @@ class RunStateView(BaseModel):
 
 
 class ApprovalView(RunStateView):
-    """批准后返回：Run 回到 working，需调用 resume 指向的地址继续执行。"""
+    """批准后返回：Run 回到 working。持久化执行的 Run（S7，D108）已入队由 Worker 以发起人凭据自动续跑；发起人也可调用
+    resume 指向的地址（抢到租约则内联执行，否则尾随事件流）。"""
 
     resume: str  # 续跑接口路径
 

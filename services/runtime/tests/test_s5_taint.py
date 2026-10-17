@@ -146,8 +146,9 @@ def test_confidential_error_taint_consistent_across_resume(client, monkeypatch, 
     _block_confidential(monkeypatch)
     with client.stream("POST", f"/v1/runs/{run_id}/resume", json={"messages": msgs}) as r:
         evs2 = _sse(r)
-    assert next(e for e in evs2 if e["type"] == "tool_result")["status"] == "ok"  # 挂起的调用照常补完
-    assert next(e for e in evs2 if e["type"] == "error")["code"] == "DATA_CLASS_MODEL_BLOCKED"
+    # S7：审批后 /resume 尾随事件日志（日志行）
+    assert next(e for e in evs2 if e["type"] == "tool.result")["payload"]["status"] == "ok"  # 挂起的调用照常补完
+    assert next(e for e in evs2 if e["type"] == "run.error")["payload"]["code"] == "DATA_CLASS_MODEL_BLOCKED"
 
 
 def test_replayed_taint_ignores_denied_and_reads_inherited():

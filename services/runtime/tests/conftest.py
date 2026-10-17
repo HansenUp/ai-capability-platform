@@ -53,6 +53,9 @@ os.environ["HARNESS"] = "mock"
 os.environ["POLICY_URL"] = "http://127.0.0.1:1"  # unreachable → gate uses baseline fallback（不可达，闸口回退到基线策略）
 os.environ["CAPABILITY_GATEWAY_URL"] = "http://127.0.0.1:1"
 os.environ["TOOL_RESULT_OFFLOAD_TOKENS"] = "20"
+# 会话级 TestClient 的进程内 Worker（InMemory）也运行 reaper（S7 评审 #1）；周期扫描会接走其他用例故意留在 working 的
+# 持久化 Run（如审批后关闭自动续跑、等用例自己 /resume 的 Run），因此测试期把间隔调到实际不触发。reaper 用例用自己的 Worker。
+os.environ["REAPER_S"] = "3600"
 os.environ["CONFIDENTIAL_MODEL_ALIASES"] = (
     "default-chat"  # 测试默认允许 demo 的别名接收机密数据；阻断场景在用例中单独覆盖  # 调小阈值，便于测试触发工具结果外置逻辑
 )
@@ -97,3 +100,25 @@ def demo_agent(client):
     assert r.status_code == 201, r.text
     assert client.post("/admin/agents/demo/versions/1/publish", json={"eval_passed": True}).status_code == 200
     return "demo"
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "auto_resume: 保留审批通过后自动入队续跑（D108），见 _manual_resume_after_approval")
+    config.addinivalue_line("markers", "failover: 进程级故障注入（API×1 + Worker×2 子进程），默认跳过，-m failover 时运行")
+
+
+@pytest.fixture(autouse=True)
+def _manual_resume_after_approval(request, monkeypatch):
+    """S7（D108）起持久化 Run 审批通过即入队，由会话级 TestClient 里的进程内 Worker 自动续跑。/resume 对这类 Run 的结果
+    已是确定的（补投 + 尾随事件日志到当前末尾，见 messages.resume），但不少既有用例要在"批准之后、续跑之前"观察或改动
+    状态（批准本身不执行、篡改已批准的参数、审批过期后重新审批等），自动续跑会抢在这些步骤之前执行。因此默认关闭
+    审批后的自动入队，由 /resume 补投触发续跑；专测自动续跑（含 /resume 先于 / 晚于 Worker 两种时序）的用例标
+    @pytest.mark.auto_resume。"""
+    if request.node.get_closest_marker("auto_resume") is not None:
+        return
+    from runtime.api import messages
+
+    async def _no_auto_resume(run_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(messages, "continue_after_approval", _no_auto_resume)

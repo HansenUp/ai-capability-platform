@@ -2,7 +2,7 @@
 
 > 由 `scripts/verify_s6_e2e.py`（`make verify-s6`）生成，机器可读版本见 `evals/reports/s6-switch-drill.json`。重新运行会覆盖本文件。
 
-- 时间：2026-10-17T18:46:50+00:00 → 2026-10-17T18:47:28+00:00（UTC）
+- 时间：2026-10-17T21:25:45+00:00 → 2026-10-17T21:26:24+00:00（UTC）
 - 结论：**全部通过**（83/83 项检查）
 - 二进制：goose 1.54.0（钉定 1.54.0）、dsh 0.2.0-rc.2（钉定 0.2.0-rc.2）
 - LiteLLM 1.107.0；模型别名 `deepseek-v4-pro-2026-08`
@@ -30,10 +30,10 @@ goose / dsh 的进程（ACP 桥 + agent）按进程组回收，池回到 min_idl
 
 | 步骤 | 版本 | harness | run_id | 状态 | ticket.search 执行次数 | 用量 输入/输出 | 尝试次数 | 耗时 s |
 |---|---|---|---|---|---|---|---|---|
-| v1 claude-sdk | v1 | claude-sdk | `run_a096045ac86543c78219` | completed | 1 | 2792/125 | 1 | 4.7 |
-| v2 goose | v2 | goose | `run_2e051656dde4493eb918` | completed | 1 | 2185/139 | 1 | 3.9 |
-| v3 dsh | v3 | dsh | `run_a348ee786d854c55a89d` | completed | 1 | 2210/118 | 1 | 5.1 |
-| 回切 claude-sdk | v1 | claude-sdk | `run_1a03700b7abf4c9b9fe2` | completed | 1 | 2805/129 | 1 | 2.7 |
+| v1 claude-sdk | v1 | claude-sdk | `run_6e5d61125d2d4597b668` | completed | 1 | 2790/126 | 1 | 3.4 |
+| v2 goose | v2 | goose | `run_d47f55dcc8a64f07b667` | completed | 1 | 2183/113 | 1 | 4.0 |
+| v3 dsh | v3 | dsh | `run_3a22b7c3626d459e8a4b` | completed | 1 | 2209/128 | 1 | 5.5 |
+| 回切 claude-sdk | v1 | claude-sdk | `run_e8a724db8fdf4e4a8d61` | completed | 1 | 2792/110 | 1 | 3.3 |
 
 版本快照（Runtime 库 t_agent_version；除下列字段外 system_prompt / config / model_alias / skills_digest 等完全一致）：
 
@@ -72,8 +72,8 @@ goose 取消：取消时被租用 worker 进程组内 4 个进程，取消后残
 - [x] v1 claude-sdk：选版落到 v1（RUN_CREATED.agent_version=1）
 - [x] v1 claude-sdk：ticket.search 的 TOOL_EXECUTED 恰好一次（请求 1、执行 1）
 - [x] v1 claude-sdk：ticket.search 结果 ok
-- [x] v1 claude-sdk：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\n\n- **工单号**：T-1002\n- **当前状态**：open（待处理）'…）
-- [x] v1 claude-sdk：用量 > 0（{'input_tokens': 2792, 'output_tokens': 125, 'model_responses': 2}）
+- [x] v1 claude-sdk：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\n\n- 工单号：T-1002\n- 当前状态：open（处理中/待处理）\n\n共找到 1 '…）
+- [x] v1 claude-sdk：用量 > 0（{'input_tokens': 2790, 'output_tokens': 126, 'model_responses': 2}）
 
 ### v2 goose
 
@@ -81,15 +81,15 @@ goose 取消：取消时被租用 worker 进程组内 4 个进程，取消后残
 - [x] v2 goose：选版落到 v2（RUN_CREATED.agent_version=2）
 - [x] v2 goose：ticket.search 的 TOOL_EXECUTED 恰好一次（请求 1、执行 1）
 - [x] v2 goose：ticket.search 结果 ok
-- [x] v2 goose：回答含工单号 T-1002（'查询到 1 个包含“固件”的工单：\n\n- **工单号**：T-1002\n- **当前状态**：open（待处理）\n\n（标'…）
-- [x] v2 goose：用量 > 0（{'input_tokens': 2185, 'output_tokens': 139, 'model_responses': 2}）
+- [x] v2 goose：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\n\n- **工单号：** T-1002\n- **当前状态：** open（待处理）'…）
+- [x] v2 goose：用量 > 0（{'input_tokens': 2183, 'output_tokens': 113, 'model_responses': 2}）
 
 ### goose 第二条消息
 
 - [x] 第二条消息：Run completed（completed）
 - [x] 第二条消息：由 v2（goose）执行
 - [x] 第二条消息：回答含工单号 T-1002
-- [x] 第二条消息：回答复述了只在第一条用户消息里的口令 口令1BE56F（历史经 shim 重放到模型）
+- [x] 第二条消息：回答复述了只在第一条用户消息里的口令 口令2DC4BA（历史经 shim 重放到模型）
 - [x] 第二条消息：每个工具调用恰好执行一次
 
 ### goose 审批续跑
@@ -126,8 +126,8 @@ goose 取消：取消时被租用 worker 进程组内 4 个进程，取消后残
 - [x] v3 dsh：选版落到 v3（RUN_CREATED.agent_version=3）
 - [x] v3 dsh：ticket.search 的 TOOL_EXECUTED 恰好一次（请求 1、执行 1）
 - [x] v3 dsh：ticket.search 结果 ok
-- [x] v3 dsh：回答含工单号 T-1002（'查询关键字“固件”的工单，结果如下：\n\n- 工单号：**T-1002**\n- 当前状态：**open**（未处理）'…）
-- [x] v3 dsh：用量 > 0（{'input_tokens': 2210, 'output_tokens': 118, 'model_responses': 2}）
+- [x] v3 dsh：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\n\n| 工单号 | 当前状态 |\n|--------|----------|\n| T-'…）
+- [x] v3 dsh：用量 > 0（{'input_tokens': 2209, 'output_tokens': 128, 'model_responses': 2}）
 - [x] dsh 步骤结束后池处于 min_idle（桥 1 个）
 
 ### 回切
@@ -140,8 +140,8 @@ goose 取消：取消时被租用 worker 进程组内 4 个进程，取消后残
 - [x] 回切 claude-sdk：选版落到 v1（RUN_CREATED.agent_version=1）
 - [x] 回切 claude-sdk：ticket.search 的 TOOL_EXECUTED 恰好一次（请求 1、执行 1）
 - [x] 回切 claude-sdk：ticket.search 结果 ok
-- [x] 回切 claude-sdk：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\n\n- 工单号：T-1002\n- 当前状态：open（待处理）\n\n共 1 条记录。'…）
-- [x] 回切 claude-sdk：用量 > 0（{'input_tokens': 2805, 'output_tokens': 129, 'model_responses': 2}）
+- [x] 回切 claude-sdk：回答含工单号 T-1002（'查询到 1 个工单：\n\n- 工单号：T-1002\n- 当前状态：open（待处理）'…）
+- [x] 回切 claude-sdk：用量 > 0（{'input_tokens': 2792, 'output_tokens': 110, 'model_responses': 2}）
 
 ### Langfuse
 

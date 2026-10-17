@@ -16,10 +16,11 @@ dependencies = [
   "opentelemetry-sdk>=1.25",
   "opentelemetry-exporter-otlp-proto-http>=1.25",
   "pyjwt[crypto]>=2.10",
+  "redis>=5",                                 # Run 队列（Redis Streams）与跨节点取消（pub/sub），S7
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff", "mypy", "schemathesis>=3.30"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff", "mypy", "schemathesis>=3.30", "fakeredis>=2.20"]
 mysql = ["asyncmy>=0.2"]
 claude = ["ai-harness-claude-sdk[sdk]"]
 probe = ["ai-harness-probe"]                 # 契约探针工厂（runtime.harness.mock 的脚本模式 / 门禁）

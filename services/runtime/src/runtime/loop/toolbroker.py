@@ -18,6 +18,7 @@ import os
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal
 
 import httpx
@@ -36,13 +37,15 @@ from ai_contract import (
     ToolSpec,
     ToolUseEvent,
 )
+from runtime import credentials
 from runtime.config import settings
 from runtime.context import budget as ctx
 from runtime.guard.gate import GateContext, evaluate, params_hash
 from runtime.guard.hooks import HookChain
+from runtime.loop import user_input
 from runtime.observe import audit
 from runtime.state.db import AgentVersion, SessionLocal
-from runtime.state.eventlog import EventLog
+from runtime.state.eventlog import EventLog, OperationExists
 
 LOCAL_ONLY_TOOLS = frozenset({"echo"})  # 只在进程内执行、不经能力网关的开发工具（元工具 read_artifact 等另行处理）
 
@@ -171,16 +174,48 @@ async def _dev_execute(tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool
 
 
 async def _unknown_result(
-    log: EventLog, s: Any, rc: RunCtx, call: ToolUseEvent, tool: ToolSpec, operation_id: str | None, exc: Exception
+    log: EventLog,
+    s: Any,
+    rc: RunCtx,
+    call: ToolUseEvent,
+    tool: ToolSpec,
+    operation_id: str | None,
+    exc: Exception | None,
+    operation: dict[str, Any] | None = None,
 ) -> AsyncIterator[Event]:
-    """写操作执行抛异常：副作用是否已发生无从判断，当场走结果未知路径——
-    记错误、迁移到 input-required、推对账卡片，SSE 流以 done 正常收尾，不自动重试。"""
+    """写操作结果无从判断，当场走结果未知路径——记错误、迁移到 input-required、推对账卡片，SSE 流以 done 正常收尾，
+    不自动重试。两种来源：执行抛异常（exc，登记行先置 unknown 并单独提交，失租时也留得下）；写前登记发现该操作已被
+    他人登记且未完成（exc=None，operation 为现有登记行的状态，附在对账卡上）。"""
     unknown = {"call_id": call.call_id, "tool": tool.name, "operation_id": operation_id}
-    await record_unknown_result(log, rc.run_id, unknown, cause=type(exc).__name__)
+    if exc is not None and operation_id is not None:
+        await log.update_operation(operation_id, user_input.OP_UNKNOWN)
+        await s.commit()
+    await record_unknown_result(log, rc.run_id, unknown, cause=type(exc).__name__ if exc is not None else "OPERATION_IN_FLIGHT")
     await s.commit()
     rc.suspended = True
-    yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown)
+    yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown | ({"operation": operation} if operation else {}))
     yield DoneEvent(run_id=rc.run_id, stop_reason="awaiting")
+
+
+def operation_view(op: Any) -> dict[str, Any]:
+    """t_tool_operation 登记行的对账视图（附在对账卡 payload.operation 上；不含任何结果原文）。"""
+    return {"status": op.status, "result_hash": op.result_hash, "node": op.node, "epoch": op.epoch}
+
+
+async def _register_operation(log: EventLog, s: Any, run_id: str, operation_id: str, call_id: str) -> dict[str, Any] | None:
+    """写前登记（D111）：在当前事务插入 t_tool_operation（随后同事务写 TOOL_EXECUTING），返回 None 表示本执行者已认领。
+    主键冲突 = 该操作已被登记过：回滚登记，若发起人对账选择了 retry（下游声明幂等）则改回 executing 认领重做（与随后的
+    TOOL_EXECUTING 同事务、受 fence 约束）；否则返回现有登记行的视图，由调用方去重（executed）或转对账，绝不重复执行。"""
+    try:
+        await log.record_operation(run_id, operation_id, call_id, node=settings.node_id)
+        return None
+    except OperationExists:
+        await s.rollback()
+    op = await log.get_operation(operation_id)
+    if op is not None and op.status == user_input.OP_RETRY:
+        await log.update_operation(operation_id, user_input.OP_EXECUTING)
+        return None
+    return operation_view(op) if op is not None else {"status": "missing"}
 
 
 async def record_unknown_result(log: EventLog, run_id: str, unknown: dict[str, Any], cause: str | None = None) -> None:
@@ -212,6 +247,9 @@ class RunCtx:
     suspended: bool = False  # 本轮是否因等待审批而挂起（挂起时 drive 应立即返回）
     workspace: str = field(default=".")  # 本次 Run 的工作区目录，用于工具结果外置
     credential: str | None = field(default=None, repr=False)  # 终端用户访问令牌（只在内存中），经网关执行工具时换取 OBO 令牌
+    # 令牌到期时间（持久化执行由 drive_durable 给出）：非 None 时每次 TOOL_EXECUTING 前检查剩余有效期，
+    # 不足 CREDENTIAL_MIN_TTL_S 即挂起为 input-required{kind:credential}，不把写工具推入结果未知。None 时不检查（行为不变）。
+    credential_expires_at: datetime | None = None
     # credential 所属主体；与 Run 发起主体不同时记入 TOOL_EXECUTING 与工具审计（D87）。D87 修订后续跑只允许发起人，
     # 经 API 不再出现不同的值；机制保留（直接调用 drive 时仍按此记录）
     credential_subject: str | None = None
@@ -308,6 +346,24 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             rc.history.append({"role": "tool", "call_id": call.call_id, "content": reason})
             yield ToolResultEvent(call_id=call.call_id, status="denied", output=reason)
             return
+        if tool is not None and tool.name == user_input.TOOL_NAME:
+            # 平台工具 request_user_input（S7 §3）：闸口前拦截，不执行、不进闸口——挂起为 input-required 等发起人回答，
+            # 回答（provide_input）写 TOOL_RESULT 后续跑。入参不合规作为工具错误结果交还模型。
+            try:
+                prompt, schema = user_input.parse_request(effective)
+            except ValueError as exc:
+                bad: Any = {"error": str(exc)}
+                await log.append(rc.run_id, RunEventType.TOOL_RESULT, {"call_id": call.call_id, "status": "error", "output": bad})
+                await s.commit()
+                rc.history.append({"role": "tool", "call_id": call.call_id, "content": bad})
+                yield ToolResultEvent(call_id=call.call_id, status="error", output=bad)
+                return
+            asked = await user_input.request_answer(log, rc.run_id, call.call_id, prompt, schema)
+            await s.commit()
+            rc.suspended = True
+            yield asked
+            yield DoneEvent(run_id=rc.run_id, stop_reason="awaiting")
+            return
         if tool is None:
             # 模型请求了一个未在本次组装工具集中出现的工具名：直接记为错误结果，不进入闸口判定。
             result: Any = {"error": "unknown tool"}
@@ -379,7 +435,28 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             )
             yield DoneEvent(run_id=rc.run_id, stop_reason="awaiting")
             return
-        if gate.idempotency_key and await log.has_idempotency_key(gate.idempotency_key):
+        operation_id = gate.idempotency_key  # 写操作的全局操作标识（= 幂等键，经网关 idempotency_key 透传）
+        deduplicated = bool(operation_id) and await log.has_idempotency_key(operation_id or "")
+        if not deduplicated and rc.credential_expires_at is not None and not credentials.is_fresh(rc.credential_expires_at):
+            # 令牌剩余有效期不足（S7 §4）：执行前挂起等发起人刷新，避免执行中途令牌过期把写工具推入结果未知
+            asked = await user_input.request_credential(log, rc.run_id, call.call_id, "expiring")
+            await s.commit()
+            rc.suspended = True
+            yield asked
+            yield DoneEvent(run_id=rc.run_id, stop_reason="awaiting")
+            return
+        if not deduplicated and operation_id is not None:
+            # 跨 Worker 去重（D111）：TOOL_REQUESTED / DECISION 先提交，写前登记与 TOOL_EXECUTING 另起一个事务，
+            # 主键冲突只回滚登记本身。已被他人执行完成 → 去重；未完成 → 结果未知（对账卡附登记状态），绝不重复执行。
+            await s.commit()
+            existing = await _register_operation(log, s, rc.run_id, operation_id, call.call_id)
+            if existing is not None and existing.get("status") == user_input.OP_EXECUTED:
+                deduplicated = True
+            elif existing is not None:
+                async for ev in _unknown_result(log, s, rc, call, tool, operation_id, None, operation=existing):
+                    yield ev
+                return
+        if deduplicated:
             # 幂等键命中：说明该写操作此前已经真正执行过（如续跑重放场景），直接返回去重标记，
             # 不再重复执行，避免重放导致的重复副作用。
             result = {"deduplicated": True}
@@ -412,6 +489,11 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
                 async for ev in _unknown_result(log, s, rc, call, tool, gate.idempotency_key, exc):
                     yield ev
                 return
+            if operation_id is not None:
+                # 结果写回登记行并单独提交（不受 fence 约束）：即使本执行者随后因失租写不进 TOOL_EXECUTED，
+                # 接管者的对账卡也能看到"已执行"与结果指纹，一键确认。
+                await log.update_operation(operation_id, user_input.OP_EXECUTED, hmac_json(result))
+                await s.commit()
             await log.append(
                 rc.run_id, RunEventType.TOOL_EXECUTED, {"call_id": call.call_id, "tool": tool.name}, idempotency_key=gate.idempotency_key
             )

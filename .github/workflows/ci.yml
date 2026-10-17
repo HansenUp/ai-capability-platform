@@ -12,6 +12,28 @@ jobs:
       - run: .venv/bin/ruff check .
       - run: make openapi-check             # docs/api 下的 OpenAPI 必须与代码一致
       - run: .venv/bin/python -m pytest -q
+  failover:                               # S7 进程级故障注入：API×1 + Worker×2 子进程，kill -9 持租约 Worker 后 60 s 内接管完成
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env: { MYSQL_ROOT_PASSWORD: root }
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 -proot" --health-interval 5s --health-timeout 3s --health-retries 30
+    env:
+      FAILOVER_REDIS_URL: redis://localhost:6379/14
+      FAILOVER_DATABASE_URL: mysql+asyncmy://root:root@localhost:3306/ai_runtime_failover_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: make setup RUNTIME_EXTRAS=dev,probe,mysql   # asyncmy：进程级用例的 API / Worker 子进程连 MySQL
+      - run: .venv/bin/python -c "import asyncmy"
+      - run: .venv/bin/python -m pytest services/runtime/tests/test_failover.py -m failover -q -s
   probes:                                 # 契约探针上架门禁（S5 / D86）：KNOWN 中每个 harness 五项探针全过、声明能力不高于探针验证
     runs-on: ubuntu-latest
     steps:

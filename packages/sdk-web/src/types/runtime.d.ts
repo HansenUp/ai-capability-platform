@@ -49,7 +49,8 @@ export interface paths {
          *        否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障；
          *     4) harness 持有循环的高风险写白名单（S5 §4-1，D79）——loop_owner=harness 的适配器即便达到 L2，
          *        声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）；
-         *     5) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
+         *     5) budget / user_input 配置闸门（S7）——budget 须为合规的双预算对象（DEF-1），user_input 须为布尔值；
+         *     6) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
          *        harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值。
          *
          *     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
@@ -184,6 +185,10 @@ export interface paths {
          *
          *     harness 进程池已满（goose / dsh，S6）：可重试——非流式返回 503 `POOL_EXHAUSTED`；流式（响应头已发出）下发
          *     error（code=POOL_EXHAUSTED，retryable=true）后 done(error)。两种情况本 Run 均为 failed，重发请求即可。
+         *
+         *     持久化（S7，D108 / D109）：Run 以 durable=1 创建，初始消息（图片只存规范化引用）与发起人令牌（加密）同事务入库，
+         *     本节点持租约内联执行（不进队列）。节点死亡后租约过期，由 Worker 接管异步续跑，客户端可用
+         *     `GET /v1/runs/{run_id}/stream` 续读；挂起审批通过后由系统自动续跑。
          */
         post: operations["messages_v1_messages_post"];
         delete?: never;
@@ -199,12 +204,20 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Runs
+         * @description 本人的 Run 列表（最新在前）。管理员默认看本租户全部，可用 subject 只看某人；非管理员只能看自己
+         *     （subject 给成别人 403）。next_cursor 原样传回即取下一页，为 null 表示没有更多。
+         */
+        get: operations["list_runs_v1_runs_get"];
         put?: never;
         /**
          * Create Run
-         * @description 创建一个 Run 并立即返回 202（已接受）；实际驱动在后台任务中异步执行。
-         *     input 的 content 规则同 /v1/messages：只能是字符串或纯文本块列表，否则 422 `INLINE_CONTENT_UNSUPPORTED`。
+         * @description 创建一个持久化 Run 并入队，立即返回 202（已接受），由 Worker 抢租约后执行（S7，D105）。
+         *     t_run（durable=1、session_id）、t_run_input（初始消息，附件只存规范化引用）与发起人令牌（加密）同一事务写入后才入队；
+         *     入队失败（如 Redis 暂不可用）仍返回 202，由 reaper 兜底重投。
+         *     input 的 content 与 attachments 规则同 /v1/messages：content 只能是字符串或纯文本块列表，否则 422
+         *     `INLINE_CONTENT_UNSUPPORTED`；他人的工件 403。
          */
         post: operations["create_run_v1_runs_post"];
         delete?: never;
@@ -245,7 +258,8 @@ export interface paths {
         /**
          * Approve
          * @description 批准一次挂起中的高风险工具调用：仅在 Run 处于 auth-required 状态时允许，
-         *     记录 TOOL_APPROVED 事件并把状态迁回 working，随后需调用 /resume 才能真正继续执行。
+         *     记录 TOOL_APPROVED 事件并把状态迁回 working。持久化执行的 Run（S7，D108）随即入队，由 Worker 以发起人存储的
+         *     凭据自动续跑；S7 之前创建的 Run（非持久化）仍需发起人调用 /resume 才继续执行。
          *
          *     批准会绑定"参数指纹 + 有效期"：参数一旦变化或审批超时，闸口不会放行，必须重新审批。
          */
@@ -272,6 +286,9 @@ export interface paths {
          *
          *     取消权限（D90）与完整读取权限相同：发起人、本 Run 已记录的审批人、平台管理员（开发态不检查角色）；
          *     待审批期间仅有审批资格者（只读审批所需部分）不能取消，其他人 403，其他租户 404。
+         *
+         *     跨节点（S7，D110）：CAS 迁到 canceled（并发写者抢先时重读重试一次）并删除存储的凭据，提交后经
+         *     `runtime:cancel` 广播，持有该 Run 的节点中断其 harness；广播丢失时持有者心跳读到 canceled 兜底。
          */
         post: operations["cancel_v1_runs__run_id__cancel_post"];
         delete?: never;
@@ -325,6 +342,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/runs/{run_id}/input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Provide Input
+         * @description 为 input-required 的 Run 补充输入（只允许发起人，D112）：同一事务写 INPUT_PROVIDED（及对应的工具结果）并 CAS 回
+         *     working，随后入队由 Worker 续跑（S7 之前创建的非持久化 Run 不入队，由发起人 /resume）。
+         *
+         *     错误：其他租户 / 不存在 404；非发起人或令牌主体不是发起人 403；Run 不在 input-required 或没有匹配的待补充输入 409；
+         *     回答不符 schema、action 不合规、令牌剩余有效期不足 422；并发写冲突 409（可重试）。
+         */
+        post: operations["provide_input_v1_runs__run_id__input_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/runs/{run_id}/reject": {
         parameters: {
             query?: never;
@@ -365,8 +406,39 @@ export interface paths {
          *     （其他租户 404，由 run_in_tenant 判定）；先判身份再判状态，不向无权者透露 Run 状态。
          *     回传的初始消息须与 RUN_CREATED 记录的指纹（initial_messages_hash）一致，否则 409；S5 之前创建的 Run 没有
          *     该字段，无从比对，兼容放行（与此前行为一致）。
+         *
+         *     S7（D108）：持久化 Run 审批通过 / 补充输入后已自动入队、由 Worker 续跑。对这类 Run（事件日志中有从挂起迁回 working 的
+         *     记录）本接口结果是确定的：补投一次（租约去重），然后自最近一次迁回 working 之前起尾随事件日志到当前末尾，以 done 收尾
+         *     （与 `GET /v1/runs/{run_id}/stream` 同一实现：事件日志行，SSE id 为 seq）——Run 已是终态或再次挂起时同样返回这段日志
+         *     与 done（停止原因由状态推出），不返回 409，也不在本节点内联执行。
+         *     其他 Run（S7 之前创建的非持久化 Run、尚未挂起过的持久化 Run）行为不变：须处于 working（否则 409）；抢到租约则本节点
+         *     内联流式执行（统一事件），抢不到则尾随事件流。发起人令牌随续跑刷新存储的凭据（Run 未终态时）。
          */
         post: operations["resume_v1_runs__run_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Run
+         * @description 尾随 Run 的事件日志（S7，D108）：先补发 seq > since_seq 的事件，再随写入持续下发，Run 进入终态后下发 done 并结束。
+         *     `/v1/messages` 的客户端在节点故障后可凭已收到的 seq（或 SSE 的 Last-Event-ID）续读接管者的执行。
+         *
+         *     读取权限同 `GET /v1/runs/{run_id}/events`（D90）：发起人、已记录的审批人、管理员看完整日志；待审批期间尚未审批的
+         *     有审批资格者只看审批视图，Run 离开 auth-required 后流结束。
+         */
+        get: operations["stream_run_v1_runs__run_id__stream_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -433,7 +505,8 @@ export interface components {
         };
         /**
          * ApprovalView
-         * @description 批准后返回：Run 回到 working，需调用 resume 指向的地址继续执行。
+         * @description 批准后返回：Run 回到 working。持久化执行的 Run（S7，D108）已入队由 Worker 以发起人凭据自动续跑；发起人也可调用
+         *     resume 指向的地址（抢到租约则内联执行，否则尾随事件流）。
          */
         ApprovalView: {
             /** Resume */
@@ -539,6 +612,28 @@ export interface components {
             detail?: components["schemas"]["ValidationError"][];
         };
         /**
+         * InputBody
+         * @description 补充输入（S7 §3，D112）。
+         *
+         *     - answer：回答 request_user_input，call_id 为该调用，value 为回答（按其 schema 校验，不符 422）；
+         *     - reconcile：结果未知的写工具对账，call_id 为该调用，action ∈ done / skip / retry（retry 只允许下游声明幂等的工具），
+         *       done 时 value 可选，作为补记的结果；
+         *     - credential：用本次请求的令牌（须为发起人）刷新存储的凭据，不从请求体取令牌。
+         */
+        InputBody: {
+            /** Action */
+            action?: ("done" | "skip" | "retry") | null;
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "answer" | "reconcile" | "credential";
+            /** Value */
+            value?: unknown;
+        };
+        /**
          * InputRequiredEvent
          * @description Run 需要用户补充输入（对应 RunState.INPUT_REQUIRED）。
          *
@@ -565,6 +660,19 @@ export interface components {
              * @enum {string}
              */
             type: "input_required";
+        };
+        /**
+         * InputView
+         * @description POST /v1/runs/{run_id}/input：补充输入已记录，Run 回到 working 并已入队续跑。
+         */
+        InputView: {
+            /** Call Id */
+            call_id?: string | null;
+            /** Kind */
+            kind: string;
+            /** Run Id */
+            run_id: string;
+            state: components["schemas"]["RunState"];
         };
         /**
          * MessagesRequest
@@ -612,15 +720,15 @@ export interface components {
         };
         /**
          * ResumeBody
-         * @description 续跑请求体：messages: the original initial messages (clients keep them; workers read from session store)
-         *     （客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。
-         *     带附件的 Run 须连同首次驱动时追加的附件说明消息一并回传；指纹须与 RUN_CREATED 记录的一致，否则 409。）
+         * @description 续跑请求体（S7 起 messages 可选，D109）：缺省时用服务端存储的初始消息（t_run_input）；传了仍须与 RUN_CREATED
+         *     记录的指纹一致（带附件的 Run 须连同首次驱动时追加的附件说明消息），否则 409。S7 之前创建的 Run 服务端没有存储，
+         *     须回传初始消息。
          */
         ResumeBody: {
             /** Messages */
-            messages: {
+            messages?: {
                 [key: string]: unknown;
-            }[];
+            }[] | null;
         };
         /**
          * RolloutIn
@@ -641,6 +749,8 @@ export interface components {
             agent_id: string;
             /** Agent Version */
             agent_version?: string | null;
+            /** Attachments */
+            attachments?: string[];
             /** Input */
             input: {
                 [key: string]: unknown;
@@ -650,6 +760,8 @@ export interface components {
              * @default async
              */
             mode: string;
+            /** Session Id */
+            session_id?: string | null;
         };
         /**
          * RunEvent
@@ -714,6 +826,39 @@ export interface components {
          * @description GET /v1/runs/{run_id}/events：按 seq 升序的 Run 事件日志。
          */
         RunEventsView: components["schemas"]["RunEventView"][];
+        /**
+         * RunListItem
+         * @description GET /v1/runs 列表项：RunView 加关联会话标识（S7）。
+         */
+        RunListItem: {
+            /** Agent Id */
+            agent_id: string;
+            /** Agent Version */
+            agent_version: string;
+            /** Created At */
+            created_at: string;
+            /** Last Seq */
+            last_seq: number;
+            /** Model Alias */
+            model_alias: string;
+            /** Run Id */
+            run_id: string;
+            /** Session Id */
+            session_id?: string | null;
+            state: components["schemas"]["RunState"];
+            /** Subject */
+            subject: string;
+        };
+        /**
+         * RunListView
+         * @description GET /v1/runs：按 (created_at, run_id) 倒序的键集分页；next_cursor 为不透明游标，无更多时为 null。
+         */
+        RunListView: {
+            /** Items */
+            items: components["schemas"]["RunListItem"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
         /**
          * RunState
          * @description States named after the A2A task lifecycle. Naming alignment only; A2A protocol compatibility
@@ -1324,6 +1469,55 @@ export interface operations {
             };
         };
     };
+    list_runs_v1_runs_get: {
+        parameters: {
+            query?: {
+                session_id?: string | null;
+                state?: components["schemas"]["RunState"] | null;
+                agent_id?: string | null;
+                subject?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "x-ai-subject"?: string | null;
+                "x-ai-tenant"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunListView"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_run_v1_runs_post: {
         parameters: {
             query?: never;
@@ -1348,6 +1542,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunStateView"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
                 };
             };
             /** @description Not Found */
@@ -1674,6 +1877,72 @@ export interface operations {
             };
         };
     };
+    provide_input_v1_runs__run_id__input_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-ai-subject"?: string | null;
+                "x-ai-tenant"?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InputBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InputView"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reject_v1_runs__run_id__reject_post: {
         parameters: {
             query?: never;
@@ -1744,9 +2013,9 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
-                "application/json": components["schemas"]["ResumeBody"];
+                "application/json": components["schemas"]["ResumeBody"] | null;
             };
         };
         responses: {
@@ -1779,6 +2048,62 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_run_v1_runs__run_id__stream_get: {
+        parameters: {
+            query?: {
+                since_seq?: number;
+            };
+            header?: {
+                "last-event-id"?: string | null;
+                authorization?: string | null;
+                "x-ai-subject"?: string | null;
+                "x-ai-tenant"?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

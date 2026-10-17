@@ -14,17 +14,26 @@ harness — the harness is never asked to re-decide an already recorded call.
 案的调用重新做决策，这保证了幂等与可重放性。）
 
 本模块自身不执行任何工具：所有工具副作用统一经由 loop.toolbroker.handle_tool 产生。
+
+持久化执行（S7）：Worker 持租约（fence_scope）调用 ``drive_durable(run_id)``——从 t_run / t_run_input / t_run_credential
+加载版本快照、初始消息与发起人凭据，按事件日志重放续跑（即 drive）。预算（DEF-1）：Agent 配置
+``budget{max_total_tokens, max_wall_s}`` 为主控（从事件日志累计，接管不重置；墙钟自首次进入 working 起算，排队与挂起等人的
+时间不计），轮数上限降为兜底。
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import aclosing
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_contract import (
@@ -49,20 +58,27 @@ from ai_contract import (
     TurnInput,
     UsageEvent,
 )
+from runtime import credentials
 from runtime.assemble.assembler import assemble
 from runtime.config import settings
 from runtime.context import budget as ctx
 from runtime.guard.gate import GateContext
 from runtime.guard.hooks import HookChain, HookConfigError, HookOutcome
 from runtime.harness import registry
-from runtime.loop import active
-from runtime.loop.toolbroker import RunCtx, handle_tool, hmac_json, record_unknown_result, taint_of
+from runtime.loop import active, user_input
+from runtime.loop.toolbroker import RunCtx, handle_tool, hmac_json, operation_view, record_unknown_result, taint_of
 from runtime.observe import tracing
 from runtime.run import invariant
-from runtime.state.db import AgentVersion, Run, SessionLocal
-from runtime.state.eventlog import EventLog
+from runtime.state.db import AgentVersion, Run, RunInput, SessionLocal
+from runtime.state.eventlog import EventLog, LeaseLost, RunNotFound, claim_new_run, current_fence
+from runtime.worker.settings import worker_settings
 
+logger = logging.getLogger(__name__)
+
+FIRST_LEASE_EPOCH = 1  # 新 Run 的首个租约纪元（create_run(lease_owner=...) 同事务置租时即为它）
 MAX_TOOL_ROUNDS = 8  # 单次 drive 调用内允许的最大模型-工具往返轮数，超出则判为失败，避免死循环
+BUDGET_MAX_ROUNDS = 64  # 配置了 budget（DEF-1）时轮数上限降为兜底，可用 budget.max_rounds 覆盖
+SUSPENDED_STATES = (RunState.INPUT_REQUIRED.value, RunState.AUTH_REQUIRED.value)  # 等人工的状态：不计入墙钟预算
 # 只允许平台产出的事件类型：harness 若产出这些事件，runner 丢弃并记 HARNESS_FORGED_PLATFORM_EVENT。
 PLATFORM_ONLY_EVENTS = (ToolResultEvent, CardEvent, InputRequiredEvent)
 # harness 进程池已满（ai_harness_stdio.PoolExhausted.code，S6 §3）：可重试的错误码。按 code 属性识别，不导入可选依赖。
@@ -87,6 +103,86 @@ def thinking_visibility(agent: AgentVersion) -> ThinkingVisibility:
     return value if value in ("internal", "summary", "full") else "internal"
 
 
+@dataclass(frozen=True)
+class Budget:
+    """DEF-1 双预算：令牌（输入 + 输出，与 S5 token_budget 同口径）与墙钟（秒，扣除挂起等人的区间），至少配置其一。"""
+
+    max_total_tokens: int | None = None
+    max_wall_s: float | None = None
+    max_rounds: int = BUDGET_MAX_ROUNDS
+
+
+def budget_of(agent: AgentVersion) -> Budget | None:
+    """读取 Agent 版本配置中的 budget；未配置返回 None（行为与此前一致）。不合规抛 ValueError（运行期失败关闭）。"""
+    raw = (agent.config or {}).get("budget")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("budget must be an object")
+    unknown = sorted(set(raw) - {"max_total_tokens", "max_wall_s", "max_rounds"})
+    if unknown:
+        raise ValueError(f"budget has unknown keys {unknown}")
+
+    def positive(key: str, kinds: tuple[type, ...]) -> Any:
+        v: Any = raw.get(key)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, kinds) or not isinstance(v, int | float) or v <= 0):
+            raise ValueError(f"budget.{key} must be a positive number")
+        return v
+
+    tokens, wall, rounds = positive("max_total_tokens", (int,)), positive("max_wall_s", (int, float)), positive("max_rounds", (int,))
+    if tokens is None and wall is None:
+        raise ValueError("budget needs max_total_tokens or max_wall_s")
+    return Budget(tokens, float(wall) if wall is not None else None, rounds or BUDGET_MAX_ROUNDS)
+
+
+def usage_tokens(prior: list[RunEvent]) -> dict[str, int]:
+    """从事件日志累计本 Run 的模型用量（各 MODEL_RESPONSE 的 input / output tokens；与 S5 token_budget 同口径）。"""
+    usage = {"input_tokens": 0, "output_tokens": 0}
+    for e in prior:
+        if e.type == RunEventType.MODEL_RESPONSE:
+            u = e.payload.get("usage") or {}
+            usage["input_tokens"] += int(u.get("input_tokens") or 0)
+            usage["output_tokens"] += int(u.get("output_tokens") or 0)
+    return usage | {"total_tokens": usage["input_tokens"] + usage["output_tokens"]}
+
+
+def wall_seconds(prior: list[RunEvent], now: datetime | None = None) -> float:
+    """本 Run 已耗墙钟秒数：自首次迁入 working 起算（创建后在队列里等待的时间不计），扣除 state_changed 记录的挂起等人区间
+    （input-required / auth-required）。全部取自事件日志，接管不重置；尚未进入过 working 时为 0。"""
+    now = now or datetime.now(UTC)
+    created = next(
+        (e.ts for e in prior if e.type == RunEventType.RUN_STATE_CHANGED and e.payload.get("to") == RunState.WORKING.value), None
+    )
+    if created is None:
+        return 0.0
+    paused, since = 0.0, None
+    for e in prior:
+        if e.type != RunEventType.RUN_STATE_CHANGED:
+            continue
+        suspended = e.payload.get("to") in SUSPENDED_STATES
+        if suspended and since is None:
+            since = e.ts
+        elif not suspended and since is not None:
+            paused += (e.ts - since).total_seconds()
+            since = None
+    if since is not None:
+        paused += (now - since).total_seconds()
+    return max(0.0, float((now - created).total_seconds()) - paused)
+
+
+def budget_exceeded(budget: Budget, prior: list[RunEvent], now: datetime | None = None) -> dict[str, Any] | None:
+    """超预算时返回 RUN_ERROR 附加字段（budget / used / limit），否则 None。"""
+    if budget.max_total_tokens is not None:
+        used = usage_tokens(prior)["total_tokens"]
+        if used >= budget.max_total_tokens:
+            return {"budget": "tokens", "used": used, "limit": budget.max_total_tokens}
+    if budget.max_wall_s is not None:
+        wall = wall_seconds(prior, now)
+        if wall >= budget.max_wall_s:
+            return {"budget": "wall", "used": round(wall, 3), "limit": budget.max_wall_s}
+    return None
+
+
 async def create_run(
     agent: AgentVersion,
     subject: str,
@@ -95,6 +191,10 @@ async def create_run(
     rollout: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
     initial_messages: list[dict[str, Any]] | None = None,
+    *,
+    durable: bool = False,
+    credential: str | None = None,
+    lease_owner: str | None = None,
 ) -> str:
     """创建一个新 Run：写入 t_run 行并追加 RUN_CREATED 事件（seq=1），返回新生成的 run_id。
     actor 为代为执行的 Agent / 应用（来自令牌的 act 声明或签发客户端），rollout 为选版原因（灰度），均随 RUN_CREATED 进事件日志。
@@ -105,7 +205,15 @@ async def create_run(
 
     initial_messages 为首次驱动将使用的初始消息（含附件说明消息）：其指纹写入 RUN_CREATED 的 `initial_messages_hash`，
     把初始消息与事件日志绑定——续跑回传的初始消息必须与之一致（API 层 409，drive 兜底 INVARIANT_VIOLATION）。
-    默认 None 时不写该键。"""
+    默认 None 时不写该键。
+
+    durable（S7，D108 / D109）：持久化执行的 Run——t_run.durable=1，同一事务写 t_run_input（initial_messages，须给出）与
+    发起人凭据 credential（非空时，AES-GCM 加密存 t_run_credential），使其可由 Worker 接管续跑。
+
+    lease_owner（/v1/messages 内联执行）：同一事务内以该持有者直接置租约（纪元 FIRST_LEASE_EPOCH、有效期 LEASE_TTL_S），
+    提交后调用方以 ``lease.hold(run_id, lease_owner, epoch=FIRST_LEASE_EPOCH)`` 接管心跳——reaper / Worker 看不到无租约窗口。"""
+    if durable and initial_messages is None:
+        raise ValueError("durable runs need initial_messages")
     run_id = "run_" + uuid.uuid4().hex[:20]
     created: dict[str, Any] = {
         "agent_id": agent.agent_id,
@@ -130,10 +238,19 @@ async def create_run(
                 model_alias=agent.model_alias,
                 subject=subject,
                 session_id=session_id,
+                durable=durable,
             )
         )
         await s.flush()
         await EventLog(s).append(run_id, RunEventType.RUN_CREATED, created)
+        if durable:
+            assert initial_messages is not None
+            s.add(RunInput(run_id=run_id, messages=initial_messages, fingerprint=invariant.message_hash(initial_messages)))
+            if credential:
+                await credentials.store_credential(s, run_id, subject, credential)
+        if lease_owner is not None:
+            epoch = await claim_new_run(s, run_id, lease_owner, worker_settings.lease_ttl_s)
+            assert epoch == FIRST_LEASE_EPOCH, epoch
         await s.commit()
     return run_id
 
@@ -145,6 +262,7 @@ async def drive(
     messages: list[dict[str, Any]],
     credential: str | None = None,
     credential_subject: str | None = None,
+    credential_expires_at: datetime | None = None,
 ) -> AsyncIterator[Event]:
     """驱动一个 Run 的执行（首次执行或续跑均走此函数）：
     1) 组装上下文与工具集，构造 SessionSpec；
@@ -162,14 +280,108 @@ async def drive(
     credential_subject 为 credential（执行工具所用令牌）所属主体（D87）。非 None 且与 Run 发起主体（subject）不同时，
     记入 TOOL_EXECUTING 事件与工具审计；默认 None 时行为与此前完全一致。D87 修订后续跑只允许发起人，经 API 传入的
     credential_subject 恒等于发起主体，因此不会写入；机制保留。
+
+    credential_expires_at（S7）：令牌到期时间，非 None 时工具代理在每次 TOOL_EXECUTING 前检查剩余有效期。
+    本次 drive 结束时 Run 已进入终态则删除其存储凭据（t_run_credential，D113）。
     """
-    with tracing.run_span(run_id, agent, subject, agent.model_alias) as rs:
-        async with aclosing(_drive(run_id, agent, subject, messages, rs, credential, credential_subject)) as events:
-            async for ev in events:
-                if isinstance(ev, DoneEvent):
-                    ev = ev.model_copy(update={"trace_id": rs.trace_id})
-                    tracing.record_stop(rs.span, ev.stop_reason)
-                yield ev
+    try:
+        with tracing.run_span(run_id, agent, subject, agent.model_alias) as rs:
+            driving = _drive(run_id, agent, subject, messages, rs, credential, credential_subject, credential_expires_at)
+            async with aclosing(driving) as events:
+                async for ev in events:
+                    if isinstance(ev, DoneEvent):
+                        ev = ev.model_copy(update={"trace_id": rs.trace_id})
+                        tracing.record_stop(rs.span, ev.stop_reason)
+                    yield ev
+    finally:
+        # 无论正常结束、出错（含 StaleWriter）还是被关闭：Run 已是终态就删存储的凭据（如取消 API 抢先置了 canceled）
+        await _forget_credential_if_terminal(run_id)
+
+
+async def _forget_credential_if_terminal(run_id: str) -> None:
+    """Run 已是终态（completed / failed / canceled）时删除其存储的发起人凭据（尽力而为：失败只记日志）。"""
+    try:
+        async with SessionLocal() as s:
+            run = await s.get(Run, run_id)
+            if run is None or not RunState(run.state).terminal:
+                return
+            await credentials.delete_credential(run_id, s)
+            await s.commit()
+    except Exception:
+        logger.warning("could not delete stored credential of terminal run %s", run_id, exc_info=True)
+
+
+async def drive_durable(run_id: str) -> AsyncIterator[Event]:
+    """持久化执行入口（供 Worker；调用方已持租约并处于 fence_scope 内）：从 t_run 与 t_run_input 加载 Agent 版本快照、
+    初始消息与发起人凭据，按事件日志重放续跑（即 drive，不另行实现）。
+
+    - Run 已是终态：只清理凭据，不产出事件；处于 auth-required / input-required（等人工）：不驱动，不产出事件；
+    - 快照或初始消息缺失：RUN_ERROR RUN_SNAPSHOT_MISSING，Run failed；
+    - 凭据缺失（强制鉴权时）或剩余有效期 < CREDENTIAL_MIN_TTL_S：写 INPUT_REQUESTED{kind:credential}、CAS 迁 input-required，
+      下发 InputRequiredEvent + done(awaiting) 后结束（发起人经 /input kind=credential 刷新后再入队）。
+    Run 不存在抛 RunNotFound；租约失效时写入抛 LeaseLost（由调用方处理）。"""
+    async with SessionLocal() as s:
+        run = await s.get(Run, run_id)
+        if run is None:
+            raise RunNotFound(run_id)
+        state = RunState(run.state)
+        subject = run.subject
+        agent = (
+            (
+                await s.execute(
+                    select(AgentVersion).where(
+                        AgentVersion.agent_id == run.agent_id,
+                        AgentVersion.version == run.agent_version,
+                        AgentVersion.tenant_id == run.tenant_id,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        stored = await s.get(RunInput, run_id)
+    if state.terminal:
+        await credentials.delete_credential(run_id)
+        return
+    if state not in (RunState.SUBMITTED, RunState.WORKING):
+        return
+    if agent is None or stored is None:
+        msg = f"run {run_id}: agent version snapshot or stored initial messages missing; cannot continue"
+        await _fail(run_id, "RUN_SNAPSHOT_MISSING", msg, "snapshot missing")
+        await credentials.delete_credential(run_id)  # 终态即删存储的发起人凭据（D113）
+        yield ErrorEvent(code="RUN_SNAPSHOT_MISSING", message=msg)
+        yield DoneEvent(run_id=run_id, stop_reason="error")
+        return
+    cred = await credentials.load_credential(run_id)
+    reason = None
+    if cred is None:
+        reason = "missing" if settings.auth_required else None
+    elif not credentials.is_fresh(cred.expires_at):
+        reason = "expiring"
+    if reason is not None:
+        async with SessionLocal() as s:
+            log = EventLog(s)
+            await log.transition(run_id, RunState.WORKING, "start")  # submitted 不能直接迁 input-required
+            asked = await user_input.request_credential(log, run_id, None, reason)
+            await s.commit()
+        yield asked
+        yield DoneEvent(run_id=run_id, stop_reason="awaiting")
+        return
+    driving = cast(
+        AsyncGenerator[Event, None],
+        drive(
+            run_id,
+            agent,
+            subject,
+            list(stored.messages),
+            credential=cred.token if cred else None,
+            credential_subject=cred.subject if cred else None,
+            credential_expires_at=cred.expires_at if cred else None,
+        ),
+    )
+    async with aclosing(driving) as events:
+        async for ev in events:
+            yield ev
 
 
 async def _bind_trace(s: AsyncSession, run_id: str, rs: tracing.RunSpan) -> None:
@@ -238,19 +450,13 @@ def _tool_statuses(prior: list[RunEvent], history: list[dict[str, Any]]) -> dict
 
 def _pre_model_payload(prior: list[RunEvent], agent: AgentVersion, messages_hash: str, rc: RunCtx) -> dict[str, Any]:
     """pre_model hook 的负载：轮次与累计用量都从事件日志计算（续跑前后一致），不含消息原文。"""
-    usage = {"input_tokens": 0, "output_tokens": 0}
-    for e in prior:
-        if e.type == RunEventType.MODEL_RESPONSE:
-            u = e.payload.get("usage") or {}
-            usage["input_tokens"] += int(u.get("input_tokens") or 0)
-            usage["output_tokens"] += int(u.get("output_tokens") or 0)
     return {
         "round": sum(1 for e in prior if e.type == RunEventType.MODEL_REQUEST) + 1,
         "model_alias": agent.model_alias,
         "n_messages": len(rc.history),
         "messages_hash": messages_hash,
         "taint": sorted(rc.gate.taint),
-        "usage": usage | {"total_tokens": usage["input_tokens"] + usage["output_tokens"]},
+        "usage": usage_tokens(prior),
     }
 
 
@@ -271,6 +477,7 @@ async def _drive(
     rs: tracing.RunSpan,
     credential: str | None = None,
     credential_subject: str | None = None,
+    credential_expires_at: datetime | None = None,
 ) -> AsyncGenerator[Event, None]:
     """drive() 的实际执行体（步骤见 drive 的说明）；rs 为本次 drive 的根 span，模型轮次与工具调用的子 span 挂在其下。
 
@@ -281,6 +488,10 @@ async def _drive(
     """
     harness = registry.get(agent.harness)
     assembled = await assemble(agent, subject)
+    if user_input.enabled(agent):
+        # 平台工具 request_user_input（S7 §3）：按版本配置 user_input:true 注入（不改组装器），由工具代理在闸口前拦截
+        assembled.tools.append(user_input.TOOL)
+        assembled.report["tools"] = [*assembled.report.get("tools", []), user_input.TOOL_NAME]
     spec = SessionSpec(
         run_id=run_id,
         agent_id=agent.agent_id,
@@ -296,6 +507,7 @@ async def _drive(
     rc = RunCtx(
         credential=credential,  # 终端用户令牌：工具经能力网关执行时换取 OBO 令牌，只在内存中
         credential_subject=credential_subject,
+        credential_expires_at=credential_expires_at,
         run_id=run_id,
         agent=agent,
         spec=spec,
@@ -306,6 +518,7 @@ async def _drive(
             subject=subject,
             agent_id=agent.agent_id,
             tenant_id=agent.tenant_id,
+            run_id=run_id,
             deny_tools=set((agent.config or {}).get("redlines", {}).get("deny_tools", [])),
         ),
         history=list(messages),
@@ -327,6 +540,15 @@ async def _drive(
         yield DoneEvent(run_id=run_id, stop_reason="error")
         return
     rc.hooks = chain
+    # 预算（DEF-1）：配置不合规同样失败关闭；配置了 budget 时轮数上限降为兜底
+    try:
+        budget = budget_of(agent)
+    except ValueError as exc:
+        await _fail(run_id, "BUDGET_CONFIG_INVALID", str(exc), "budget config")
+        yield ErrorEvent(code="BUDGET_CONFIG_INVALID", message=str(exc))
+        yield DoneEvent(run_id=run_id, stop_reason="error")
+        return
+    max_rounds = MAX_TOOL_ROUNDS if budget is None else budget.max_rounds
 
     # ---- unknown tool result window ----
     # （结果未知窗口：日志里有某个 call_id 的 TOOL_EXECUTING，却没有对应的 TOOL_EXECUTED 与
@@ -334,6 +556,7 @@ async def _drive(
     # 这种情况下**禁止盲目重试**：必须转人工确认或与下游系统对账，因此把 Run 迁移到
     # input-required 并推一张对账卡片给前端，由人来决定补做还是跳过。）
     unknown: dict[str, Any] | None = None
+    operation: dict[str, Any] | None = None  # 结果未知调用的写前登记行（t_tool_operation，失租旧 Worker 可能已写回结果）
     mismatch: str | None = None  # 初始消息与 RUN_CREATED 记录的指纹不一致
     async with SessionLocal() as s:
         log = EventLog(s)
@@ -343,14 +566,10 @@ async def _drive(
             invariant.check_initial(prior, initial_messages)
         except invariant.InvariantViolation as exc:
             mismatch = str(exc)
-        settled = {e.payload["call_id"] for e in prior if e.type in (RunEventType.TOOL_EXECUTED, RunEventType.TOOL_RESULT)}
-        for e in prior:
-            if e.type == RunEventType.TOOL_EXECUTING and e.payload["call_id"] not in settled:
-                unknown = {
-                    "call_id": e.payload["call_id"],
-                    "tool": e.payload.get("tool"),
-                    "operation_id": e.payload.get("operation_id"),
-                }
+        unknown = user_input.pending_reconcile(prior)
+        if unknown is not None and unknown.get("operation_id"):
+            op = await log.get_operation(unknown["operation_id"])
+            operation = operation_view(op) if op is not None else None
         if unknown is not None and mismatch is None:
             await _bind_trace(s, run_id, rs)
             await record_unknown_result(log, run_id, unknown)
@@ -361,7 +580,8 @@ async def _drive(
         yield DoneEvent(run_id=run_id, stop_reason="error")
         return
     if unknown is not None:
-        yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown)
+        # 对账卡附写前登记的状态（接管场景：失租旧 Worker 可能已执行完成并写回结果指纹，发起人据此一键确认）
+        yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown | ({"operation": operation} if operation else {}))
         yield DoneEvent(run_id=run_id, stop_reason="awaiting")
         return
 
@@ -420,7 +640,7 @@ async def _drive(
                 yield ErrorEvent(code=HARNESS_VERSION_MISMATCH, message=version_mismatch)
                 yield DoneEvent(run_id=run_id, stop_reason="error")
                 return
-            active.register(run_id, harness, session)
+            active.register(run_id, harness, session, current_fence(run_id))  # 带租约纪元：失租中断只命中本纪元的会话
             await _bind_trace(s, run_id, rs)
             await log.transition(run_id, RunState.WORKING, "start")
             plan = ctx.assemble(
@@ -451,7 +671,7 @@ async def _drive(
         # 适配器侧的 hook 结论随本轮 MODEL_RESPONSE 的 hooks 记录（source=adapter）。
         adapter_hook_records: list[dict[str, Any]] = []
         hooks = chain.hookset(harness.capabilities().internal_hook_points, adapter_hook_records)
-        for _round in range(MAX_TOOL_ROUNDS):
+        for _round in range(max_rounds):
             # 每轮开始前检查 Run 是否已被取消 API 抢先置为 canceled（例如上一轮工具执行期间被取消）。
             if await _stop_if_canceled(run_id):
                 yield DoneEvent(run_id=run_id, stop_reason="cancelled")
@@ -472,6 +692,16 @@ async def _drive(
             async with SessionLocal() as s:
                 log = EventLog(s)
                 prior_log = await log.list(run_id)
+                over = budget_exceeded(budget, prior_log) if budget is not None else None
+                if over is not None:
+                    # 超预算（DEF-1）：不再调用模型，Run failed。累计取自事件日志，接管 / 续跑不重置。
+                    msg = f"run budget exceeded: {over['budget']} {over['used']}/{over['limit']}"
+                    await log.append(run_id, RunEventType.RUN_ERROR, {"code": "BUDGET_EXCEEDED", "message": msg} | over)
+                    await log.transition(run_id, RunState.FAILED, "budget")
+                    await s.commit()
+                    yield ErrorEvent(code="BUDGET_EXCEEDED", message=msg)
+                    yield DoneEvent(run_id=run_id, stop_reason="error")
+                    return
                 try:
                     # 不变量校验：确认即将发给模型的 rc.history 与"从事件日志重建的历史"完全一致，
                     # 防止上下文被意外篡改或与事件日志脱节（保证可重放性/审计一致性）。
@@ -682,7 +912,10 @@ async def _drive(
                 yield DoneEvent(run_id=run_id, stop_reason="error")
                 return
             if harness_stop == "cancelled":
-                # harness 被中断（interrupt）：Run 迁移到 canceled 终态。
+                if active.interrupt_reason(run_id, session) == active.REASON_LEASE_LOST:
+                    # 失租自我隔离中断了本会话（Run 并未被取消）：不能迁 canceled——按失租处理，交给接管者续跑
+                    raise LeaseLost(f"run {run_id}: harness interrupted after the lease was lost")
+                # harness 被中断（取消 API / 跨节点取消）或自行以 cancelled 收尾：Run 迁移到 canceled 终态。
                 async with SessionLocal() as s:
                     log = EventLog(s)
                     await log.append(run_id, RunEventType.RUN_DONE, {"stop_reason": "cancelled"})

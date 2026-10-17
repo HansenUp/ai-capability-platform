@@ -41,6 +41,7 @@ class GateContext:
     # 已批准调用的绑定信息：键为 call_id，值含批准时的 params_hash 与过期时间（ISO 字符串）。
     # 审批附着于"具体参数 + 具体资源 + 有效期"，而不是一个光秃秃的 call_id。
     approved_call_ids: dict[str, dict[str, Any]] = field(default_factory=dict)
+    run_id: str | None = None  # 所属 Run：写操作的幂等键（= t_tool_operation.operation_id）以它限定作用域
 
 
 @dataclass
@@ -131,11 +132,28 @@ async def evaluate(ctx: GateContext, tool: ToolSpec, tool_input: dict[str, Any],
     # 5) idempotency key for writes（为写操作或显式要求幂等键的工具生成幂等键，避免重放时重复执行）
     key = None
     if tool.risk_level != RiskLevel.READ or tool.requires_idempotency_key:
-        key = f"{ctx.agent_id}:{call_id}:{uuid.uuid5(uuid.NAMESPACE_URL, str(sorted(tool_input.items()))).hex[:12]}"
+        key = idempotency_key(ctx, call_id, tool_input)
     # 6) sandbox level: fail-closed — never escalate beyond the tool's declared level
     # （沙箱级别：失败即拒绝，绝不允许超出工具自身声明的沙箱级别。）
     sandbox = tool.sandbox_level
     return GateResult(decision, "ok" if decision == "allow" else decision, key, sandbox, decision_id)
+
+
+IDEMPOTENCY_KEY_MAX = 80  # 与 t_run_event.idempotency_key / t_tool_operation.operation_id 列宽一致
+
+
+def idempotency_key(ctx: GateContext, call_id: str, tool_input: dict[str, Any]) -> str:
+    """写操作的幂等键（S7 起同时是全局操作标识 operation_id，经能力网关 idempotency_key 透传给下游）：
+    ``{run_id}:{call_id}:{入参指纹}``——以 Run 限定作用域：同一 Run 内重放 / 接管得到同一个键（去重、对账），不同 Run 即使
+    call_id 与入参相同（如脚本化 harness 的固定 call_id）也是不同的操作，既不会被误判为"已执行"而跳过，也不会撞上他人
+    未完成的登记而卡在对账。下游据此按"Run + 调用"去重。call_id 过长时以其指纹代替，保证不超过列宽。
+    未给 run_id（直接构造的闸口上下文）时退回旧格式 ``{agent_id}:{call_id}:{入参指纹}``。"""
+    digest = uuid.uuid5(uuid.NAMESPACE_URL, str(sorted(tool_input.items()))).hex[:12]
+    scope = ctx.run_id or ctx.agent_id
+    key = f"{scope}:{call_id}:{digest}"
+    if len(key) > IDEMPOTENCY_KEY_MAX:
+        key = f"{scope}:{uuid.uuid5(uuid.NAMESPACE_URL, call_id).hex[:16]}:{digest}"[:IDEMPOTENCY_KEY_MAX]
+    return key
 
 
 def egress_allowed(url: str) -> bool:

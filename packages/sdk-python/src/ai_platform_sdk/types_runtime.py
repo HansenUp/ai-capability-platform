@@ -103,6 +103,34 @@ class FeedbackBody(BaseModel):
     score: confloat(ge=-1.0, le=1.0) = Field(..., title="Score")
 
 
+class Action(StrEnum):
+    done = "done"
+    skip = "skip"
+    retry = "retry"
+
+
+class Kind(StrEnum):
+    answer = "answer"
+    reconcile = "reconcile"
+    credential = "credential"
+
+
+class InputBody(BaseModel):
+    """
+    补充输入（S7 §3，D112）。
+
+    - answer：回答 request_user_input，call_id 为该调用，value 为回答（按其 schema 校验，不符 422）；
+    - reconcile：结果未知的写工具对账，call_id 为该调用，action ∈ done / skip / retry（retry 只允许下游声明幂等的工具），
+      done 时 value 可选，作为补记的结果；
+    - credential：用本次请求的令牌（须为发起人）刷新存储的凭据，不从请求体取令牌。
+    """
+
+    action: Action | None = Field(None, title="Action")
+    call_id: constr(max_length=128) | None = Field(None, title="Call Id")
+    kind: Kind = Field(..., title="Kind")
+    value: Any | None = Field(None, title="Value")
+
+
 class InputRequiredEvent(BaseModel):
     """
     Run 需要用户补充输入（对应 RunState.INPUT_REQUIRED）。
@@ -130,7 +158,7 @@ class MessagesRequest(BaseModel):
     attachments: list[str] | None = Field(None, max_length=10, title="Attachments")
     messages: list[dict[str, Any]] = Field(..., title="Messages")
     metadata: dict[str, Any] | None = Field(None, title="Metadata")
-    session_id: str | None = Field(None, title="Session Id")
+    session_id: constr(max_length=40) | None = Field(None, title="Session Id")
     stream: bool | None = Field(True, title="Stream")
 
 
@@ -151,12 +179,12 @@ class PublishIn(BaseModel):
 
 class ResumeBody(BaseModel):
     """
-    续跑请求体：messages: the original initial messages (clients keep them; workers read from session store)
-    （客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。
-    带附件的 Run 须连同首次驱动时追加的附件说明消息一并回传；指纹须与 RUN_CREATED 记录的一致，否则 409。）
+    续跑请求体（S7 起 messages 可选，D109）：缺省时用服务端存储的初始消息（t_run_input）；传了仍须与 RUN_CREATED
+    记录的指纹一致（带附件的 Run 须连同首次驱动时追加的附件说明消息），否则 409。S7 之前创建的 Run 服务端没有存储，
+    须回传初始消息。
     """
 
-    messages: list[dict[str, Any]] = Field(..., title="Messages")
+    messages: list[dict[str, Any]] | None = Field(None, title="Messages")
 
 
 class AllowlistItem(RootModel[constr(max_length=128)]):
@@ -179,8 +207,10 @@ class RunCreate(BaseModel):
 
     agent_id: str = Field(..., title="Agent Id")
     agent_version: str | None = Field(None, title="Agent Version")
+    attachments: list[str] | None = Field(None, max_length=10, title="Attachments")
     input: list[dict[str, Any]] = Field(..., title="Input")
     mode: str | None = Field("async", title="Mode")
+    session_id: constr(max_length=40) | None = Field(None, title="Session Id")
 
 
 class RunEventType(StrEnum):
@@ -371,7 +401,8 @@ class ValidationError(BaseModel):
 
 class ApprovalView(BaseModel):
     """
-    批准后返回：Run 回到 working，需调用 resume 指向的地址继续执行。
+    批准后返回：Run 回到 working。持久化执行的 Run（S7，D108）已入队由 Worker 以发起人凭据自动续跑；发起人也可调用
+    resume 指向的地址（抢到租约则内联执行，否则尾随事件流）。
     """
 
     resume: str = Field(..., title="Resume")
@@ -406,6 +437,17 @@ class HTTPValidationError(BaseModel):
     detail: list[ValidationError] | None = Field(None, title="Detail")
 
 
+class InputView(BaseModel):
+    """
+    POST /v1/runs/{run_id}/input：补充输入已记录，Run 回到 working 并已入队续跑。
+    """
+
+    call_id: str | None = Field(None, title="Call Id")
+    kind: str = Field(..., title="Kind")
+    run_id: str = Field(..., title="Run Id")
+    state: RunState
+
+
 class RunEvent(BaseModel):
     """
     One row of the append-only event log. (run_id, seq) is the primary key.
@@ -422,3 +464,28 @@ class RunEvent(BaseModel):
     seq: int = Field(..., title="Seq")
     ts: datetime | None = Field(None, title="Ts")
     type: RunEventType
+
+
+class RunListItem(BaseModel):
+    """
+    GET /v1/runs 列表项：RunView 加关联会话标识（S7）。
+    """
+
+    agent_id: str = Field(..., title="Agent Id")
+    agent_version: str = Field(..., title="Agent Version")
+    created_at: str = Field(..., title="Created At")
+    last_seq: int = Field(..., title="Last Seq")
+    model_alias: str = Field(..., title="Model Alias")
+    run_id: str = Field(..., title="Run Id")
+    session_id: str | None = Field(None, title="Session Id")
+    state: RunState
+    subject: str = Field(..., title="Subject")
+
+
+class RunListView(BaseModel):
+    """
+    GET /v1/runs：按 (created_at, run_id) 倒序的键集分页；next_cursor 为不透明游标，无更多时为 null。
+    """
+
+    items: list[RunListItem] = Field(..., title="Items")
+    next_cursor: str | None = Field(None, title="Next Cursor")

@@ -89,7 +89,7 @@ export class AiAssistant extends LitElement {
     }
   }
 
-  /** 审批通过：调用 Run API 的 approve；之后由宿主页面或后续版本调用 resume 继续执行。
+  /** 审批通过：调用 Run API 的 approve；之后由平台以发起人凭据自动续跑（S7），可用 GET /v1/runs/{run_id}/stream 续读事件。
    *  params_hash 必填，取自卡片 payload：审批绑定具体参数，指纹不一致时 Runtime 返回 409。 */
   async approve(ev: CardEv) {
     const p = ev.payload ?? {};

@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import shutil
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -25,6 +27,7 @@ from sse_starlette.sse import EventSourceResponse
 from ai_contract import (
     IMAGE_MEDIA_TYPES,
     IMAGE_REF_TYPE,
+    DoneEvent,
     ErrorEvent,
     Event,
     RunEvent,
@@ -34,16 +37,20 @@ from ai_contract import (
     ThinkingEvent,
     sniff_media_type,
 )
+from runtime import credentials
 from runtime.api import rollout
 from runtime.api.auth import Principal, approver_denial, check_approver, current_principal, is_admin
-from runtime.api.views import ApprovalView, ErrorDetail, RunEventsView, RunStateView, RunView
+from runtime.api.views import ApprovalView, ErrorDetail, InputView, RunEventsView, RunStateView, RunView
 from runtime.config import settings
 from runtime.harness import registry
-from runtime.loop import active, runner
+from runtime.loop import runner, user_input
 from runtime.loop.toolbroker import ARTIFACT_REF
 from runtime.run import invariant
-from runtime.state.db import AgentVersion, Run, SessionLocal
-from runtime.state.eventlog import EventLog
+from runtime.state.db import AgentVersion, Run, RunEventRow, RunInput, SessionLocal
+from runtime.state.eventlog import EventLog, RunNotFound, SeqConflict, StaleWriter
+from runtime.worker import enqueue, lease, publish_cancel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(current_principal)])  # 全部 /v1 接口要求调用方身份（AUTH_REQUIRED=true 时即 JWT）
 
@@ -53,7 +60,7 @@ class MessagesRequest(BaseModel):
 
     agent_id: str  # 目标 Agent 标识
     agent_version: str | None = None  # 指定版本，缺省取该 agent 已发布的最新版本
-    session_id: str | None = None  # 会话标识（用于多轮关联，当前实现未强制使用）
+    session_id: str | None = Field(default=None, max_length=40)  # 会话标识（多轮关联，Run 列表可按它过滤；与 t_run 列宽一致）
     messages: list[dict[str, Any]]  # 本轮输入消息
     # 附件：调用方自己此前 Run 产生的外置工件引用（artifact://<id>）；他人的工件一律 403（S4.8 附件隔离）。
     # 工件为图片（png / jpeg / webp / gif）时作为图片输入交给模型（S6，D102），见 messages 接口说明。
@@ -358,6 +365,189 @@ def _client_visible(ev: Event) -> bool:
     return not (isinstance(ev, ThinkingEvent) and ev.visibility == "internal")
 
 
+# ---------------- 持租约内联执行 / 尾随事件流（S7，D108） ----------------
+
+STREAM_POLL_S = float(os.environ.get("RUN_STREAM_POLL_S", "0.2"))  # 尾随事件日志的轮询间隔（秒）
+INLINE_BUFFER = 64  # 内联执行的事件缓冲：客户端读得慢时驱动在此阻塞（SSE 背压）
+SUSPENDED = (RunState.AUTH_REQUIRED, RunState.INPUT_REQUIRED)
+
+
+def _frame(ev: Event | RunEvent) -> dict[str, str] | None:
+    """SSE 帧：内联执行的统一事件同 /v1/messages（event=事件类型）；尾随的事件日志行 event=日志类型、id=seq
+    （断线后可凭 Last-Event-ID / since_seq 续读）；不下发给客户端的思维链返回 None。"""
+    if isinstance(ev, RunEvent):
+        return {"event": ev.type.value, "id": str(ev.seq), "data": ev.model_dump_json()}
+    return _sse(ev) if _client_visible(ev) else None
+
+
+def _final_stop_reason(state: RunState, last_done: str | None) -> Literal["end_turn", "max_tokens", "cancelled", "error", "awaiting"]:
+    """尾随结束时下发的 done 的停止原因：由 Run 状态（及最后一条 RUN_DONE）推出，与内联执行的 done 同口径。"""
+    if state == RunState.COMPLETED:
+        return "max_tokens" if last_done == "max_tokens" else "end_turn"
+    if state == RunState.CANCELED:
+        return "cancelled"
+    if state == RunState.FAILED:
+        return "error"
+    return "awaiting"
+
+
+async def tail_run(
+    run_id: str, access: RunAccess = "full", since_seq: int = 0, *, until_suspended: bool = False, retry_after: int | None = None
+) -> AsyncIterator[RunEvent | DoneEvent]:
+    """尾随 Run 的事件日志（GET /v1/runs/{id}/stream 与 /resume 抢不到租约时共用）：逐条产出 seq > since_seq 的事件，
+    Run 进入终态（until_suspended=True 时挂起等人也算）后再产出一条 done（停止原因由状态推出、带 trace_id）并结束。
+
+    access="approval"（D90 审批视图）只产出审批视图内的事件、不带 trace_id，Run 离开 auth-required（审批视图失效）即结束。
+    状态与事件在同一事务内读取：看到终态时，与终态同事务提交的事件一定已在本批中。Run 不存在（被清理）时直接结束。
+
+    retry_after（/resume 尾随用）：seq 大于它的一次续跑以可重试错误 POOL_EXHAUSTED 结束（Run 保持 working、日志停在该错误）
+    时也以 done(error) 结束——与内联执行同口径，不无限等待下一次重投。"""
+    seq = since_seq
+    while True:
+        async with SessionLocal() as s:
+            row = (await s.execute(select(Run.state, Run.trace_id).where(Run.run_id == run_id))).first()
+            if row is None:
+                return
+            state = RunState(row[0])
+            log = EventLog(s)
+            if access == "full":
+                events = await log.list(run_id, seq)
+            else:
+                events = [e for e in _approval_view(await log.list(run_id)) if e.seq > seq]
+            ended = state.terminal or (until_suspended and state in SUSPENDED) or (access != "full" and state != RunState.AUTH_REQUIRED)
+            last_done = None
+            if ended and state == RunState.COMPLETED:
+                q = (
+                    select(RunEventRow.payload)
+                    .where(RunEventRow.run_id == run_id, RunEventRow.type == RunEventType.RUN_DONE.value)
+                    .order_by(RunEventRow.seq.desc())
+                    .limit(1)
+                )
+                payload = (await s.execute(q)).scalar_one_or_none()
+                last_done = payload.get("stop_reason") if isinstance(payload, dict) else None
+        for e in events:
+            seq = max(seq, e.seq)
+            yield e
+        last = events[-1] if events else None
+        if (
+            not ended
+            and retry_after is not None
+            and last is not None
+            and last.seq > retry_after
+            and last.type == RunEventType.RUN_ERROR
+            and last.payload.get("code") == runner.POOL_EXHAUSTED
+            and state == RunState.WORKING
+        ):
+            yield DoneEvent(run_id=run_id, stop_reason="error", trace_id=row[1] if access == "full" else None)
+            return
+        if ended:
+            trace_id = row[1] if access == "full" else None
+            yield DoneEvent(run_id=run_id, stop_reason=_final_stop_reason(state, last_done), trace_id=trace_id)
+            return
+        await asyncio.sleep(STREAM_POLL_S)
+
+
+async def _drain(q: asyncio.Queue[Event], producer: asyncio.Task[None]) -> AsyncIterator[Event]:
+    """依次取出内联执行任务产出的事件，直到任务结束且缓冲取空。"""
+    while True:
+        if not q.empty():
+            yield q.get_nowait()
+            continue
+        if producer.done():
+            return
+        getter = asyncio.ensure_future(q.get())
+        try:
+            await asyncio.wait({getter, producer}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            if not getter.done():
+                getter.cancel()
+        if getter.done() and not getter.cancelled():
+            yield getter.result()
+
+
+async def _requeue(run_id: str, reason: str) -> None:
+    """把 Run 投递给 Worker 续跑（D108）；投递失败只记日志——持久化 Run 无有效租约时 reaper 会兜底重投。"""
+    try:
+        await enqueue(run_id, reason)
+    except Exception:
+        logger.warning("enqueue run %s (%s) failed; the reaper will re-enqueue it", run_id, reason, exc_info=True)
+
+
+async def run_or_tail(
+    run_id: str,
+    make_drive: Callable[[], AsyncIterator[Event]],
+    *,
+    since_seq: int = 0,
+    owner: str | None = None,
+    epoch: int | None = None,
+) -> AsyncGenerator[Event | RunEvent | DoneEvent, None]:
+    """持租约内联执行，抢不到则尾随（D108）。
+
+    - 抢到租约（lease.hold；给定 owner + epoch 时为创建 Run 时已同事务置好的租约，直接接管）：在独立任务里（fence 与心跳都属于
+      该任务）驱动 make_drive()，统一事件经有界缓冲逐条产出；客户端断开（本生成器被关闭）即取消该任务——harness 被中断、
+      租约释放，持久化 Run 由 reaper / 下次投递接管；
+    - 抢不到（他人持有有效租约，如 Worker 已在自动续跑）：尾随事件日志，自 since_seq 起至 Run 终态或挂起；
+    - 内联执行中失租（LeaseLost，已被他人接管）或写冲突（SeqConflict）：转为尾随并补投一次（Run 仍可执行而无人持有时
+      由 Worker 继续；重复投递由租约去重）。尾随起点为 max(since_seq, 本次内联已提交的最大 seq)——已经以统一事件下发过的
+      部分不再以日志行重复下发。其他异常照常抛出。"""
+    acquired: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+    buffer: asyncio.Queue[Event] = asyncio.Queue(INLINE_BUFFER)
+    holder: list[lease.Lease] = []  # 抢到的租约（其 writes 记录内联已提交的进度）
+
+    async def produce() -> None:
+        async with lease.hold(run_id, owner, epoch=epoch) as held:
+            acquired.set_result(held is not None)
+            if held is None:
+                return
+            holder.append(held)
+            async with aclosing(cast(AsyncGenerator[Event, None], make_drive())) as events:
+                async for ev in events:
+                    await buffer.put(ev)
+
+    producer = asyncio.create_task(produce(), name=f"inline-run-{run_id}")
+    try:
+        first: set[asyncio.Future[Any]] = {acquired, producer}
+        await asyncio.wait(first, return_when=asyncio.FIRST_COMPLETED)
+        if not acquired.done():
+            producer.result()  # 抢租约本身失败（如数据库不可达）：抛出原异常
+            return
+        if acquired.result():
+            async for ev in _drain(buffer, producer):
+                yield ev
+            exc = producer.exception()
+            if exc is None:
+                return
+            if not isinstance(exc, StaleWriter):
+                raise exc
+            logger.warning("run %s: inline execution stopped (%s); following the event log instead", run_id, type(exc).__name__)
+            await _requeue(run_id, "takeover")
+            if holder:
+                since_seq = max(since_seq, holder[0].writes.last_seq)
+        async for item in tail_run(run_id, "full", since_seq, until_suspended=True):
+            yield item
+    finally:
+        if not producer.done():
+            producer.cancel()
+            await asyncio.wait({producer}, timeout=10)
+        if producer.done() and not producer.cancelled():
+            producer.exception()  # 已处理或已抛出：标记为已取用，避免"exception was never retrieved"
+
+
+async def _prepare_input(
+    agent: AgentVersion, messages: list[dict[str, Any]], refs: list[str], principal: Principal
+) -> tuple[list[dict[str, Any]], list[tuple[str, str]], dict[str, dict[str, Any]], list[dict[str, str]] | None]:
+    """初始消息与附件的共同校验（/v1/messages 与 POST /v1/runs）：内联内容白名单、附件归属、图片模态与限额。
+    返回（追加附件说明后的初始消息，附件源文件，图片引用块，附件元信息）；初始消息中图片只是规范化引用（image_ref）。"""
+    _reject_inline_content(messages)
+    sources = await _attachment_sources(refs, principal) if refs else []
+    images: dict[str, dict[str, Any]] = {}
+    if any(_is_image(src) for _, src in sources):
+        _check_vision(agent)
+        images = await asyncio.to_thread(_image_parts, sources)
+    attachments = await _attachment_meta(sources) if sources else None
+    return _with_attachment_note(sources, messages, images), sources, images, attachments
+
+
 @router.post(
     "/v1/messages",
     responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 413: {"model": ErrorDetail}, 503: {"model": ErrorDetail}},
@@ -373,16 +563,14 @@ async def messages(req: MessagesRequest, request: Request, principal: Principal 
     `INLINE_CONTENT_UNSUPPORTED`（detail 以错误码开头）。
 
     harness 进程池已满（goose / dsh，S6）：可重试——非流式返回 503 `POOL_EXHAUSTED`；流式（响应头已发出）下发
-    error（code=POOL_EXHAUSTED，retryable=true）后 done(error)。两种情况本 Run 均为 failed，重发请求即可。"""
+    error（code=POOL_EXHAUSTED，retryable=true）后 done(error)。两种情况本 Run 均为 failed，重发请求即可。
+
+    持久化（S7，D108 / D109）：Run 以 durable=1 创建，初始消息（图片只存规范化引用）与发起人令牌（加密）同事务入库，
+    本节点持租约内联执行（不进队列）。节点死亡后租约过期，由 Worker 接管异步续跑，客户端可用
+    `GET /v1/runs/{run_id}/stream` 续读；挂起审批通过后由系统自动续跑。"""
     agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
-    _reject_inline_content(req.messages)
-    sources = await _attachment_sources(req.attachments, principal) if req.attachments else []
-    images: dict[str, dict[str, Any]] = {}
-    if any(_is_image(src) for _, src in sources):
-        _check_vision(agent)
-        images = await asyncio.to_thread(_image_parts, sources)
-    attachments = await _attachment_meta(sources) if sources else None
-    messages = _with_attachment_note(sources, req.messages, images)
+    messages, sources, images, attachments = await _prepare_input(agent, req.messages, req.attachments, principal)
+    owner = lease.new_owner()
     run_id = await runner.create_run(
         agent,
         principal.subject,
@@ -391,24 +579,40 @@ async def messages(req: MessagesRequest, request: Request, principal: Principal 
         rollout=reason,
         attachments=attachments,
         initial_messages=messages,
+        durable=True,
+        credential=principal.token,
+        lease_owner=owner,  # 创建即持租（同一事务）：reaper / Worker 不会抢在内联执行之前接走，客户端总是拿到统一事件
     )
     request.state.audit_object = f"run:{run_id}"
     _attach(run_id, sources, images)
-    gen = runner.drive(run_id, agent, principal.subject, messages, credential=principal.token)
+    expires_at = credentials.token_expiry(principal.token) if principal.token else None
+
+    def drive() -> AsyncIterator[Event]:
+        return runner.drive(run_id, agent, principal.subject, messages, credential=principal.token, credential_expires_at=expires_at)
+
+    gen = run_or_tail(run_id, drive, owner=owner, epoch=runner.FIRST_LEASE_EPOCH)
     if req.stream:
 
         async def stream() -> AsyncIterator[dict[str, str]]:
-            async for ev in gen:
-                if _client_visible(ev):
-                    yield _sse(ev)
+            async with aclosing(gen) as items:
+                async for ev in items:
+                    frame = _frame(ev)
+                    if frame is not None:
+                        yield frame
 
         return EventSourceResponse(stream(), headers={"X-Run-Id": run_id})
-    events = [ev async for ev in gen if _client_visible(ev)]  # 非流式：先消费完整个生成器，再聚合返回
+    async with aclosing(gen) as items:  # 非流式：先消费完整个生成器，再聚合返回
+        collected = [ev async for ev in items if isinstance(ev, RunEvent) or _client_visible(ev)]
+    events = [e for e in collected if not isinstance(e, RunEvent)]
     exhausted = next((e for e in events if isinstance(e, ErrorEvent) and e.code == runner.POOL_EXHAUSTED), None)
     if exhausted is not None:
         raise HTTPException(503, f"{runner.POOL_EXHAUSTED}: {exhausted.message}", headers={"Retry-After": "1"})
     text = "".join(e.delta for e in events if isinstance(e, TextEvent))
-    return {"run_id": run_id, "content": text, "events": [e.model_dump() for e in events]}
+    # 罕见：内联执行中途被其他节点接管，之后只尾随了事件日志——回答续上日志里的模型响应。尾随自内联已提交的最大 seq 之后起，
+    # 这里的模型响应都在其后，不会与已收集的文本重复
+    replies = [e for e in collected if isinstance(e, RunEvent) and e.type == RunEventType.MODEL_RESPONSE]
+    text += "".join(str(e.payload.get("text") or "") for e in replies)
+    return {"run_id": run_id, "content": text, "events": [e.model_dump() for e in collected]}
 
 
 @router.get("/v1/agents")
@@ -438,27 +642,34 @@ class RunCreate(BaseModel):
     agent_id: str  # 目标 Agent 标识
     agent_version: str | None = None  # 指定版本
     input: list[dict[str, Any]]  # 初始输入消息
-    mode: str = "async"  # 执行模式（当前实现固定为后台异步执行）
+    session_id: str | None = Field(default=None, max_length=40)  # 会话标识（S7，Run 列表可按它过滤）
+    attachments: list[str] = Field(default_factory=list, max_length=10)  # 附件（artifact:// 引用），规则同 /v1/messages
+    mode: str = "async"  # 执行模式（固定为经队列由 Worker 异步执行）
 
 
-@router.post("/v1/runs", status_code=202, response_model=RunStateView, responses={404: {"model": ErrorDetail}})
+@router.post("/v1/runs", status_code=202, response_model=RunStateView, responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})
 async def create_run(req: RunCreate, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
-    """创建一个 Run 并立即返回 202（已接受）；实际驱动在后台任务中异步执行。
-    input 的 content 规则同 /v1/messages：只能是字符串或纯文本块列表，否则 422 `INLINE_CONTENT_UNSUPPORTED`。"""
+    """创建一个持久化 Run 并入队，立即返回 202（已接受），由 Worker 抢租约后执行（S7，D105）。
+    t_run（durable=1、session_id）、t_run_input（初始消息，附件只存规范化引用）与发起人令牌（加密）同一事务写入后才入队；
+    入队失败（如 Redis 暂不可用）仍返回 202，由 reaper 兜底重投。
+    input 的 content 与 attachments 规则同 /v1/messages：content 只能是字符串或纯文本块列表，否则 422
+    `INLINE_CONTENT_UNSUPPORTED`；他人的工件 403。"""
     agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
-    _reject_inline_content(req.input)
-    run_id = await runner.create_run(agent, principal.subject, None, actor=principal.actor, rollout=reason, initial_messages=req.input)
+    messages, sources, images, attachments = await _prepare_input(agent, req.input, req.attachments, principal)
+    run_id = await runner.create_run(
+        agent,
+        principal.subject,
+        req.session_id,
+        actor=principal.actor,
+        rollout=reason,
+        attachments=attachments,
+        initial_messages=messages,
+        durable=True,
+        credential=principal.token,
+    )
     request.state.audit_object = f"run:{run_id}"
-    # In production a worker picks this up from Redis Streams; here we execute eagerly in background.
-    # （生产环境应由 worker 从 Redis Streams 消费任务；此处为简化实现，直接在后台任务中即时执行。
-    # Redis Streams 接入属于 S7 工作包。）
-    import asyncio
-
-    async def _bg() -> None:
-        async for _ in runner.drive(run_id, agent, principal.subject, req.input, credential=principal.token):
-            pass  # 后台驱动只需消费生成器使其执行完成，事件已在 drive 内部写入事件日志
-
-    asyncio.create_task(_bg())
+    _attach(run_id, sources, images)
+    await _requeue(run_id, "created")
     return {"run_id": run_id, "state": RunState.SUBMITTED}
 
 
@@ -474,16 +685,21 @@ async def get_run(run_id: str) -> dict[str, Any]:
         run = await s.get(Run, run_id)
         if run is None:
             raise HTTPException(404)
-        return {
-            "run_id": run.run_id,
-            "state": run.state,
-            "agent_id": run.agent_id,
-            "agent_version": run.agent_version,
-            "model_alias": run.model_alias,
-            "subject": run.subject,
-            "last_seq": run.last_seq,
-            "created_at": run.created_at.isoformat(),
-        }
+        return run_view(run)
+
+
+def run_view(run: Run) -> dict[str, Any]:
+    """t_run 行 → RunView 字段（单个查询与列表共用；session_id 只在列表项中输出）。"""
+    return {
+        "run_id": run.run_id,
+        "state": run.state,
+        "agent_id": run.agent_id,
+        "agent_version": run.agent_version,
+        "model_alias": run.model_alias,
+        "subject": run.subject,
+        "last_seq": run.last_seq,
+        "created_at": run.created_at.isoformat(),
+    }
 
 
 @router.get(
@@ -550,11 +766,14 @@ async def _check_pending_approval(s: AsyncSession, run_id: str, body: ApprovalBo
 )
 async def approve(run_id: str, body: ApprovalBody, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """批准一次挂起中的高风险工具调用：仅在 Run 处于 auth-required 状态时允许，
-    记录 TOOL_APPROVED 事件并把状态迁回 working，随后需调用 /resume 才能真正继续执行。
+    记录 TOOL_APPROVED 事件并把状态迁回 working。持久化执行的 Run（S7，D108）随即入队，由 Worker 以发起人存储的
+    凭据自动续跑；S7 之前创建的 Run（非持久化）仍需发起人调用 /resume 才继续执行。
 
     批准会绑定"参数指纹 + 有效期"：参数一旦变化或审批超时，闸口不会放行，必须重新审批。"""
     async with SessionLocal() as s:
         log = await _check_pending_approval(s, run_id, body, request, principal)
+        run = await s.get(Run, run_id)
+        durable = run is not None and bool(run.durable)
         expires_at = (datetime.now(UTC) + timedelta(seconds=body.ttl_seconds)).isoformat()
         await log.append(
             run_id,
@@ -569,7 +788,14 @@ async def approve(run_id: str, body: ApprovalBody, request: Request, principal: 
         )
         await log.transition(run_id, RunState.WORKING, "approved")
         await s.commit()
+    if durable:
+        await continue_after_approval(run_id)
     return {"run_id": run_id, "state": RunState.WORKING, "resume": f"/v1/runs/{run_id}/resume"}
+
+
+async def continue_after_approval(run_id: str) -> None:
+    """审批通过后统一入队（D108），由 Worker 抢租约、以发起人存储的凭据续跑。"""
+    await _requeue(run_id, "approved")
 
 
 @router.post(
@@ -589,25 +815,41 @@ async def reject(run_id: str, body: ApprovalBody, request: Request, principal: P
             {"call_id": body.call_id, "approver": principal.subject, "comment": body.comment, "params_hash": body.params_hash},
         )
         await log.transition(run_id, RunState.FAILED, "rejected")
+        await credentials.delete_credential(run_id, s)  # 终态即删存储的发起人凭据（D113），与迁移同事务
         await s.commit()
     return {"run_id": run_id, "state": RunState.FAILED}
 
 
 class ResumeBody(BaseModel):
-    """续跑请求体：messages: the original initial messages (clients keep them; workers read from session store)
-    （客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。
-    带附件的 Run 须连同首次驱动时追加的附件说明消息一并回传；指纹须与 RUN_CREATED 记录的一致，否则 409。）"""
+    """续跑请求体（S7 起 messages 可选，D109）：缺省时用服务端存储的初始消息（t_run_input）；传了仍须与 RUN_CREATED
+    记录的指纹一致（带附件的 Run 须连同首次驱动时追加的附件说明消息），否则 409。S7 之前创建的 Run 服务端没有存储，
+    须回传初始消息。"""
 
-    messages: list[dict[str, Any]]
+    messages: list[dict[str, Any]] | None = None
+
+
+def _resume_since(log: list[RunEvent]) -> int:
+    """尾随续跑的起点：最近一次迁回 working（批准 / 补充输入）之前的 seq，使尾随者看到整段续跑。"""
+    back = [e.seq for e in log if e.type == RunEventType.RUN_STATE_CHANGED and e.payload.get("to") == RunState.WORKING.value]
+    return back[-1] - 1 if back else 0
+
+
+def _woken_from_suspension(log: list[RunEvent]) -> bool:
+    """事件日志中是否有"从挂起（auth-required / input-required）迁回 working"的记录（审批通过 / 补充输入）。"""
+    suspended = {s.value for s in SUSPENDED}
+    return any(
+        e.type == RunEventType.RUN_STATE_CHANGED and e.payload.get("to") == RunState.WORKING.value and e.payload.get("from") in suspended
+        for e in log
+    )
 
 
 @router.post(
     "/v1/runs/{run_id}/resume",
-    response_model=None,  # 200 为 SSE 统一事件流（data 帧 schema 见 x-sse-event-schema），不做 JSON 响应建模
+    response_model=None,  # 200 为 SSE 事件流（统一事件见 x-sse-event-schema；尾随时为事件日志行 RunEvent + 末尾 done）
     responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
     dependencies=[Depends(run_in_tenant)],
 )
-async def resume(run_id: str, body: ResumeBody, request: Request, principal: Principal = Depends(current_principal)) -> Any:
+async def resume(run_id: str, request: Request, body: ResumeBody | None = None, principal: Principal = Depends(current_principal)) -> Any:
     """Continue a run after approval by replaying its event log (checkpoint via replay).
     （在审批通过后续跑一个 Run：通过重放该 Run 的事件日志实现 checkpoint 续跑，
     只允许对处于 working 状态的 Run 发起。）
@@ -616,29 +858,76 @@ async def resume(run_id: str, body: ResumeBody, request: Request, principal: Pri
     （其他租户 404，由 run_in_tenant 判定）；先判身份再判状态，不向无权者透露 Run 状态。
     回传的初始消息须与 RUN_CREATED 记录的指纹（initial_messages_hash）一致，否则 409；S5 之前创建的 Run 没有
     该字段，无从比对，兼容放行（与此前行为一致）。
+
+    S7（D108）：持久化 Run 审批通过 / 补充输入后已自动入队、由 Worker 续跑。对这类 Run（事件日志中有从挂起迁回 working 的
+    记录）本接口结果是确定的：补投一次（租约去重），然后自最近一次迁回 working 之前起尾随事件日志到当前末尾，以 done 收尾
+    （与 `GET /v1/runs/{run_id}/stream` 同一实现：事件日志行，SSE id 为 seq）——Run 已是终态或再次挂起时同样返回这段日志
+    与 done（停止原因由状态推出），不返回 409，也不在本节点内联执行。
+    其他 Run（S7 之前创建的非持久化 Run、尚未挂起过的持久化 Run）行为不变：须处于 working（否则 409）；抢到租约则本节点
+    内联流式执行（统一事件），抢不到则尾随事件流。发起人令牌随续跑刷新存储的凭据（Run 未终态时）。
     """
+    given = body.messages if body is not None else None
     async with SessionLocal() as s:
         run = await s.get(Run, run_id)
         if run is None:
             raise HTTPException(404)
         if principal.subject != run.subject:
             raise _forbid(request, "only the run initiator can resume it")
-        if run.state != RunState.WORKING:
-            raise HTTPException(409, f"run state is {run.state}")
         log = await EventLog(s).list(run_id)
-    try:
-        invariant.check_initial(log, body.messages)
-    except invariant.InvariantViolation as e:
-        raise HTTPException(409, f"messages do not match the run's initial messages: {e}") from e
+        follow = bool(run.durable) and _woken_from_suspension(log)  # 持久化 Run 已被唤醒过：一律尾随（结果确定）
+        if not follow and run.state != RunState.WORKING:
+            raise HTTPException(409, f"run state is {run.state}")
+        stored = await s.get(RunInput, run_id)
+    if given is not None:
+        try:
+            invariant.check_initial(log, given)
+        except invariant.InvariantViolation as e:
+            raise HTTPException(409, f"messages do not match the run's initial messages: {e}") from e
+        messages = given
+    elif stored is not None:
+        messages = list(stored.messages)
+    else:
+        raise HTTPException(409, "this run has no stored initial messages; pass the original messages to resume it")
+    if run.durable and principal.token and not RunState(run.state).terminal:
+        async with SessionLocal() as s:  # 只接受发起人令牌：续跑时覆盖存储的凭据，供之后的自动续跑 / 接管使用
+            await credentials.store_credential(s, run_id, principal.subject, principal.token)
+            await s.commit()
+    if follow:
+        await _requeue(run_id, "resume")  # 审批 / 输入后的投递万一丢失也能续上；重复投递由租约去重
+
+        async def follow_stream() -> AsyncIterator[dict[str, str]]:
+            tail = cast(
+                AsyncGenerator[RunEvent | DoneEvent, None],
+                tail_run(run_id, "full", _resume_since(log), until_suspended=True, retry_after=log[-1].seq if log else 0),
+            )
+            async with aclosing(tail) as items:
+                async for ev in items:
+                    frame = _frame(ev)
+                    if frame is not None:
+                        yield frame
+
+        return EventSourceResponse(follow_stream())
     agent, _ = await _load_agent(run.agent_id, run.agent_version, principal.tenant_id, allow_unpublished=True)  # 续跑固定原版本
+    expires_at = credentials.token_expiry(principal.token) if principal.token else None
+
+    def drive() -> AsyncIterator[Event]:
+        # 续跑者即发起人：credential_subject 与发起主体相同，不写入事件（机制保留，见 RunCtx.foreign_credential_subject）
+        return runner.drive(
+            run_id,
+            agent,
+            run.subject,
+            messages,
+            credential=principal.token,
+            credential_subject=principal.subject,
+            credential_expires_at=expires_at,
+        )
 
     async def stream() -> AsyncIterator[dict[str, str]]:
-        # 续跑者即发起人：credential_subject 与发起主体相同，不写入事件（机制保留，见 RunCtx.foreign_credential_subject）
-        async for ev in runner.drive(
-            run_id, agent, run.subject, body.messages, credential=principal.token, credential_subject=principal.subject
-        ):
-            if _client_visible(ev):
-                yield _sse(ev)
+        async with aclosing(run_or_tail(run_id, drive, since_seq=_resume_since(log))) as items:
+            async for ev in items:
+                frame = _frame(ev)
+                if frame is not None:
+                    yield frame
 
     return EventSourceResponse(stream())
 
@@ -653,23 +942,79 @@ async def cancel(run_id: str, request: Request, access: Annotated[RunAccess, Dep
     当前状态不允许迁移到 canceled（如已是终态）返回 409。
 
     取消权限（D90）与完整读取权限相同：发起人、本 Run 已记录的审批人、平台管理员（开发态不检查角色）；
-    待审批期间仅有审批资格者（只读审批所需部分）不能取消，其他人 403，其他租户 404。"""
+    待审批期间仅有审批资格者（只读审批所需部分）不能取消，其他人 403，其他租户 404。
+
+    跨节点（S7，D110）：CAS 迁到 canceled（并发写者抢先时重读重试一次）并删除存储的凭据，提交后经
+    `runtime:cancel` 广播，持有该 Run 的节点中断其 harness；广播丢失时持有者心跳读到 canceled 兜底。"""
     if access != "full":
         raise _forbid(request, "only the run initiator, its approvers or an admin can cancel this run")
-    async with SessionLocal() as s:
-        log = EventLog(s)
-        try:
-            await log.transition(run_id, RunState.CANCELED, "user")
-        except ValueError as e:
-            raise HTTPException(409, str(e)) from e
-        await s.commit()
-    # 迁移提交后，若该 Run 正在本进程驱动（登记在 loop.active），再中断其 harness 会话：阻塞中的模型轮次
-    # 尽快收尾，runner 随后发现 Run 已是 canceled，以 done(cancelled) 结束流而不再做任何状态迁移。
-    running = active.get(run_id)
-    if running is not None:
-        harness, session = running
-        await active.interrupt_quietly(harness, session, run_id)
+    for attempt in (1, 2):
+        async with SessionLocal() as s:
+            log = EventLog(s)
+            try:
+                await log.transition(run_id, RunState.CANCELED, "user")
+                await credentials.delete_credential(run_id, s)
+                await s.commit()
+                break
+            except ValueError as e:  # 已是其他终态：非法迁移
+                raise HTTPException(409, str(e)) from e
+            except SeqConflict as e:
+                await s.rollback()
+                if attempt == 2:
+                    raise HTTPException(409, "run is being updated concurrently; retry the cancel") from e
+    await publish_cancel(run_id)
     return {"run_id": run_id, "state": RunState.CANCELED}
+
+
+class InputBody(BaseModel):
+    """补充输入（S7 §3，D112）。
+
+    - answer：回答 request_user_input，call_id 为该调用，value 为回答（按其 schema 校验，不符 422）；
+    - reconcile：结果未知的写工具对账，call_id 为该调用，action ∈ done / skip / retry（retry 只允许下游声明幂等的工具），
+      done 时 value 可选，作为补记的结果；
+    - credential：用本次请求的令牌（须为发起人）刷新存储的凭据，不从请求体取令牌。"""
+
+    kind: Literal["answer", "reconcile", "credential"]
+    call_id: str | None = Field(default=None, max_length=128)
+    value: Any = None
+    action: Literal["done", "skip", "retry"] | None = None
+
+
+@router.post(
+    "/v1/runs/{run_id}/input",
+    response_model=InputView,
+    responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
+    dependencies=[Depends(run_in_tenant)],
+)
+async def provide_input(
+    run_id: str, body: InputBody, request: Request, principal: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    """为 input-required 的 Run 补充输入（只允许发起人，D112）：同一事务写 INPUT_PROVIDED（及对应的工具结果）并 CAS 回
+    working，随后入队由 Worker 续跑（S7 之前创建的非持久化 Run 不入队，由发起人 /resume）。
+
+    错误：其他租户 / 不存在 404；非发起人或令牌主体不是发起人 403；Run 不在 input-required 或没有匹配的待补充输入 409；
+    回答不符 schema、action 不合规、令牌剩余有效期不足 422；并发写冲突 409（可重试）。"""
+    value = principal.token if body.kind == user_input.KIND_CREDENTIAL else body.value
+    try:
+        out = await user_input.provide_input(run_id, principal.subject, body.kind, call_id=body.call_id, value=value, action=body.action)
+    except RunNotFound as e:
+        raise HTTPException(404, f"run '{run_id}' not found") from e
+    except (user_input.InputForbidden, credentials.CredentialSubjectMismatch) as e:
+        raise _forbid(request, str(e)) from e
+    except user_input.InputNotPending as e:
+        raise HTTPException(409, str(e)) from e
+    except StaleWriter as e:
+        raise HTTPException(409, f"run was updated concurrently; retry: {e}") from e
+    except RecursionError as e:  # 回答嵌套过深
+        raise HTTPException(422, "input value is nested too deeply") from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    async with SessionLocal() as s:
+        run = await s.get(Run, run_id)
+        durable = run is not None and bool(run.durable)
+    if durable:
+        await _requeue(run_id, "input")
+    return out
 
 
 _observe_transport: httpx.AsyncBaseTransport | None = None  # 测试注入：观测适配器请求经该 transport 处理

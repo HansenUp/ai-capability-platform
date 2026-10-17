@@ -7,6 +7,7 @@ Run 事件日志、用量与审计数据；调用链追踪（trace）与评测�
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +15,22 @@ from typing import Any
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import JSON, Connection, DateTime, Dialect, Index, Integer, String, Text, UniqueConstraint, inspect, make_url
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Connection,
+    DateTime,
+    Dialect,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    inspect,
+    make_url,
+    text,
+)
 from sqlalchemy.dialects import mysql
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -22,6 +38,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator, TypeEngine
 
 from runtime.config import settings
+
+log = logging.getLogger(__name__)
 
 # Alembic 迁移目录：默认取源码布局下的 services/runtime/migrations（db.py 向上 3 级即 services/runtime）；
 # 非可编辑安装（如容器镜像）时包已不在源码树里，由 RUNTIME_MIGRATIONS_DIR 指向随镜像拷贝的迁移目录。
@@ -120,6 +138,52 @@ class Run(Base):
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 可观测性追踪 ID
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)  # 创建时间
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)  # 结束时间（终态时写入）
+    # S7 租约（D105/D106）：持有者、单调递增的纪元（fencing token，与 last_seq 同一 CAS）、到期时间（数据库时钟）
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # 持久化执行：1 = 经队列由 Worker 执行、可被接管/reaper 重投；旧 Run 迁移后为 0，不会被 reaper 续跑
+    durable: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    __table_args__ = (
+        Index("ix_run_tenant_subject_created", "tenant_id", "subject", "created_at"),  # Run 列表：本人分页
+        Index("ix_run_tenant_session_created", "tenant_id", "session_id", "created_at"),  # Run 列表：按会话过滤
+        Index("ix_run_durable_state", "durable", "state"),  # reaper 扫描
+    )
+
+
+class RunInput(Base):
+    """Run 的初始消息（S7，D109）：服务端存储，接管/续跑时据此重建历史；附件只存规范化引用、不存二进制。"""
+
+    __tablename__ = "t_run_input"
+    run_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    messages: Mapped[list[dict[str, Any]]] = mapped_column(JSON)  # 初始消息
+    fingerprint: Mapped[str] = mapped_column(String(64))  # 与 RUN_CREATED.initial_messages_hash 同口径的指纹
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+
+
+class RunCredential(Base):
+    """Run 发起人令牌的密文（S7，D113）：AES-GCM（AAD=run_id）加密后存储，Run 终态即删；不存 refresh token。"""
+
+    __tablename__ = "t_run_credential"
+    run_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(128))  # 令牌所属主体（只接受发起人）
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)  # 加密后的令牌（格式由 runtime.credentials 约定）
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)  # 令牌到期时间（无 exp 时为空）
+
+
+class ToolOperation(Base):
+    """写工具操作登记（S7，D111）：与 TOOL_EXECUTING 同事务插入，operation_id（= 幂等键）全局唯一，
+    主键冲突即说明该操作已被（其他 Worker）登记过，走去重或对账；失租旧 Worker 的执行结果也写回此表。"""
+
+    __tablename__ = "t_tool_operation"
+    operation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    call_id: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(16))  # executing | executed | failed | unknown（约定值，由调用方写）
+    result_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 执行结果指纹
+    node: Mapped[str | None] = mapped_column(String(128), nullable=True)  # 执行节点 / Worker 标识
+    epoch: Mapped[int] = mapped_column(Integer, default=0)  # 登记时持有的租约纪元（无 fence 为 0）
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
 
 class RunEventRow(Base):
@@ -214,11 +278,45 @@ def _upgrade_head(connection: Connection) -> None:
     command.upgrade(cfg, "head")
 
 
-async def init_db() -> None:
-    """启动时把数据库 schema 升级到最新迁移版本（alembic upgrade head）。
+MIGRATE_LOCK = "ai_runtime_migrate"  # MySQL 命名锁：多节点同时启动时串行执行迁移（S1 遗留 #2，D115）
+MIGRATE_LOCK_TIMEOUT_S = 120
+
+
+def migrate_on_start() -> bool:
+    """RUNTIME_MIGRATE_ON_START（默认 true）：false/0/no/off 时启动不迁移，改由 `python -m runtime.migrate` 独立执行。"""
+    return os.environ.get("RUNTIME_MIGRATE_ON_START", "true").strip().lower() not in ("0", "false", "no", "off")
+
+
+async def migrate(eng: AsyncEngine | None = None, lock_timeout_s: int = MIGRATE_LOCK_TIMEOUT_S) -> None:
+    """把数据库 schema 升级到最新迁移版本（alembic upgrade head）。
 
     schema 只有 Alembic 迁移这一个来源，不再使用 create_all。迁移通过 run_sync 在引擎自己的连接上
     同步执行：env.py 复用传入的连接，不会再起新的事件循环，因此可安全地在 FastAPI lifespan 中调用。
+    MySQL 下整个迁移包在 GET_LOCK(MIGRATE_LOCK) 里：多节点并发启动时只有一个真正执行，其余等锁后
+    upgrade head 为空操作；等锁超时抛 RuntimeError。命名锁属于连接会话，DDL 的隐式提交不会释放它。
     """
-    async with engine.begin() as conn:
-        await conn.run_sync(_upgrade_head)
+    eng = eng or engine
+    async with eng.connect() as conn:
+        locked = conn.dialect.name == "mysql"
+        if locked:
+            got = (await conn.execute(text("SELECT GET_LOCK(:n, :t)"), {"n": MIGRATE_LOCK, "t": lock_timeout_s})).scalar()
+            if got != 1:
+                raise RuntimeError(f"等待迁移锁 {MIGRATE_LOCK} 超时（{lock_timeout_s}s）或失败：{got!r}")
+        try:
+            await conn.run_sync(_upgrade_head)
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
+        finally:
+            if locked:
+                await conn.execute(text("SELECT RELEASE_LOCK(:n)"), {"n": MIGRATE_LOCK})
+                await conn.commit()
+
+
+async def init_db() -> None:
+    """启动时迁移：RUNTIME_MIGRATE_ON_START=false 时跳过（由独立 Job 执行 `python -m runtime.migrate`），否则 migrate()。"""
+    if not migrate_on_start():
+        log.info("RUNTIME_MIGRATE_ON_START=false：跳过启动迁移")
+        return
+    await migrate()
