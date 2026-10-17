@@ -1,3 +1,4 @@
+# 暂不启用（决策 D47）：Helm 部署方式未启用，本文件为草稿，不要应用到集群。
 # Argo CD Application：GitOps 方式持续同步 deploy/helm/ai-platform 到集群（main 分支）。
 apiVersion: argoproj.io/v1alpha1
 kind: Application

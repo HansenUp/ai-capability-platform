@@ -138,7 +138,7 @@ S1 遗留（进入后续 Sprint）：见决策纪要 `docs/decisions/2026-10-17-
 | S2.1 | 完成 | `api/auth.py`：JWKS 本地验签（只收非对称算法、kid 必填、iss / aud / exp 校验），JWKS 缓存 5 分钟、未知 kid 限频刷新；`/v1`、`/admin` 路由器整体挂鉴权，未带令牌 401 |
 | S2.2 | 完成 | Keycloak Client Credentials 令牌识别为应用（`app:<client_id>`）；用户令牌的 `act` 声明记为执行者；按 `tenant` 声明做 Agent 与 Run 的租户隔离；`/admin` 要求 `platform-admin` |
 | S2.3 | 完成 | Alembic 0002 给 `t_audit` 增加 act、auth_method、tenant_id；请求级审计中间件 + 工具判定审计 + 管理写审计；每行审计镜像为 Langfuse span，与 Run 同会话 |
-| S2.4 | 完成 | `runtime/secret_store.py`：Vault > `<NAME>_FILE` > 环境变量；compose 增加 Vault dev 与 `vault-init`；Helm 改为 Vault Agent Injector + `_FILE`；`RUNTIME_ENV=prod` 安全基线 |
+| S2.4 | 完成 | `runtime/secret_store.py`：Vault > `<NAME>_FILE` > 环境变量；compose 增加 Vault dev 与 `vault-init`；Helm 改为 Vault Agent Injector + `_FILE`（Helm 暂不启用，模板为草稿，见 D47）；`RUNTIME_ENV=prod` 安全基线 |
 | S2.6 | 完成 | MODEL_RESPONSE 事件与模型 span 带稳定前缀哈希与命中统计；Langfuse 用量明细区分命中与未命中输入 |
 
 本机出口标准核对：
