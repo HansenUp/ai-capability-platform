@@ -98,3 +98,24 @@ def test_node_registry_and_routing(c):
     assert c.post("/nodes/n1/commands", json={"type": "reload_skills"}, headers=TADMIN).status_code == 202
     assert c.get("/nodes/n1/commands").json()[0]["type"] == "reload_skills"
     assert c.get("/nodes/n1/commands").json() == []
+
+
+def test_publish_retry_after_runtime_already_published(c, runtime):
+    """评审项：Runtime 已发布、Console 写库失败后重试——快照写入返回 409 时继续发布（Runtime 发布幂等且带租户校验）。"""
+    assert c.post("/agents", json={"agent_id": "rp", "version": "1"}, headers=TADMIN).status_code == 201
+    runtime.fail_paths[("POST", "/admin/agents")] = 409
+    try:
+        r = c.post("/agents/rp/versions/1/publish", json={"eval_passed": True}, headers=TADMIN)
+    finally:
+        runtime.fail_paths.clear()
+    assert r.status_code == 200 and r.json()["status"] == "published"
+    assert runtime.params[-1] == {"tenant_id": "default"}  # 发布带租户校验
+
+
+def test_runtime_rejection_other_than_conflict_still_502(c, runtime):
+    assert c.post("/agents", json={"agent_id": "rp2", "version": "1"}, headers=TADMIN).status_code == 201
+    runtime.fail_paths[("POST", "/admin/agents")] = 422
+    try:
+        assert c.post("/agents/rp2/versions/1/publish", json={"eval_passed": True}, headers=TADMIN).status_code == 502
+    finally:
+        runtime.fail_paths.clear()

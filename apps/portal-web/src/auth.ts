@@ -82,17 +82,23 @@ export async function handleCallback(search: string): Promise<string> {
   return pending.returnTo || "/";
 }
 
-/** 当前访问令牌；剩余有效期不足 30 秒时用 refresh_token 续期，续期失败则清空并要求重新登录。 */
+/** 登录已失效：清空本地令牌并跳转重新登录（登录后回到当前页面），同时抛错中止当前调用。 */
+async function relogin(reason: string): Promise<never> {
+  sessionStorage.removeItem(STORE);
+  await login();
+  throw new Error(reason);
+}
+
+/** 当前访问令牌；剩余有效期不足 30 秒时用 refresh_token 续期；没有令牌或续期失败时自动跳转重新登录。 */
 export async function getToken(): Promise<string> {
   const t = load();
-  if (!t) throw new Error("not logged in");
+  if (!t) return relogin("not logged in");
   if (t.expires_at - Date.now() > 30_000) return t.access_token;
-  if (!t.refresh_token) throw new Error("session expired");
+  if (!t.refresh_token) return relogin("session expired");
   try {
     return (await tokenRequest({ grant_type: "refresh_token", refresh_token: t.refresh_token })).access_token;
-  } catch (e) {
-    sessionStorage.removeItem(STORE);
-    throw e;
+  } catch {
+    return relogin("session expired");
   }
 }
 

@@ -42,22 +42,28 @@ class MessagesRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)  # 附加元数据
 
 
-async def _load_agent(agent_id: str, version: str | None, tenant_id: str, subject: str | None = None) -> tuple[AgentVersion, str]:
+async def _load_agent(
+    agent_id: str, version: str | None, tenant_id: str, subject: str | None = None, *, allow_unpublished: bool = False
+) -> tuple[AgentVersion, str]:
     """加载调用方租户内的 Agent 版本快照，返回（版本，选版原因）。
 
-    - 指定 version：直接取该版本（pinned，续跑与调试用）；
+    - 指定 version：只能是已发布版本（pinned）——否则已回滚的版本、未过发布闸门的草稿都能被直接调用；
+      续跑（resume）固定原 Run 的版本，传 allow_unpublished=True，不受该版本之后被回滚的影响；
     - 未指定：在已发布版本中按主体做哈希灰度选版（stable / canary / allowlist / only，见 runtime.api.rollout）。
     其他租户的 Agent 与不存在同样返回 404，不泄露存在性。"""
     async with SessionLocal() as s:
         q = select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.tenant_id == tenant_id)
         if version:
-            agent = (await s.execute(q.where(AgentVersion.version == version))).scalars().first()
+            q = q.where(AgentVersion.version == version)
+            if not allow_unpublished:
+                q = q.where(AgentVersion.status == "published")
+            agent = (await s.execute(q)).scalars().first()
             reason = "pinned"
         else:
             published = (await s.execute(q.where(AgentVersion.status == "published"))).scalars().all()
             agent, reason = rollout.choose(published, subject or "")
     if agent is None:
-        raise HTTPException(404, f"agent '{agent_id}' has no published version")
+        raise HTTPException(404, f"agent '{agent_id}' has no published version" + (f" '{version}'" if version else ""))
     return agent, reason
 
 
@@ -287,7 +293,7 @@ async def resume(run_id: str, body: ResumeBody, principal: Principal = Depends(c
             raise HTTPException(404)
         if run.state != RunState.WORKING:
             raise HTTPException(409, f"run state is {run.state}")
-    agent, _ = await _load_agent(run.agent_id, run.agent_version, principal.tenant_id)  # 续跑固定原版本
+    agent, _ = await _load_agent(run.agent_id, run.agent_version, principal.tenant_id, allow_unpublished=True)  # 续跑固定原版本
 
     async def stream() -> AsyncIterator[dict[str, str]]:
         # 续跑仍以 Run 发起人的身份执行（闸口判定、Trace 归属不随续跑者变化）；续跑者本人记在请求审计里

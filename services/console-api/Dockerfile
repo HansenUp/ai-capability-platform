@@ -7,7 +7,7 @@ ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY packages/contract /build/packages/contract
 COPY services/console-api /build/services/console-api
-RUN pip install --prefix=/install /build/packages/contract /build/services/console-api
+RUN pip install --prefix=/install /build/packages/contract "/build/services/console-api[mysql]"   # mysql：asyncmy 驱动
 
 # ---- runtime：仅包含安装产物，非 root 用户运行 ----
 FROM python:3.12-slim AS runtime

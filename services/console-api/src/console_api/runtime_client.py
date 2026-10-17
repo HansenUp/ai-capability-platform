@@ -27,7 +27,11 @@ _token: tuple[str, float] | None = None  # (access_token, 过期时间 monotonic
 
 
 class RuntimeSyncError(Exception):
-    """同步到 Runtime 失败。"""
+    """同步到 Runtime 失败；status 为 Runtime 返回的状态码（不可达时为 None）。"""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 def set_transport_for_tests(transport: httpx.AsyncBaseTransport | None) -> None:
@@ -52,15 +56,17 @@ async def _bearer(client: httpx.AsyncClient) -> str | None:
     return _token[0]
 
 
-async def call(method: str, path: str, *, user: str, tenant: str, json: dict[str, Any] | None = None) -> dict[str, Any]:
+async def call(
+    method: str, path: str, *, user: str, tenant: str, json: dict[str, Any] | None = None, params: dict[str, str] | None = None
+) -> dict[str, Any]:
     """调用 Runtime 管理接口，返回 JSON 响应体。"""
     try:
         async with httpx.AsyncClient(base_url=RUNTIME_ADMIN_URL, timeout=TIMEOUT_S, transport=_transport) as client:
             token = await _bearer(client)
             headers = {"Authorization": f"Bearer {token}"} if token else {"X-AI-Subject": f"human:{user}", "X-AI-Tenant": tenant}
-            r = await client.request(method, path, json=json, headers=headers)
+            r = await client.request(method, path, json=json, headers=headers, params=params)
     except httpx.HTTPError as e:
         raise RuntimeSyncError(f"runtime unreachable: {type(e).__name__}") from e
     if r.status_code >= 400:
-        raise RuntimeSyncError(f"runtime returned HTTP {r.status_code}: {r.text[:300]}")
+        raise RuntimeSyncError(f"runtime returned HTTP {r.status_code}: {r.text[:300]}", r.status_code)
     return dict(r.json()) if r.content else {}

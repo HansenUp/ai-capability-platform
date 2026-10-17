@@ -74,12 +74,24 @@ async def _version(s: AsyncSession, op: Operator, agent_id: str, version: str) -
     return v
 
 
-async def _sync(method: str, path: str, op: Operator, json: dict[str, Any] | None = None) -> dict[str, Any]:
-    """同步到 Runtime；失败映射为 502，调用方随之放弃本次 Console 侧变更。"""
+async def _sync(method: str, path: str, op: Operator, json: dict[str, Any] | None = None, *, tenant_scoped: bool = True) -> dict[str, Any]:
+    """同步到 Runtime；失败映射为 502，调用方随之放弃本次 Console 侧变更。
+    tenant_scoped：发布 / 放量 / 回滚带上 ?tenant_id=，版本属于其他租户时 Runtime 按不存在处理。"""
+    params = {"tenant_id": op.tenant} if tenant_scoped else None
     try:
-        return await runtime_client.call(method, path, user=op.user, tenant=op.tenant, json=json)
+        return await runtime_client.call(method, path, user=op.user, tenant=op.tenant, json=json, params=params)
     except runtime_client.RuntimeSyncError as e:
         raise HTTPException(502, f"runtime sync failed: {e}") from e
+
+
+async def _push_snapshot(op: Operator, snapshot: dict[str, Any]) -> None:
+    """把草稿快照写到 Runtime。Runtime 返回 409（该版本已在 Runtime 发布，常见于上次 Runtime 成功而 Console 写库失败）
+    时继续后续的发布调用：Runtime 的发布对已发布版本幂等，且带租户校验，其他租户的同名版本会得到 404。"""
+    try:
+        await runtime_client.call("POST", "/admin/agents", user=op.user, tenant=op.tenant, json=snapshot)
+    except runtime_client.RuntimeSyncError as e:
+        if e.status != 409:
+            raise HTTPException(502, f"runtime sync failed: {e}") from e
 
 
 # ---- Agent 生命周期 ----
@@ -136,7 +148,7 @@ async def publish(agent_id: str, version: str, body: PublishIn, op: Operator = D
         if body.eval_passed is not True:
             raise HTTPException(409, "publish gate: evaluation must pass (eval_passed=true with eval_run_ref)")  # 业务规则拒绝统一用 409
         snapshot = {"agent_id": agent_id, "version": version, "system_prompt": v.system_prompt, "model_alias": v.model_alias}
-        await _sync("POST", "/admin/agents", op, snapshot | {"harness": v.harness, "config": v.config, "tenant_id": op.tenant})
+        await _push_snapshot(op, snapshot | {"harness": v.harness, "config": v.config, "tenant_id": op.tenant})
         publish_body = {
             "eval_run_ref": body.eval_run_ref,
             "eval_passed": True,

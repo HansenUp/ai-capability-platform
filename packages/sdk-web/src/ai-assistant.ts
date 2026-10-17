@@ -60,10 +60,17 @@ export class AiAssistant extends LitElement {
   /** 发送一条用户消息并消费 SSE 事件流。 */
   async send(text: string) {
     this.items = [...this.items, { role: "u", text }];
-    const res = await fetch(`${this.baseUrl}/v1/messages`, {
-      method: "POST", headers: await this.headers(),
-      body: JSON.stringify({ agent_id: this.agentId, session_id: this.sessionId, messages: [{ role: "user", content: text }], stream: true }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/v1/messages`, {
+        method: "POST", headers: await this.headers(),
+        body: JSON.stringify({ agent_id: this.agentId, session_id: this.sessionId, messages: [{ role: "user", content: text }], stream: true }),
+      });
+    } catch (e) {
+      // 令牌获取失败（宿主可能已跳转登录）或网络错误：提示而不是抛出未捕获异常
+      this.items = [...this.items, { role: "err", text: `请求失败：${e instanceof Error ? e.message : String(e)}` }];
+      return;
+    }
     if (!res.ok || !res.body) { this.items = [...this.items, { role: "err", text: `请求失败：HTTP ${res.status}` }]; return; }
     // 逐块读取响应体，按行切分 SSE 帧；只解析 data: 行
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = ""; const cur: Item = { role: "a", text: "" };
@@ -87,16 +94,23 @@ export class AiAssistant extends LitElement {
   async approve(ev: CardEv) {
     const p = ev.payload ?? {};
     const body = { call_id: p.call_id, params_hash: p.params_hash };
-    const res = await fetch(`${this.baseUrl}/v1/runs/${p.run_id}/approve`, { method: "POST", headers: await this.headers(), body: JSON.stringify(body) });
-    if (!res.ok) throw new Error(`approve failed: HTTP ${res.status}`);
+    const res = await fetch(`${this.baseUrl}/v1/runs/${p.run_id}/approve`, { method: "POST", headers: await this.headers(), body: JSON.stringify(body) }).catch(() => null);
+    if (!res?.ok) {
+      // 403：发起人不能审批自己的 Run（需由其他人员审批）
+      this.items = [...this.items, { role: "err", text: `审批失败：HTTP ${res?.status ?? "network"}${res?.status === 403 ? "（不能审批自己发起的操作）" : ""}` }];
+    }
   }
 
   /** 提交反馈：score +1 / -1，correction 为用户给出的正确答案（视为负反馈）。 */
   async feedback(item: Item, score: number, correction?: string) {
     const body = { score, correction: correction || null };
-    const res = await fetch(`${this.baseUrl}/v1/runs/${item.runId}/feedback`, { method: "POST", headers: await this.headers(), body: JSON.stringify(body) });
+    let status = 0;
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/runs/${item.runId}/feedback`, { method: "POST", headers: await this.headers(), body: JSON.stringify(body) });
+      status = res.ok ? 200 : res.status;
+    } catch { status = 0; }
     item.correcting = false;
-    item.feedback = res.ok ? (correction ? "correction" : score > 0 ? "up" : "down") : `failed:${res.status}`;
+    item.feedback = status === 200 ? (correction ? "correction" : score > 0 ? "up" : "down") : `failed:${status || "network"}`;
     this.items = [...this.items];
   }
 

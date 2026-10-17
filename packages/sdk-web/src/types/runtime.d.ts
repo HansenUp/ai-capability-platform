@@ -19,7 +19,8 @@ export interface paths {
         put?: never;
         /**
          * Upsert Agent Version
-         * @description 创建或更新一个草稿态 Agent 版本；已发布（published）版本不可变，需要新建版本。
+         * @description 创建或更新一个草稿态 Agent 版本。只能覆盖同一租户的草稿：已发布 / 已退役的版本不可变，需要新建版本；
+         *     同名版本属于其他租户时 409（Runtime 的版本键是全局的 (agent_id, version)，不能被别的租户改写归属）。
          */
         post: operations["upsert_agent_version_admin_agents_post"];
         delete?: never;
@@ -45,6 +46,8 @@ export interface paths {
          *     1) 评测闸门——eval_passed=False 直接阻断；
          *     2) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，
          *        否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障。
+         *
+         *     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
          */
         post: operations["publish_admin_agents__agent_id__versions__version__publish_post"];
         delete?: never;
@@ -64,7 +67,7 @@ export interface paths {
         put?: never;
         /**
          * Rollback
-         * @description 一键回滚：目标版本（曾发布过）置为全量稳定版，该 Agent 其他已发布版本一律 retired，灰度随之结束。
+         * @description 一键回滚：目标版本（曾发布过）置为全量稳定版，同租户该 Agent 其他已发布版本一律 retired，灰度随之结束。
          */
         post: operations["rollback_admin_agents__agent_id__versions__version__rollback_post"];
         delete?: never;
@@ -83,7 +86,7 @@ export interface paths {
         get?: never;
         /**
          * Set Rollout
-         * @description 调整已发布版本的放量比例与白名单（放量到 100 即转为稳定版）。
+         * @description 调整已发布版本的放量比例与白名单（放量到 100 即转为稳定版）；只有同租户最新的已发布版本能降到 100 以下。
          */
         put: operations["set_rollout_admin_agents__agent_id__versions__version__rollout_put"];
         post?: never;
@@ -949,7 +952,9 @@ export interface operations {
     };
     publish_admin_agents__agent_id__versions__version__publish_post: {
         parameters: {
-            query?: never;
+            query?: {
+                tenant_id?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-ai-subject"?: string | null;
@@ -1009,7 +1014,9 @@ export interface operations {
     };
     rollback_admin_agents__agent_id__versions__version__rollback_post: {
         parameters: {
-            query?: never;
+            query?: {
+                tenant_id?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-ai-subject"?: string | null;
@@ -1065,7 +1072,9 @@ export interface operations {
     };
     set_rollout_admin_agents__agent_id__versions__version__rollout_put: {
         parameters: {
-            query?: never;
+            query?: {
+                tenant_id?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-ai-subject"?: string | null;

@@ -59,13 +59,18 @@ class FakeRuntime:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict]] = []
+        self.params: list[dict] = []  # 每个请求的查询参数
         self.fail_with: int | None = None
+        self.fail_paths: dict[tuple[str, str], int] = {}  # (方法, 路径) → 只对该请求返回的错误码
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         import json
 
         body = json.loads(request.content) if request.content else {}
         self.calls.append((request.method, request.url.path, body))
+        self.params.append(dict(request.url.params))
+        if (request.method, request.url.path) in self.fail_paths:
+            return httpx.Response(self.fail_paths[(request.method, request.url.path)], json={"detail": "boom"})
         if self.fail_with:
             return httpx.Response(self.fail_with, json={"detail": "boom"})
         return httpx.Response(200, json={"ok": True})

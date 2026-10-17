@@ -82,3 +82,54 @@ def test_rollout_adjust_and_guards(client: Any) -> None:
 def test_rollout_percent_bounds(client: Any, percent: int) -> None:
     r = client.post("/admin/agents/demo/versions/1/publish", json={"eval_passed": True, "rollout_percent": percent})
     assert r.status_code == 422
+
+
+def test_zero_percent_first_release_is_allowlist_only() -> None:
+    """首个版本以 0% + 白名单发布：只有白名单可用，其他主体没有可用版本（不再"全员走灰度"）。"""
+    v = _v(1, "1", percent=0, allowlist=["human:vip"])
+    assert rollout.choose([v], "human:vip") == (v, "allowlist")
+    assert rollout.choose([v], "human:x") == (None, "only")
+    assert rollout.choose([_v(1, "1", percent=10)], "human:x")[1] == "only"  # 比例大于 0 时仍全员可用
+
+
+def _create(client: Any, agent_id: str, version: str, tenant: str = "default") -> int:
+    return int(client.post("/admin/agents", json={"agent_id": agent_id, "version": version, "tenant_id": tenant}).status_code)
+
+
+def test_admin_is_tenant_safe(client: Any) -> None:
+    """评审项：回滚不能退役其他租户的同名 Agent；草稿不能被其他租户改写归属；带 tenant_id 的调用校验归属。"""
+    assert _create(client, "xt", "1", "ta") == 201
+    assert client.post("/admin/agents/xt/versions/1/publish", json={"eval_passed": True}).status_code == 200
+    assert _create(client, "xt", "2", "tb") == 201
+    assert client.post("/admin/agents/xt/versions/2/publish", json={"eval_passed": True}).status_code == 200
+    r = client.post("/admin/agents/xt/versions/2/rollback")
+    assert r.status_code == 200 and r.json()["retired"] == []  # ta 的 xt@1 不受影响
+    status = {v["version"]: v["status"] for v in client.get("/admin/agents").json() if v["agent_id"] == "xt"}
+    assert status == {"1": "published", "2": "published"}
+    assert _create(client, "xt", "3", "ta") == 201
+    assert _create(client, "xt", "3", "tb") == 409  # 草稿属于 ta，tb 不能改写
+    assert client.post("/admin/agents/xt/versions/1/rollback", params={"tenant_id": "tb"}).status_code == 404
+    assert client.put("/admin/agents/xt/versions/1/rollout", params={"tenant_id": "tb"}, json={"percent": 100}).status_code == 404
+
+
+def test_pinned_version_must_be_published(client: Any) -> None:
+    """评审项：请求里指定版本只能是已发布版本——回滚后的旧版本、未发布的草稿都不能被直接调用。"""
+    _publish(client, "pin", "1")
+    _publish(client, "pin", "2")
+    assert client.post("/admin/agents/pin/versions/2/rollback").status_code == 200  # pin@1 退役
+    assert _create(client, "pin", "3") == 201  # 草稿
+    body = {"agent_id": "pin", "messages": [{"role": "user", "content": "hi"}], "stream": False}
+    assert client.post("/v1/messages", json=body | {"agent_version": "2"}).status_code == 200
+    assert client.post("/v1/messages", json=body | {"agent_version": "1"}).status_code == 404
+    assert client.post("/v1/messages", json=body | {"agent_version": "3"}).status_code == 404
+
+
+def test_only_newest_published_version_can_be_canary(client: Any) -> None:
+    """评审项：给较旧的已发布版本降比例会让更新的版本成为唯一版本，拒绝；退役版本不能直接重新发布。"""
+    _publish(client, "nw", "1")
+    _publish(client, "nw", "2", rollout_percent=20)
+    assert client.put("/admin/agents/nw/versions/1/rollout", json={"percent": 50}).status_code == 409
+    assert client.put("/admin/agents/nw/versions/2/rollout", json={"percent": 60}).status_code == 200
+    assert client.post("/admin/agents/nw/versions/1/publish", json={"eval_passed": True}).status_code == 200  # 已发布：幂等
+    assert client.post("/admin/agents/nw/versions/2/rollback").status_code == 200
+    assert client.post("/admin/agents/nw/versions/1/publish", json={"eval_passed": True}).status_code == 409  # 已退役

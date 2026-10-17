@@ -6,7 +6,9 @@ import { getToken } from "../auth";
 const agents = ref<{ agent_id: string; version: string; rollout: string }[]>([]);
 const error = ref("");
 onMounted(async () => {
-  const res = await fetch("/v1/agents", { headers: { authorization: `Bearer ${await getToken()}` } });
+  let token: string;
+  try { token = await getToken(); } catch { return; } // 登录失效：getToken 已跳转登录
+  const res = await fetch("/v1/agents", { headers: { authorization: `Bearer ${token}` } });
   if (res.ok) agents.value = await res.json();
   else error.value = `加载 Agent 列表失败：HTTP ${res.status}`;
 });
