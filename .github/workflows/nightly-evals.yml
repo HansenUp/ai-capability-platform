@@ -13,3 +13,6 @@ jobs:
         with: { python-version: "3.12" }
       - run: make setup
       - run: .venv/bin/python -m pytest evals -q
+      # 快照漂移检查：用当前代码重录（进程内真实 Runtime + 网关 + mcp-ticket，脚本化模型），与已提交快照不一致即失败，
+      # 说明事件日志形态已变化、快照需按 evals/record_snapshots.py 的说明重录并审查
+      - run: .venv/bin/python evals/record_snapshots.py && test -z "$(git status --porcelain -- evals/snapshots)"

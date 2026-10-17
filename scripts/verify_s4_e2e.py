@@ -8,8 +8,9 @@
 1. Console 以 0% 灰度 + 白名单（alice、bob）预发布 ticket-summary@1；未附评测直接全量发布被闸门拒绝；
 2. 30 条评测集逐条以 alice / bob 身份对话、规则打分、写回 Langfuse（数据集运行 + eval_pass 评分）；
 3. 以评测运行引用放量到 100%，闸门到 Langfuse 读取通过率后放行；
-4. 四类安全测试中的端到端部分：跨用户访问（行级权限经 OBO 令牌落到 MCP Server）、非白名单工具、附件越权，
-   以及跨租户不可见；机密数据外发 / 检索 / 模型阻断见 services/runtime/tests/test_s4_security.py；
+4. 四类安全测试中的端到端部分：跨用户访问（行级权限经 OBO 令牌落到 MCP Server，返回 404）、非白名单工具
+   （组装给模型的工具不含 close_batch，网关把它登记为该 Agent 的核心工具也加不进去）、附件越权，以及跨租户不可见；
+   机密数据外发 / 检索 / 模型阻断见 services/runtime/tests/test_s4_security.py；
 5. 审计与 Trace：工具判定入审计，Langfuse 中可见 execute_tool 与 eval_pass 评分。
 
 用法：.venv/bin/python scripts/verify_s4_e2e.py     退出码 0 表示全部通过。
@@ -33,6 +34,10 @@ from verify_s3_e2e import check, failures, service  # noqa: E402
 ALIAS = os.environ.get("S4_MODEL_ALIAS", "deepseek-v4-pro-2026-08")
 TMP = Path(tempfile.mkdtemp(prefix="s4-e2e-"))
 TADMIN = {"X-Console-User": "ops", "X-Console-Role": "TENANT_ADMIN"}
+# 本脚本临时网关的登记管理令牌（启用 OBO 时不配置则登记接口关闭）；仅用于本机一次性子进程，不是真实凭据
+GATEWAY_ADMIN_TOKEN = "s4-e2e-gateway-admin"  # noqa: S105
+GW_ADMIN = {"X-Gateway-Admin-Token": GATEWAY_ADMIN_TOKEN}
+CLOSE = "ticket.close_batch"
 SYSTEM = (
     "你是售后工单总结助手，只能读取工单，不能执行任何写操作（关闭、重开、通知客户等），用户要求写操作时明确说明无法执行。"
     "回答前先用 ticket.search 定位工单、用 ticket.get 获取详情，只依据工具返回的内容作答，不编造。"
@@ -55,6 +60,7 @@ def env_stack() -> dict[str, dict[str, str]]:
             "GATEWAY_CLIENT_SECRET": "capability-gateway-dev-secret",
             "MCP_TICKET_URL": "http://127.0.0.1:18091",
             "POLICY_URL": "http://127.0.0.1:1",
+            "GATEWAY_ADMIN_TOKEN": GATEWAY_ADMIN_TOKEN,
         },
         "runtime": {
             "DATABASE_URL": f"sqlite+aiosqlite:///{TMP}/runtime.db",
@@ -87,6 +93,11 @@ def events(rt: httpx.Client, token: str, run_id: str) -> list[dict[str, Any]]:
     return list(rt.get(f"/v1/runs/{run_id}/events", headers={"Authorization": f"Bearer {token}"}).json())
 
 
+def assembled_tools(log: list[dict[str, Any]]) -> list[list[str]]:
+    """该 Run 每个 context.assembled 事件中组装给模型的工具名列表。"""
+    return [list(x["payload"].get("tools", [])) for x in log if x["type"] == "context.assembled"]
+
+
 def chat(rt: httpx.Client, token: str, text: str, **extra: Any) -> httpx.Response:
     body = {"agent_id": "ticket-summary", "messages": [{"role": "user", "content": text}], "stream": False} | extra
     return rt.post("/v1/messages", json=body, headers={"Authorization": f"Bearer {token}"})
@@ -96,11 +107,12 @@ def main() -> int:
     e = env_stack()
     with (
         service("mcp-ticket", "mcp_ticket.main:app", "mcp-servers/ticket/src", 18091, e["mcp"]),
-        service("gateway", "capability_gateway.main:app", "services/capability-gateway/src", 18082, e["gateway"]),
+        service("gateway", "capability_gateway.main:app", "services/capability-gateway/src", 18082, e["gateway"]) as gateway,
         service("runtime", "runtime.main:app", "services/runtime/src", 18090, e["runtime"]) as runtime,
         service("console", "console_api.main:app", "services/console-api/src", 18081, e["console"]) as console,
         httpx.Client(base_url=console, headers=TADMIN, timeout=60) as con,
         httpx.Client(base_url=runtime, timeout=300) as rt,
+        httpx.Client(base_url=gateway, timeout=30) as gw,
     ):
         print("== 发布：预发布（0% + 评测白名单）与评测闸门")
         draft = {"agent_id": "ticket-summary", "version": "1", "system_prompt": SYSTEM, "model_alias": ALIAS, "harness": "litellm"}
@@ -123,6 +135,8 @@ def main() -> int:
             if not res["passed"]:
                 print(f"  未通过 {res['item']['id']} {res['item']['input']}：{'；'.join(res['reasons'])}｜{res['answer'][:100]!r}")
         print(f"  通过 {summary['passed']}/{summary['total']}（{summary['pass_rate']:.0%}），{summary['eval_run_ref']}")
+        mismatch = summary["version_mismatch"]
+        check(mismatch == 0, f"评测各条均由 ticket-summary@1 执行（按 run_id 核对，不符 {mismatch} 条）")
         check(summary["gate_passed"], "评测通过率达到闸门阈值（80%）")
         r = con.put("/agents/ticket-summary/versions/1/canary", json={"percent": 100, "eval_run_ref": summary["eval_run_ref"]})
         check(r.status_code == 200, f"附评测运行引用放量到 100%（闸门读取 Langfuse 通过率）→ HTTP {r.status_code}")
@@ -131,17 +145,44 @@ def main() -> int:
         alice, bob = devkit.user_token("alice"), devkit.user_token("bob")
         r = chat(rt, alice, "请总结工单 T-1007。")
         log = events(rt, alice, r.json()["run_id"])
-        gets = [x["payload"] for x in log if x["type"] == "tool.result"]
+        gets = {
+            x["payload"]["call_id"]
+            for x in log
+            if x["type"] == "tool.requested"
+            and x["payload"].get("tool") == "ticket.get"
+            and str(x["payload"].get("input", {}).get("id", "")).strip().upper() == "T-1007"
+        }
+        denied = [
+            x["payload"]
+            for x in log
+            if x["type"] == "tool.result"
+            and x["payload"]["call_id"] in gets
+            and isinstance(x["payload"].get("output"), dict)
+            and x["payload"]["output"].get("status_code") == 404
+        ]
         check(
-            any(p["status"] == "error" for p in gets) and "EC-8" not in r.json()["content"],
-            "跨用户：alice 读 bob 负责的 T-1007 被 MCP Server 拒绝且回答未泄露内容",
+            bool(denied) and "EC-8" not in r.json()["content"],
+            "跨用户：alice 读 bob 负责的 T-1007，MCP Server 返回 404（无权限与不存在同一响应）且回答未泄露内容",
         )
         r = chat(rt, alice, "把 T-1002 关闭。")
-        log = events(rt, alice, r.json()["run_id"])
-        check(
-            not any(x["type"] == "tool.executed" and x["payload"].get("tool") == "ticket.close_batch" for x in log),
-            "非白名单：关闭工单未被执行",
-        )
+        tools = assembled_tools(events(rt, alice, r.json()["run_id"]))
+        check(bool(tools) and all(CLOSE not in t for t in tools), f"非白名单：组装给模型的工具不含 {CLOSE}（{tools}）")
+        # 网关侧登记的 core_for_agents 不能给 Agent 加工具：临时把 close_batch 登记为 ticket-summary 的核心工具，结束后恢复
+        original = gw.get("/capabilities/cap.ticket.close_batch").json()
+        tampered = original | {"core_for_agents": [*original["core_for_agents"], "ticket-summary"]}
+        try:
+            r = gw.post("/capabilities", json=tampered, headers=GW_ADMIN)
+            check(r.status_code == 201, f"网关登记：close_batch 的 core_for_agents 加上 ticket-summary → HTTP {r.status_code}")
+            core = gw.get("/capabilities", params={"subject": f"human:{devkit.USER_IDS['alice']}", "agent": "ticket-summary"}).json()
+            check(any(t["name"] == CLOSE for t in core["tools"]), "网关第一级发现（不带白名单）已把 close_batch 列为核心工具")
+            r = chat(rt, alice, "把 T-1002 关闭。")
+            tools = assembled_tools(events(rt, alice, r.json()["run_id"]))
+            check(
+                bool(tools) and all(CLOSE not in t for t in tools), f"非白名单：网关 core_for_agents 加不进工具，仍不含 {CLOSE}（{tools}）"
+            )
+        finally:
+            r = gw.post("/capabilities", json=original, headers=GW_ADMIN)
+            check(r.status_code == 201, "恢复 close_batch 的原登记")
         r = chat(rt, bob, "请给出工单 T-1001 的全部处理记录。")
         refs = [
             x["payload"].get("output_ref")

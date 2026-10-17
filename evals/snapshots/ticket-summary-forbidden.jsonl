@@ -1,11 +1,14 @@
-{"run_id":"snap-ticket-summary-forbidden","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:00000000-0000-4000-8000-0000000a11ce","actor":null,"rollout":"stable"}}
 {"run_id":"snap-ticket-summary-forbidden","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
-{"run_id":"snap-ticket-summary-forbidden","seq":3,"type":"model.request","payload":{"n_messages":1}}
-{"run_id":"snap-ticket-summary-forbidden","seq":4,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.get","input":{"id":"T-9999"},"risk_level":"read"}}
-{"run_id":"snap-ticket-summary-forbidden","seq":5,"type":"tool.decision","payload":{"call_id":"c1","decision":"allow","reason":"ok"}}
-{"run_id":"snap-ticket-summary-forbidden","seq":6,"type":"tool.executed","payload":{"call_id":"c1","tool":"ticket.get"}}
-{"run_id":"snap-ticket-summary-forbidden","seq":7,"type":"tool.result","payload":{"call_id":"c1","status":"ok","output":{"error":"NOT_FOUND_OR_FORBIDDEN","message":"工单不存在或无权限"}}}
-{"run_id":"snap-ticket-summary-forbidden","seq":8,"type":"model.request","payload":{"n_messages":3}}
-{"run_id":"snap-ticket-summary-forbidden","seq":9,"type":"model.response","payload":{"text":"无法访问工单 T-9999：该工单不存在或您没有查看权限。请确认工单号，或联系工单所属人授权后再试。"}}
-{"run_id":"snap-ticket-summary-forbidden","seq":10,"type":"run.done","payload":{"stop_reason":"end_turn"}}
-{"run_id":"snap-ticket-summary-forbidden","seq":11,"type":"run.state_changed","payload":{"from":"working","to":"completed","reason":"end_turn"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":3,"type":"context.assembled","payload":{"usage":{"system":71,"skills":4,"tools":23,"memory":1,"retrieval":1,"history":14},"budget":{"system":4000,"skills":8000,"tools":12000,"memory":6000,"retrieval":16000,"history":150000},"stable_prefix_hash":"210dcffdd2192a2adaeaeb7b62c13a61462114caaa332855379c3d1b1b95ce9d","truncated":[],"tools":["ticket.search","ticket.get","search_capabilities","read_artifact"],"skills":["ticket-summary"]}}
+{"run_id":"snap-ticket-summary-forbidden","seq":4,"type":"model.request","payload":{"model_alias":"default-chat","messages_hash":"493ab5479ea15fbd81f8719c05b8a395acab946ca0a8244bd1f01d2b67ccad05","n_messages":1}}
+{"run_id":"snap-ticket-summary-forbidden","seq":5,"type":"model.response","payload":{"text":"","usage":{"type":"usage","input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cost":0.0,"model":"snapshot-scripted"},"prompt_cache":{"stable_prefix_hash":"210dcffdd2192a2adaeaeb7b62c13a61462114caaa332855379c3d1b1b95ce9d","input_tokens":0,"cache_read_tokens":0,"hit_ratio":0.0}}}
+{"run_id":"snap-ticket-summary-forbidden","seq":6,"type":"tool.requested","payload":{"call_id":"call_01","tool":"ticket.get","input":{"id":"T-1007"},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":7,"type":"tool.decision","payload":{"call_id":"call_01","decision":"allow","reason":"ok","policy_decision_id":"fallback:baseline","sandbox_level":"read-only","params_hash":"de2fa1e5dd0c80f5"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":8,"type":"tool.executing","payload":{"call_id":"call_01","tool":"ticket.get","operation_id":null,"params_hash":"de2fa1e5dd0c80f5"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":9,"type":"tool.executed","payload":{"call_id":"call_01","tool":"ticket.get"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":10,"type":"tool.result","payload":{"call_id":"call_01","status":"error","output":{"error":"ticket not found or no permission","status_code":404},"output_ref":null,"data_class":"internal"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":11,"type":"model.request","payload":{"model_alias":"default-chat","messages_hash":"82811061924177e734fa75080b7796441a827151e8abb1f2ff555ee579773b49","n_messages":3}}
+{"run_id":"snap-ticket-summary-forbidden","seq":12,"type":"model.response","payload":{"text":"无法访问工单 T-1007：该工单不存在或您没有查看权限。请确认工单号，或联系工单所属人授权后再试。","usage":{"type":"usage","input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cost":0.0,"model":"snapshot-scripted"},"prompt_cache":{"stable_prefix_hash":"210dcffdd2192a2adaeaeb7b62c13a61462114caaa332855379c3d1b1b95ce9d","input_tokens":0,"cache_read_tokens":0,"hit_ratio":0.0}}}
+{"run_id":"snap-ticket-summary-forbidden","seq":13,"type":"run.done","payload":{"stop_reason":"end_turn"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":14,"type":"run.state_changed","payload":{"from":"working","to":"completed","reason":"end_turn"}}

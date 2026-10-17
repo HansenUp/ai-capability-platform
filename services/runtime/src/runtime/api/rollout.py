@@ -31,6 +31,11 @@ def bucket(agent_id: str, subject: str) -> int:
     return int.from_bytes(digest[:8], "big") % 100
 
 
+def in_allowlist(version: AgentVersion, subject: str) -> bool:
+    """主体是否在该版本的灰度白名单中（白名单存完整主体串，如 human:alice，精确匹配）。"""
+    return subject in (version.rollout_allowlist or [])
+
+
 def choose(published: Sequence[AgentVersion], subject: str) -> tuple[AgentVersion | None, Reason]:
     """从某 Agent 的已发布版本中为主体选版；published 不要求有序，按 id 新旧判断。"""
     ordered = sorted(published, key=lambda v: v.id, reverse=True)
@@ -38,7 +43,7 @@ def choose(published: Sequence[AgentVersion], subject: str) -> tuple[AgentVersio
     canary = next((v for v in ordered if v.rollout_percent < 100 and (stable is None or v.id > stable.id)), None)
     if canary is None:
         return stable, "stable"
-    if subject in (canary.rollout_allowlist or []):
+    if in_allowlist(canary, subject):
         return canary, "allowlist"
     if stable is None:
         return (canary, "only") if canary.rollout_percent > 0 else (None, "only")

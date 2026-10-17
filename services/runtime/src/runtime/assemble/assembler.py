@@ -40,12 +40,34 @@ LOCAL_TOOLS: dict[str, ToolSpec] = {
         description="回显输入（开发用）",
         input_schema={"type": "object", "properties": {"text": {"type": "string", "description": "要回显的文本"}}},
     ),
-    "ticket.search": ToolSpec(name="ticket.search", description="查询工单", capability_id="cap.ticket.search"),
+    # 工单三件套的入参 schema 与能力网关种子数据一致（见 capability_gateway.registry.SEED，由网关测试校验）
+    "ticket.search": ToolSpec(
+        name="ticket.search",
+        description="按关键字、状态与创建时间范围查询售后工单（只读，只返回调用者有权查看的工单摘要，按创建时间倒序）",
+        capability_id="cap.ticket.search",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "q": {"type": "string", "description": "关键字，匹配标题、描述与分类（子串，不区分大小写）"},
+                "status": {"type": "string", "enum": ["open", "processing", "closed"], "description": "状态：open / processing / closed"},
+                "created_from": {
+                    "type": "string",
+                    "description": "创建时间下限（含），ISO 8601，如 2026-10-01 或 2026-10-01T09:00:00+08:00；不带时区按东八区",
+                },
+                "created_to": {
+                    "type": "string",
+                    "description": "创建时间上限，ISO 8601；只写日期（如 2026-10-15）时含当天全天，带时间时含该时刻；不带时区按东八区",
+                },
+                "cursor": {"type": "string", "description": "分页游标（上一页返回的 next_cursor）"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "条数，默认 20，最多 50"},
+            },
+        },
+    ),
     "ticket.get": ToolSpec(
         name="ticket.get",
         description="按工单号查询工单详情",
         capability_id="cap.ticket.get",
-        input_schema={"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+        input_schema={"type": "object", "properties": {"id": {"type": "string", "description": "工单号，如 T-1001"}}, "required": ["id"]},
     ),
     # 数据分级演示用（与能力网关种子数据一致）：机密数据查询、知识检索、外发
     "data.query": ToolSpec(
@@ -60,6 +82,19 @@ LOCAL_TOOLS: dict[str, ToolSpec] = {
         risk_level=RiskLevel.WRITE_HIGH,
         supports_dry_run=True,
         requires_idempotency_key=True,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "description": '待关闭的工单号列表，如 ["T-1001", "T-1002"]',
+                },
+            },
+            "required": ["ids"],
+        },
     ),
 }
 

@@ -59,6 +59,8 @@ async def execute_tool(
     - TOOL_DISPATCH=gateway 且工具来自能力目录（有 capability_id）：经能力网关 `/invoke` 分发到 MCP Server，
       携带终端用户令牌（网关换取 OBO 令牌）；业务系统返回的 4xx（无权限 / 不存在 / 参数错误）作为工具错误结果
       `{"error": ..., "status_code": n}` 交还模型；网关自身失败抛 GatewayToolError。
+      写类工具（非 dry_run）遇业务系统 5xx 或缺少状态码：副作用是否已发生无从判断，同样抛 GatewayToolError，
+      由 handle_tool 走结果未知 / 对账路径（D61）；只读工具的任何失败仍作为工具错误结果交还模型。
     - 其他情况：进程内开发执行器（测试与无网关的本机调试）。
     """
     if tool.name == "read_artifact":
@@ -93,9 +95,13 @@ async def _dispatch_via_gateway(
     data = r.json()
     if data.get("ok"):
         return data.get("output")
+    status = data.get("status_code")
+    if tool.risk_level != RiskLevel.READ and not dry_run and not (isinstance(status, int) and status < 500):
+        # 写操作在业务系统侧 5xx（或状态未知）：可能已部分执行，不能当成确定失败交还模型继续跑
+        raise GatewayToolError(f"business system returned {status if status is not None else 'no status'} for write tool; result unknown")
     output = data.get("output")
     detail = output.get("detail") if isinstance(output, dict) else output
-    return {"error": detail or "tool call failed", "status_code": data.get("status_code")}
+    return {"error": detail or "tool call failed", "status_code": status}
 
 
 # 外置结果引用：只接受 32 位十六进制 id（模型有时省略 artifact:// 前缀，同样接受），杜绝路径穿越

@@ -50,14 +50,23 @@ SEED: list[Capability] = [
     Capability(
         id="cap.ticket.search",
         name="ticket.search",
-        description="按关键字与条件查询售后工单（只读，只返回调用者有权查看的工单摘要）",
+        description="按关键字、状态与创建时间范围查询售后工单（只读，只返回调用者有权查看的工单摘要，按创建时间倒序）",
+        # 入参与 docs/decisions/2026-10-16-首个垂直切片场景确认.md §3.2 契约、mcp-ticket 的 SearchIn 一致
         input_schema={
             "type": "object",
             "properties": {
-                "q": {"type": "string", "description": "关键字，匹配标题、描述与分类"},
-                "status": {"type": "string", "description": "状态：open / processing / closed"},
-                "limit": {"type": "integer", "description": "条数，默认 20，最多 50"},
+                "q": {"type": "string", "description": "关键字，匹配标题、描述与分类（子串，不区分大小写）"},
+                "status": {"type": "string", "enum": ["open", "processing", "closed"], "description": "状态：open / processing / closed"},
+                "created_from": {
+                    "type": "string",
+                    "description": "创建时间下限（含），ISO 8601，如 2026-10-01 或 2026-10-01T09:00:00+08:00；不带时区按东八区",
+                },
+                "created_to": {
+                    "type": "string",
+                    "description": "创建时间上限，ISO 8601；只写日期（如 2026-10-15）时含当天全天，带时间时含该时刻；不带时区按东八区",
+                },
                 "cursor": {"type": "string", "description": "分页游标（上一页返回的 next_cursor）"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "条数，默认 20，最多 50"},
             },
         },
         system="ticket",
@@ -76,6 +85,20 @@ SEED: list[Capability] = [
         id="cap.ticket.close_batch",
         name="ticket.close_batch",
         description="批量关闭工单并通知客户",
+        # 只暴露业务参数；dry_run 与 idempotency_key 由 Runtime 闸口生成、经 /invoke 注入，不由模型填写
+        input_schema={
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "description": '待关闭的工单号列表，如 ["T-1001", "T-1002"]',
+                },
+            },
+            "required": ["ids"],
+        },
         system="ticket",
         owner="售后系统组",
         risk_level="write_high",  # 高风险写：需 dry-run 预演 + 人工审批 + 幂等键

@@ -2,7 +2,7 @@
   "initial_messages": [
     {
       "role": "user",
-      "content": "总结登录失败的工单"
+      "content": "总结固件升级掉线的工单"
     }
   ],
   "final_state": "failed",

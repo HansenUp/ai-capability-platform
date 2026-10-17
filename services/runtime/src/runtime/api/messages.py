@@ -53,7 +53,8 @@ async def _load_agent(
     """加载调用方租户内的 Agent 版本快照，返回（版本，选版原因）。
 
     - 指定 version：只能是已发布版本（pinned）——否则已回滚的版本、未过发布闸门的草稿都能被直接调用；
-      续跑（resume）固定原 Run 的版本，传 allow_unpublished=True，不受该版本之后被回滚的影响；
+      0% 预发布版本（D66）还要求调用方在其白名单内（与 rollout.choose 同一判定），否则同样按不存在处理；
+      续跑（resume）固定原 Run 的版本，传 allow_unpublished=True，不受该版本之后被回滚 / 白名单变化的影响；
     - 未指定：在已发布版本中按主体做哈希灰度选版（stable / canary / allowlist / only，见 runtime.api.rollout）。
     其他租户的 Agent 与不存在同样返回 404，不泄露存在性。"""
     async with SessionLocal() as s:
@@ -63,6 +64,9 @@ async def _load_agent(
             if not allow_unpublished:
                 q = q.where(AgentVersion.status == "published")
             agent = (await s.execute(q)).scalars().first()
+            hidden = agent is not None and agent.rollout_percent == 0 and not rollout.in_allowlist(agent, subject or "")
+            if hidden and not allow_unpublished:
+                agent = None  # 0% 预发布版本只对白名单开放：非白名单主体指定该版本与不存在同样 404，不泄露存在性
             reason = "pinned"
         else:
             published = (await s.execute(q.where(AgentVersion.status == "published"))).scalars().all()
