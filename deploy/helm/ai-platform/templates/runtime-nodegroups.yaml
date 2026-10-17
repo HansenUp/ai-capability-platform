@@ -11,8 +11,25 @@ spec:
   replicas: {{ .replicas }}
   selector: { matchLabels: { app: runtime, nodeGroup: {{ .name }} } }
   template:
-    metadata: { labels: { app: runtime, nodeGroup: {{ .name }} } }
+    metadata:
+      labels: { app: runtime, nodeGroup: {{ .name }} }
+      {{- if $.Values.vault.enabled }}
+      # S2.4 密钥注入：Vault Agent Injector 以 Kubernetes 认证登录，把每个密钥渲染为 /vault/secrets/<文件>，
+      # 容器只拿到 <NAME>_FILE 路径（见下方 env），密钥不进环境变量、不进 Helm values。
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: {{ $.Values.vault.role | quote }}
+        vault.hashicorp.com/agent-pre-populate-only: "true"   # 只在启动前渲染一次；轮换密钥需滚动重启
+        {{- range $file, $key := $.Values.vault.secrets }}
+        vault.hashicorp.com/agent-inject-secret-{{ $file }}: {{ $.Values.vault.path | quote }}
+        vault.hashicorp.com/agent-inject-template-{{ $file }}: |
+          {{ "{{" }}- with secret {{ $.Values.vault.path | quote }} -{{ "}}" }}{{ "{{" }} .Data.data.{{ $key }} {{ "}}" }}{{ "{{" }}- end {{ "}}" }}
+        {{- end }}
+      {{- end }}
     spec:
+      {{- if $.Values.vault.enabled }}
+      serviceAccountName: {{ $.Values.vault.serviceAccount }}   # Vault Kubernetes 认证绑定的服务账号
+      {{- end }}
       runtimeClassName: {{ $.Values.runtime.sandbox.runtimeClassName }}   # gVisor 沙箱
       containers:
         - name: runtime
@@ -25,6 +42,12 @@ spec:
             # 展开 values.runtime.env 中的公共环境变量
             {{- range $k, $v := $.Values.runtime.env }}
             - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+            {{- if $.Values.vault.enabled }}
+            # 密钥项只以文件路径传入（runtime.secret_store 按 <NAME>_FILE 读取）
+            {{- range $file, $key := $.Values.vault.secrets }}
+            - { name: {{ $key }}_FILE, value: "/vault/secrets/{{ $file }}" }
+            {{- end }}
             {{- end }}
           ports: [{ containerPort: 8080 }]
           readinessProbe: { httpGet: { path: /healthz, port: 8080 } }

@@ -65,17 +65,22 @@ if TYPE_CHECKING:
 
 PLATFORM_SERVER = "platform"  # 进程内 MCP server 名，决定模型看到的工具名前缀
 TOOL_PREFIX = f"mcp__{PLATFORM_SERVER}__"  # Claude Code 对 MCP 工具的命名规则：mcp__<server>__<tool>
-_USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens")  # 从 SDK usage 中累计的字段
+# 从 SDK usage 中累计的字段。Anthropic 的 input_tokens 不含缓存命中 / 写入部分，上报 UsageEvent 时三者相加，
+# 与 Contract 的口径一致（input_tokens 为全部输入，cache_read_tokens 是其中命中缓存的部分）。
+_USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 # 从本进程继承来的、会改变 CLI 行为的环境变量前缀：子进程里一律置空，避免宿主环境（例如在 Claude Code
 # 里跑测试时的 ANTHROPIC_BASE_URL / CLAUDE_AGENT_SDK_MCP_NO_PREFIX / OAuth token）泄漏进隔离会话。
-_SCRUB_PREFIXES = ("ANTHROPIC_", "CLAUDE_CODE_", "CLAUDE_AGENT_SDK_", "AWS_", "GOOGLE_", "AZURE_")
+_SCRUB_PREFIXES = ("ANTHROPIC_", "CLAUDE_CODE_", "CLAUDE_AGENT_SDK_", "AWS_", "GOOGLE_", "AZURE_", "VAULT_")
 # 运行时已知的敏感变量（数据库、网关/厂商凭据、可观测性密钥）：不论宿主是否设置，子进程里一律置空。
 # 网关凭据只以 ANTHROPIC_AUTH_TOKEN 显式传入一份，其来源变量本身不再透传。
 _SCRUB_KEYS = (
     "DATABASE_URL",
+    "DATABASE_URL_FILE",
     "RUNTIME_TEST_DATABASE_URL",
     "MODEL_GATEWAY_API_KEY",
+    "MODEL_GATEWAY_API_KEY_FILE",
     "CLAUDE_SDK_AUTH_TOKEN",
+    "CLAUDE_SDK_AUTH_TOKEN_FILE",
     "LANGFUSE_SECRET_KEY",
     "LANGFUSE_PUBLIC_KEY",
     "LANGFUSE_OTEL_AUTH",
@@ -685,7 +690,7 @@ class ClaudeSdkHarness:
 
     def _usage_event(self, s: _Session, values: dict[str, int], cost: float = 0.0) -> UsageEvent:
         return UsageEvent(
-            input_tokens=values["input_tokens"],
+            input_tokens=values["input_tokens"] + values["cache_read_input_tokens"] + values["cache_creation_input_tokens"],
             output_tokens=values["output_tokens"],
             cache_read_tokens=values["cache_read_input_tokens"],
             cost=cost,

@@ -72,8 +72,9 @@ def thinking_visibility(agent: AgentVersion) -> ThinkingVisibility:
     return value if value in ("internal", "summary", "full") else "internal"
 
 
-async def create_run(agent: AgentVersion, subject: str, session_id: str | None) -> str:
-    """创建一个新 Run：写入 t_run 行并追加 RUN_CREATED 事件（seq=1），返回新生成的 run_id。"""
+async def create_run(agent: AgentVersion, subject: str, session_id: str | None, actor: str | None = None) -> str:
+    """创建一个新 Run：写入 t_run 行并追加 RUN_CREATED 事件（seq=1），返回新生成的 run_id。
+    actor 为代为执行的 Agent / 应用（来自令牌的 act 声明或签发客户端），随 RUN_CREATED 进事件日志。"""
     run_id = "run_" + uuid.uuid4().hex[:20]
     async with SessionLocal() as s:
         s.add(
@@ -91,7 +92,13 @@ async def create_run(agent: AgentVersion, subject: str, session_id: str | None) 
         await EventLog(s).append(
             run_id,
             RunEventType.RUN_CREATED,
-            {"agent_id": agent.agent_id, "agent_version": agent.version, "model_alias": agent.model_alias, "subject": subject},
+            {
+                "agent_id": agent.agent_id,
+                "agent_version": agent.version,
+                "model_alias": agent.model_alias,
+                "subject": subject,
+                "actor": actor,
+            },
         )
         await s.commit()
     return run_id
@@ -364,13 +371,17 @@ async def _drive(
                                     await s.commit()
                             elif isinstance(ev, UsageEvent):
                                 # 收到用量事件视为本轮模型输出结束：落盘 MODEL_RESPONSE 事件，并把完整文本追加进历史。
-                                payload: dict[str, Any] = {"text": "".join(text_parts), "usage": ev.model_dump()}
+                                payload: dict[str, Any] = {
+                                    "text": "".join(text_parts),
+                                    "usage": ev.model_dump(),
+                                    "prompt_cache": tracing.prompt_cache_stats(ev, plan.stable_prefix_hash),
+                                }
                                 if thinking_parts:
                                     payload["thinking"] = "".join(thinking_parts)
                                 async with SessionLocal() as s:
                                     model_response = await EventLog(s).append(run_id, RunEventType.MODEL_RESPONSE, payload)
                                     await s.commit()
-                                tracing.record_usage(mspan, ev, model_response.seq)
+                                tracing.record_usage(mspan, ev, model_response.seq, plan.stable_prefix_hash)
                                 if text_parts:
                                     rc.history.append({"role": "assistant", "content": "".join(text_parts)})
                                 yield ev

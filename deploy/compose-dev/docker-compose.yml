@@ -6,6 +6,17 @@ services:
     image: mysql:8.4
     environment: { MYSQL_ROOT_PASSWORD: root, MYSQL_DATABASE: ai_platform }
     ports: ["127.0.0.1:3316:3306"]                  # 宿主机 3316：避免与本机已有 MySQL 的 3306 冲突；容器内仍为 3306
+  vault:                                  # 密钥中心（S2.4）：本机 dev 模式（内存存储、重启即清空），Runtime 启动时按 VAULT_ADDR 读取 KV
+    image: hashicorp/vault:1.18.3
+    command: ["server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
+    environment: { VAULT_DEV_ROOT_TOKEN_ID: dev-root }   # 本机开发根令牌（公开的开发值，生产用 Kubernetes 认证 + Vault Agent）
+    cap_add: [IPC_LOCK]
+    ports: ["127.0.0.1:8200:8200"]
+  vault-init:                             # 一次性任务：把本机开发用的网关密钥写入 secret/ai-platform/runtime（键名即 Runtime 的变量名）
+    image: hashicorp/vault:1.18.3
+    environment: { VAULT_ADDR: "http://vault:8200", VAULT_TOKEN: dev-root }
+    entrypoint: ["sh", "-c", "until vault status >/dev/null 2>&1; do sleep 1; done && vault kv put secret/ai-platform/runtime MODEL_GATEWAY_API_KEY=sk-dev-master CLAUDE_SDK_AUTH_TOKEN=sk-dev-master"]
+    depends_on: [vault]
   redis:                                  # Run 队列（Redis Streams，S7）、LiteLLM 响应缓存
     image: redis:7-alpine
     ports: ["127.0.0.1:6379:6379"]

@@ -6,14 +6,26 @@ runtime:
     - { name: general, replicas: 3, labels: [general], topology: central }        # 通用组
     - { name: aftersales, replicas: 2, labels: [aftersales], topology: central }  # 售后专用组（隔离负载与能力）
   env:                                    # 注入到每个 Runtime 容器的环境变量（与 services/runtime/config.py 对应）
-    DATABASE_URL: mysql+asyncmy://ai:ai@mysql:3306/ai_platform
     MODEL_GATEWAY_URL: http://litellm:4000
     CAPABILITY_GATEWAY_URL: http://capability-gateway:8082
     POLICY_URL: http://policy:8083
+    RUNTIME_ENV: prod                     # 启动时做安全基线校验（鉴权配置齐全、密钥不得来自明文环境变量）
     AUTH_REQUIRED: "true"                 # 生产强制 JWT 验签
     JWKS_URL: https://idp.example.com/realms/ai-platform/protocol/openid-connect/certs
+    JWT_ISSUER: https://idp.example.com/realms/ai-platform
+    JWT_AUDIENCE: ai-runtime              # Keycloak 中 Runtime 的受众（ai-runtime 客户端作用域里的 audience mapper）
   sandbox: { runtimeClassName: gvisor }   # L2 沙箱：工具执行 Pod 使用 gVisor RuntimeClass
   listen: 0.0.0.0:8080                     # 仅 ClusterIP；不对外暴露，流量经 APISIX 进入
+# 密钥注入（S2.4）：Vault Agent Injector 把密钥渲染成文件；DATABASE_URL、网关 Key 等不再出现在 runtime.env 中
+vault:
+  enabled: true
+  role: ai-runtime                        # Vault Kubernetes 认证角色（绑定下方服务账号）
+  serviceAccount: ai-runtime
+  path: secret/data/ai-platform/runtime   # KV v2 路径，键名即 Runtime 的变量名
+  secrets:                                # 渲染后的文件名 → KV 中的键名（同时决定 <键名>_FILE 环境变量）
+    database-url: DATABASE_URL
+    model-gateway-api-key: MODEL_GATEWAY_API_KEY
+    claude-sdk-auth-token: CLAUDE_SDK_AUTH_TOKEN
 consoleApi: { replicas: 2 }               # Console API 副本数
 capabilityGateway: { replicas: 2 }        # 能力网关副本数
 policy: { replicas: 2 }                   # 策略服务副本数

@@ -135,12 +135,17 @@ class RunEventRow(Base):
 
 
 class Audit(Base):
-    """管理类操作（如发布 Agent 版本）的审计记录表。"""
+    """统一审计表（S2.3）：每次 API 请求、每次工具闸口判定、每次管理写操作各一行，
+    回答"谁（actor）、何时（ts）、以何身份（act / auth_method / tenant_id）、调了什么（action / object）、
+    判定结果（result）"。"""
 
     __tablename__ = "t_audit"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    ts: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)  # 操作时间
-    actor: Mapped[str] = mapped_column(String(128))  # 操作者身份
+    ts: Mapped[datetime] = mapped_column(UTCDateTime, default=_now, index=True)  # 操作时间
+    actor: Mapped[str] = mapped_column(String(128), index=True)  # 操作者身份（Principal.subject；未认证为 anonymous）
+    act: Mapped[str | None] = mapped_column(String(128), nullable=True)  # 代为执行的 Agent / 应用（act 声明或签发客户端）
+    auth_method: Mapped[str | None] = mapped_column(String(24), nullable=True)  # dev | user | client_credentials | none
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 租户
     action: Mapped[str] = mapped_column(String(64), index=True)  # 操作类型
     object: Mapped[str] = mapped_column(String(128))  # 操作对象
     result: Mapped[str] = mapped_column(String(16))  # 操作结果

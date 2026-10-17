@@ -18,6 +18,7 @@ Span 结构（一次 drive() 调用 = 一条 Trace）::
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -195,14 +196,45 @@ def model_span(model_alias: str, round_: int, parent: RunSpan | None = None, mod
         yield span
 
 
-def record_usage(span: Span, usage: UsageEvent, model_response_seq: int | None) -> None:
-    """把 UsageEvent 写到模型 span：响应模型、输入/输出/缓存命中 token、成本，以及 MODEL_RESPONSE 的 seq。"""
+def prompt_cache_stats(usage: UsageEvent, stable_prefix_hash: str | None) -> dict[str, Any]:
+    """一轮模型调用的 Prompt Cache 统计（S2.6），写入 MODEL_RESPONSE 事件与模型 span。
+
+    口径：input_tokens 为全部输入（含命中缓存部分），hit_ratio = cache_read_tokens / input_tokens（无输入时为 0）。
+    stable_prefix_hash 是系统提示词 + 技能 + 工具三个固定块的哈希：同一前缀哈希下命中率持续为 0，
+    说明前缀没有被模型侧缓存（例如低于厂商的最小缓存长度，或请求间前缀其实不同）。
+    """
+    hit = round(usage.cache_read_tokens / usage.input_tokens, 4) if usage.input_tokens else 0.0
+    return {
+        "stable_prefix_hash": stable_prefix_hash or "",
+        "input_tokens": usage.input_tokens,
+        "cache_read_tokens": usage.cache_read_tokens,
+        "hit_ratio": hit,
+    }
+
+
+def record_usage(span: Span, usage: UsageEvent, model_response_seq: int | None, stable_prefix_hash: str | None = None) -> None:
+    """把 UsageEvent 写到模型 span：响应模型、输入/输出/缓存命中 token、成本、Prompt Cache 统计，以及 MODEL_RESPONSE 的 seq。
+
+    Langfuse 的用量明细走 ``langfuse.observation.usage_details``（JSON）：input 为未命中缓存的输入，
+    input_cached_tokens 为命中部分，二者之和即全部输入，Langfuse 侧按此统计命中率与成本。
+    """
     if usage.model:
         span.set_attribute("gen_ai.response.model", usage.model)
     span.set_attribute("gen_ai.usage.input_tokens", usage.input_tokens)
     span.set_attribute("gen_ai.usage.output_tokens", usage.output_tokens)
     span.set_attribute("gen_ai.usage.cache_read_tokens", usage.cache_read_tokens)  # 自定义：GenAI 约定尚无缓存命中字段
     span.set_attribute("ai.cost", usage.cost)
+    stats = prompt_cache_stats(usage, stable_prefix_hash)
+    if stable_prefix_hash:
+        span.set_attribute("ai.context.stable_prefix_hash", stable_prefix_hash)
+    span.set_attribute("ai.prompt_cache.hit_ratio", stats["hit_ratio"])
+    details = {
+        "input": max(usage.input_tokens - usage.cache_read_tokens, 0),
+        "input_cached_tokens": usage.cache_read_tokens,
+        "output": usage.output_tokens,
+        "total": usage.input_tokens + usage.output_tokens,
+    }
+    span.set_attribute("langfuse.observation.usage_details", json.dumps(details))
     if model_response_seq is not None:
         span.set_attribute("ai.event.seq.model_response", model_response_seq)
 

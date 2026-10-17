@@ -18,13 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from ai_contract import Event, RunEventType, RunState, TextEvent, ThinkingEvent
-from runtime.api.auth import Principal, current_principal
+from runtime.api.auth import Principal, check_approver, current_principal
 from runtime.api.views import ApprovalView, ErrorDetail, RunEventsView, RunStateView, RunView
 from runtime.loop import active, runner
 from runtime.state.db import AgentVersion, Run, SessionLocal
 from runtime.state.eventlog import EventLog
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(current_principal)])  # 全部 /v1 接口要求调用方身份（AUTH_REQUIRED=true 时即 JWT）
 
 
 class MessagesRequest(BaseModel):
@@ -39,15 +39,25 @@ class MessagesRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)  # 附加元数据
 
 
-async def _load_agent(agent_id: str, version: str | None) -> AgentVersion:
-    """按 agent_id（可选指定 version）加载 Agent 版本快照；未指定版本时取已发布的最新版本。"""
+async def _load_agent(agent_id: str, version: str | None, tenant_id: str) -> AgentVersion:
+    """按 agent_id（可选指定 version）加载调用方租户内的 Agent 版本快照；未指定版本时取已发布的最新版本。
+    其他租户的 Agent 与不存在同样返回 404，不泄露存在性。"""
     async with SessionLocal() as s:
-        q = select(AgentVersion).where(AgentVersion.agent_id == agent_id)
+        q = select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.tenant_id == tenant_id)
         q = q.where(AgentVersion.version == version) if version else q.where(AgentVersion.status == "published")
         agent = (await s.execute(q.order_by(AgentVersion.id.desc()))).scalars().first()
     if agent is None:
         raise HTTPException(404, f"agent '{agent_id}' has no published version")
     return agent
+
+
+async def run_in_tenant(run_id: str, request: Request, principal: Principal = Depends(current_principal)) -> None:
+    """Run 级租户隔离：Run 不存在或不属于调用方租户一律 404；同时把 Run 记为本次请求的审计对象。"""
+    async with SessionLocal() as s:
+        run = await s.get(Run, run_id)
+    if run is None or run.tenant_id != principal.tenant_id:
+        raise HTTPException(404, f"run '{run_id}' not found")
+    request.state.audit_object = f"run:{run_id}"
 
 
 def _sse(ev: Event) -> dict[str, str]:
@@ -64,8 +74,9 @@ def _client_visible(ev: Event) -> bool:
 @router.post("/v1/messages")
 async def messages(req: MessagesRequest, request: Request, principal: Principal = Depends(current_principal)) -> Any:
     """对话式入口：创建 Run 并驱动一次执行；支持流式（SSE）与非流式（聚合后一次性返回）两种模式。"""
-    agent = await _load_agent(req.agent_id, req.agent_version)
-    run_id = await runner.create_run(agent, principal.subject, req.session_id)
+    agent = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id)
+    run_id = await runner.create_run(agent, principal.subject, req.session_id, actor=principal.actor)
+    request.state.audit_object = f"run:{run_id}"
     gen = runner.drive(run_id, agent, principal.subject, req.messages)
     if req.stream:
 
@@ -93,10 +104,11 @@ class RunCreate(BaseModel):
 
 
 @router.post("/v1/runs", status_code=202, response_model=RunStateView, responses={404: {"model": ErrorDetail}})
-async def create_run(req: RunCreate, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+async def create_run(req: RunCreate, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """创建一个 Run 并立即返回 202（已接受）；实际驱动在后台任务中异步执行。"""
-    agent = await _load_agent(req.agent_id, req.agent_version)
-    run_id = await runner.create_run(agent, principal.subject, None)
+    agent = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id)
+    run_id = await runner.create_run(agent, principal.subject, None, actor=principal.actor)
+    request.state.audit_object = f"run:{run_id}"
     # In production a worker picks this up from Redis Streams; here we execute eagerly in background.
     # （生产环境应由 worker 从 Redis Streams 消费任务；此处为简化实现，直接在后台任务中即时执行。
     # Redis Streams 接入属于 S7 工作包。）
@@ -110,7 +122,7 @@ async def create_run(req: RunCreate, principal: Principal = Depends(current_prin
     return {"run_id": run_id, "state": RunState.SUBMITTED}
 
 
-@router.get("/v1/runs/{run_id}", response_model=RunView, responses={404: {"model": ErrorDetail}})
+@router.get("/v1/runs/{run_id}", response_model=RunView, responses={404: {"model": ErrorDetail}}, dependencies=[Depends(run_in_tenant)])
 async def get_run(run_id: str) -> dict[str, Any]:
     """查询单个 Run 的当前状态与元信息。"""
     async with SessionLocal() as s:
@@ -129,7 +141,7 @@ async def get_run(run_id: str) -> dict[str, Any]:
         }
 
 
-@router.get("/v1/runs/{run_id}/events", response_model=RunEventsView)
+@router.get("/v1/runs/{run_id}/events", response_model=RunEventsView, dependencies=[Depends(run_in_tenant)])
 async def run_events(run_id: str, since_seq: Annotated[int, Query(ge=0, le=2**53)] = 0) -> list[dict[str, Any]]:
     """按 seq 增量查询 Run 的事件日志（自 since_seq 之后的所有事件）。
 
@@ -151,7 +163,7 @@ class ApprovalBody(BaseModel):
     comment: str = ""  # 审批意见
 
 
-async def _check_pending_approval(s: AsyncSession, run_id: str, body: ApprovalBody) -> EventLog:
+async def _check_pending_approval(s: AsyncSession, run_id: str, body: ApprovalBody, request: Request, principal: Principal) -> EventLog:
     """审批 / 拒绝的共同前置校验：Run 存在（否则 404）、处于 auth-required，且回传的参数指纹
     与该调用最近一次闸口决策记录的一致（否则 409）。返回绑定到同一会话的 EventLog。"""
     run = await s.get(Run, run_id)
@@ -159,6 +171,7 @@ async def _check_pending_approval(s: AsyncSession, run_id: str, body: ApprovalBo
         raise HTTPException(404, f"run '{run_id}' not found")
     if run.state != RunState.AUTH_REQUIRED:
         raise HTTPException(409, "run is not awaiting approval")
+    check_approver(request, principal, run.subject)  # 强制鉴权时：只有人员能审批，且不能审批自己发起的 Run
     log = EventLog(s)
     decided = [
         e.payload.get("params_hash")
@@ -171,14 +184,19 @@ async def _check_pending_approval(s: AsyncSession, run_id: str, body: ApprovalBo
     return log
 
 
-@router.post("/v1/runs/{run_id}/approve", response_model=ApprovalView, responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
-async def approve(run_id: str, body: ApprovalBody, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+@router.post(
+    "/v1/runs/{run_id}/approve",
+    response_model=ApprovalView,
+    responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
+    dependencies=[Depends(run_in_tenant)],
+)
+async def approve(run_id: str, body: ApprovalBody, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """批准一次挂起中的高风险工具调用：仅在 Run 处于 auth-required 状态时允许，
     记录 TOOL_APPROVED 事件并把状态迁回 working，随后需调用 /resume 才能真正继续执行。
 
     批准会绑定"参数指纹 + 有效期"：参数一旦变化或审批超时，闸口不会放行，必须重新审批。"""
     async with SessionLocal() as s:
-        log = await _check_pending_approval(s, run_id, body)
+        log = await _check_pending_approval(s, run_id, body, request, principal)
         expires_at = (datetime.now(UTC) + timedelta(seconds=body.ttl_seconds)).isoformat()
         await log.append(
             run_id,
@@ -196,12 +214,17 @@ async def approve(run_id: str, body: ApprovalBody, principal: Principal = Depend
     return {"run_id": run_id, "state": RunState.WORKING, "resume": f"/v1/runs/{run_id}/resume"}
 
 
-@router.post("/v1/runs/{run_id}/reject", response_model=RunStateView, responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
-async def reject(run_id: str, body: ApprovalBody, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+@router.post(
+    "/v1/runs/{run_id}/reject",
+    response_model=RunStateView,
+    responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
+    dependencies=[Depends(run_in_tenant)],
+)
+async def reject(run_id: str, body: ApprovalBody, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """拒绝一次挂起中的高风险工具调用：记录 TOOL_REJECTED 事件并将 Run 直接置为 failed。
     与 approve 同样要求 Run 处于 auth-required 且参数指纹匹配，否则 409；Run 不存在 404。"""
     async with SessionLocal() as s:
-        log = await _check_pending_approval(s, run_id, body)
+        log = await _check_pending_approval(s, run_id, body, request, principal)
         await log.append(
             run_id,
             RunEventType.TOOL_REJECTED,
@@ -223,6 +246,7 @@ class ResumeBody(BaseModel):
     "/v1/runs/{run_id}/resume",
     response_model=None,  # 200 为 SSE 统一事件流（data 帧 schema 见 x-sse-event-schema），不做 JSON 响应建模
     responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
+    dependencies=[Depends(run_in_tenant)],
 )
 async def resume(run_id: str, body: ResumeBody, principal: Principal = Depends(current_principal)) -> Any:
     """Continue a run after approval by replaying its event log (checkpoint via replay).
@@ -235,17 +259,23 @@ async def resume(run_id: str, body: ResumeBody, principal: Principal = Depends(c
             raise HTTPException(404)
         if run.state != RunState.WORKING:
             raise HTTPException(409, f"run state is {run.state}")
-    agent = await _load_agent(run.agent_id, run.agent_version)
+    agent = await _load_agent(run.agent_id, run.agent_version, principal.tenant_id)
 
     async def stream() -> AsyncIterator[dict[str, str]]:
-        async for ev in runner.drive(run_id, agent, principal.subject, body.messages):
+        # 续跑仍以 Run 发起人的身份执行（闸口判定、Trace 归属不随续跑者变化）；续跑者本人记在请求审计里
+        async for ev in runner.drive(run_id, agent, run.subject, body.messages):
             if _client_visible(ev):
                 yield _sse(ev)
 
     return EventSourceResponse(stream())
 
 
-@router.post("/v1/runs/{run_id}/cancel", response_model=RunStateView, responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
+@router.post(
+    "/v1/runs/{run_id}/cancel",
+    response_model=RunStateView,
+    responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
+    dependencies=[Depends(run_in_tenant)],
+)
 async def cancel(run_id: str) -> dict[str, Any]:
     """取消一个 Run；Run 不存在返回 404（RunNotFound 由应用级异常处理器映射），
     当前状态不允许迁移到 canceled（如已是终态）返回 409。"""

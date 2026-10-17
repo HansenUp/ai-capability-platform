@@ -9,7 +9,11 @@
       "redirectUris": [
         "http://localhost:5173/*"
       ],
-      "standardFlowEnabled": true
+      "standardFlowEnabled": true,
+      "defaultClientScopes": [
+        "ai-runtime",
+        "act"
+      ]
     },
     {
       "clientId": "console-web",
@@ -17,7 +21,11 @@
       "redirectUris": [
         "http://localhost:5174/*"
       ],
-      "standardFlowEnabled": true
+      "standardFlowEnabled": true,
+      "defaultClientScopes": [
+        "ai-runtime",
+        "act"
+      ]
     },
     {
       "clientId": "capability-gateway",
@@ -35,7 +43,56 @@
     {
       "clientId": "agent-demo",
       "publicClient": false,
-      "serviceAccountsEnabled": true
+      "serviceAccountsEnabled": true,
+      "secret": "agent-demo-dev-secret",
+      "defaultClientScopes": [
+        "ai-runtime"
+      ],
+      "protocolMappers": [
+        {
+          "name": "tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "claim.name": "tenant",
+            "claim.value": "default",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "console-api",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "secret": "console-api-dev-secret",
+      "defaultClientScopes": [
+        "ai-runtime"
+      ],
+      "protocolMappers": [
+        {
+          "name": "tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "claim.name": "tenant",
+            "claim.value": "default",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "ai-runtime",
+      "publicClient": false,
+      "bearerOnly": true
     }
   ],
   "roles": {
@@ -68,6 +125,85 @@
           },
           "protocol": "openid-connect"
         }
+      ]
+    },
+    {
+      "name": "ai-runtime",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "audience-ai-runtime",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "included.client.audience": "ai-runtime"
+          }
+        },
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "claim.name": "realm_access.roles",
+            "multivalued": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "client-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "user.session.note": "client_id",
+            "claim.name": "client_id",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "tenant-user-attribute",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "user.attribute": "tenant",
+            "claim.name": "tenant",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-console-api",
+      "enabled": true,
+      "serviceAccountClientId": "console-api",
+      "realmRoles": [
+        "platform-admin"
       ]
     }
   ]

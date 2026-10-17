@@ -11,7 +11,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from runtime.api import admin, messages
-from runtime.config import settings
+from runtime.api.audit import AuditMiddleware
+from runtime.config import settings, validate_for_production
 from runtime.harness import registry
 from runtime.observe import tracing
 from runtime.state.db import init_db
@@ -22,6 +23,7 @@ from runtime.state.eventlog import RunNotFound
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期钩子：启动时安装 TracerProvider、建表并确保默认 harness 可加载，快速失败于启动阶段而非首个请求；
     关停时把缓冲中的 span 立即导出，避免最后几条 Trace 丢失。"""
+    validate_for_production(settings)  # RUNTIME_ENV=prod 时安全基线不满足即拒绝启动
     tracing.setup_tracing()
     await init_db()
     registry.get(settings.harness)  # fail fast if the default harness cannot be loaded（默认 harness 加载失败则立即报错）
@@ -32,6 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="AI Capability Platform · Agent Runtime", version="0.1.0", lifespan=lifespan)
 app.include_router(messages.router)
 app.include_router(admin.router)
+app.add_middleware(AuditMiddleware)  # 每个 /v1、/admin 请求响应结束后写一行 t_audit（S2.3）
 
 
 @app.exception_handler(RunNotFound)

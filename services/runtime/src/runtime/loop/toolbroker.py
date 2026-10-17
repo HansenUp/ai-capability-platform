@@ -31,6 +31,7 @@ from ai_contract import (
 from runtime.config import settings
 from runtime.context import budget as ctx
 from runtime.guard.gate import GateContext, evaluate, params_hash
+from runtime.observe import audit
 from runtime.state.db import AgentVersion, SessionLocal
 from runtime.state.eventlog import EventLog
 
@@ -138,6 +139,26 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
                 "params_hash": phash,
             },
         )
+        # 统一审计（S2.3）：闸口判定与决策事件同一事务落 t_audit——谁（Run 发起主体）以哪个 Agent 调了什么工具、结论如何。
+        decision_row = audit.entry(
+            None,
+            "tool.decision",
+            f"tool:{tool.name}",
+            gate.decision,
+            actor=rc.gate.subject,
+            act=f"agent:{rc.agent.agent_id}",
+            tenant_id=rc.agent.tenant_id,
+            detail={
+                "run_id": rc.run_id,
+                "call_id": call.call_id,
+                "risk_level": tool.risk_level,
+                "reason": gate.reason,
+                "policy_decision_id": gate.policy_decision_id,
+                "params_hash": phash,
+            },
+        )
+        decision_row.auth_method = None  # 非请求级审计：身份来源见该 Run 的请求审计行
+        s.add(decision_row)
         if gate.decision == "deny":
             await log.append(rc.run_id, RunEventType.TOOL_RESULT, {"call_id": call.call_id, "status": "denied", "output": gate.reason})
             await s.commit()

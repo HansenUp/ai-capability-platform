@@ -6,7 +6,7 @@ PYTHON := $(VENV)/bin/python
 # 需要以可编辑模式安装的全部 Python 包（顺序无关，contract 会作为依赖被自动安装）
 PKGS := packages/contract packages/sdk-python services/runtime services/console-api services/capability-gateway services/policy services/observe-adapter harness-adapters/claude-sdk harness-adapters/stdio mcp-servers/template
 
-.PHONY: setup test test-mysql migrate migrate-new verify-s1 lint openapi openapi-check sdk-types run-runtime run-console run-gateway compose-up compose-down compose-ps precommit-install precommit images
+.PHONY: setup test test-mysql migrate migrate-new verify-s1 verify-s2 lint openapi openapi-check sdk-types run-runtime run-console run-gateway compose-up compose-down compose-ps precommit-install precommit images
 
 # 创建虚拟环境并安装所有包；优先带 [dev] 额外依赖，包未声明 dev 时退回普通安装
 setup:
@@ -96,3 +96,6 @@ images:
 
 verify-s1:  ## S1 本机出口验证：两种 Harness 真实对话 + Langfuse 查 Trace（需 compose observe profile 与模型 Key）
 	$(PYTHON) scripts/verify_s1_e2e.py
+
+verify-s2:  ## S2 本机出口验证：Keycloak JWT、统一审计、Vault 密钥注入、Prompt Cache 命中统计（需 keycloak、vault、observe profile）
+	$(PYTHON) scripts/verify_s2_e2e.py

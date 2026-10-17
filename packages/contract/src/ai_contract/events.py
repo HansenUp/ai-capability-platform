@@ -112,9 +112,9 @@ class UsageEvent(_Base):
     """一轮模型调用的 token 用量与成本统计，用于计费和观测。"""
 
     type: Literal[EventType.USAGE] = EventType.USAGE
-    input_tokens: int = 0  # 输入 token 数
+    input_tokens: int = 0  # 输入 token 数（全部输入，含命中与写入提示缓存的部分）
     output_tokens: int = 0  # 输出 token 数
-    cache_read_tokens: int = 0  # 命中提示缓存的 token 数
+    cache_read_tokens: int = 0  # 命中提示缓存的 token 数（input_tokens 的子集）
     cost: float = 0.0  # 本轮调用成本
     model: str | None = None  # 实际使用的模型标识
 

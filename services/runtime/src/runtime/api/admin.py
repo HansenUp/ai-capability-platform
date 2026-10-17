@@ -13,14 +13,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ai_contract import RiskLevel, capability_tier
-from runtime.api.auth import Principal, current_principal
+from runtime.api.auth import Principal, require_admin
 from runtime.api.views import ErrorDetail
 from runtime.assemble.assembler import LOCAL_TOOLS, load_skills, skills_digest
 from runtime.config import settings
 from runtime.harness import registry
-from runtime.state.db import AgentVersion, Audit, SessionLocal
+from runtime.observe import audit
+from runtime.state.db import AgentVersion, SessionLocal
 
-router = APIRouter(prefix="/admin")
+router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])  # 全部管理接口要求鉴权与管理员角色
 
 
 class AgentVersionIn(BaseModel):
@@ -38,7 +39,7 @@ class AgentVersionIn(BaseModel):
 
 
 @router.post("/agents", status_code=201, responses={409: {"model": ErrorDetail}})
-async def upsert_agent_version(body: AgentVersionIn, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+async def upsert_agent_version(body: AgentVersionIn, principal: Principal = Depends(require_admin)) -> dict[str, Any]:
     """创建或更新一个草稿态 Agent 版本；已发布（published）版本不可变，需要新建版本。"""
     async with SessionLocal() as s:
         existing = (
@@ -57,8 +58,10 @@ async def upsert_agent_version(body: AgentVersionIn, principal: Principal = Depe
             body.config,
         )
         s.add(av)
-        s.add(Audit(actor=principal.subject, action="agent.create", object=f"{body.agent_id}@{body.version}", result="ok"))
+        row = audit.entry(principal, "agent.create", f"agent:{body.agent_id}@{body.version}", "ok", tenant_id=body.tenant_id)
+        s.add(row)
         await s.commit()
+    audit.mirror(row)
     return {"agent_id": body.agent_id, "version": body.version, "status": "draft"}
 
 
@@ -70,7 +73,7 @@ class PublishIn(BaseModel):
 
 
 @router.post("/agents/{agent_id}/versions/{version}/publish", responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
-async def publish(agent_id: str, version: str, body: PublishIn, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+async def publish(agent_id: str, version: str, body: PublishIn, principal: Principal = Depends(require_admin)) -> dict[str, Any]:
     """将草稿版本置为已发布状态，并冻结可复现快照（技能摘要、harness 版本）。
 
     两道闸门依次生效，任一不满足都按业务规则拒绝返回 409（422 只保留给请求参数校验）：
@@ -103,21 +106,22 @@ async def publish(agent_id: str, version: str, body: PublishIn, principal: Princ
         # 冻结发布快照：技能内容摘要与 harness 版本，供事后核对"同一版本是否仍是同一套行为"。
         av.skills_digest = skills_digest(load_skills(cfg.get("skills", [])))
         av.harness_version = caps.version
-        s.add(
-            Audit(
-                actor=principal.subject,
-                action="agent.publish",
-                object=f"{agent_id}@{version}",
-                result="ok",
-                detail={
-                    "eval_run_ref": body.eval_run_ref,
-                    "skills_digest": av.skills_digest,
-                    "harness_version": av.harness_version,
-                    "capability_tier": tier,
-                },
-            )
+        row = audit.entry(
+            principal,
+            "agent.publish",
+            f"agent:{agent_id}@{version}",
+            "ok",
+            tenant_id=av.tenant_id,
+            detail={
+                "eval_run_ref": body.eval_run_ref,
+                "skills_digest": av.skills_digest,
+                "harness_version": av.harness_version,
+                "capability_tier": tier,
+            },
         )
+        s.add(row)
         await s.commit()
+    audit.mirror(row)
     return {"agent_id": agent_id, "version": version, "status": "published"}
 
 

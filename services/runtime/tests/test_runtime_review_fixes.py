@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from alembic import command
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import Connection
@@ -29,17 +31,26 @@ def _current_revision(conn: Connection) -> str | None:
     return MigrationContext.configure(conn).get_current_revision()
 
 
+def _legacy_schema(conn: Connection) -> None:
+    """模拟 Phase 0 旧库：表结构与基线 0001 一致（当时由 create_all 建出），但没有 alembic_version。"""
+    cfg = db.alembic_config()
+    cfg.attributes["connection"] = conn
+    command.upgrade(cfg, db.BASELINE_REVISION)
+    conn.exec_driver_sql("DROP TABLE alembic_version")
+
+
 async def test_init_db_stamps_legacy_create_all_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Phase 0 旧库：四张表由 create_all 建出且没有 alembic_version，init_db 先 stamp 0001 再 upgrade，启动成功。"""
+    """Phase 0 旧库：四张表齐全且没有 alembic_version，init_db 先 stamp 0001 再 upgrade 到最新版本，启动成功。"""
     eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy.db'}")
     try:
         async with eng.begin() as conn:
-            await conn.run_sync(db.Base.metadata.create_all)
+            await conn.run_sync(_legacy_schema)
         monkeypatch.setattr(db, "engine", eng)
         await db.init_db()
         await db.init_db()  # 已打标后再次启动照常是 no-op
+        head = ScriptDirectory.from_config(db.alembic_config()).get_current_head()
         async with eng.connect() as conn:
-            assert await conn.run_sync(_current_revision) == "0001"
+            assert await conn.run_sync(_current_revision) == head
     finally:
         await eng.dispose()
 

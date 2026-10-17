@@ -184,20 +184,24 @@ def test_get_run_view_fields_unchanged(client):
 
 
 def test_unknown_run_returns_404(client):
-    """不存在的 Run：查询 / 取消 / 批准 / 拒绝 / 续跑一律 404（不再 500）。"""
+    """不存在的 Run：查询 / 事件 / 取消 / 批准 / 拒绝 / 续跑一律 404（不再 500；S2 起事件查询也经租户校验，不再返回空列表）。"""
     approval = {"call_id": "c", "params_hash": "h"}
     assert client.get("/v1/runs/no-such-run", headers=H).status_code == 404
     assert client.post("/v1/runs/no-such-run/cancel", headers=H).status_code == 404
     assert client.post("/v1/runs/no-such-run/approve", json=approval, headers=H).status_code == 404
     assert client.post("/v1/runs/no-such-run/reject", json=approval, headers=H).status_code == 404
     assert client.post("/v1/runs/no-such-run/resume", json={"messages": []}, headers=H).status_code == 404
-    assert client.get("/v1/runs/no-such-run/events", headers=H).json() == []
+    assert client.get("/v1/runs/no-such-run/events", headers=H).status_code == 404
 
 
 @pytest.mark.parametrize("since_seq", [-1, 2**53 + 1, 2**63])
 def test_events_since_seq_out_of_range_is_422(client, since_seq):
-    """since_seq 超出 [0, 2^53] 由 FastAPI 参数校验返回 422（不再因 SQLite 溢出 500）。"""
-    r = client.get("/v1/runs/no-such-run/events", params={"since_seq": since_seq}, headers=H)
+    """since_seq 超出 [0, 2^53] 由 FastAPI 参数校验返回 422（不再因 SQLite 溢出 500）。
+    用真实存在的 Run：不存在的 Run 会先被租户校验依赖判为 404。"""
+    run_id = client.post(
+        "/v1/messages", json={"agent_id": "demo", "messages": [{"role": "user", "content": "hi"}], "stream": False}
+    ).json()["run_id"]
+    r = client.get(f"/v1/runs/{run_id}/events", params={"since_seq": since_seq}, headers=H)
     assert r.status_code == 422 and isinstance(r.json()["detail"], list)
 
 

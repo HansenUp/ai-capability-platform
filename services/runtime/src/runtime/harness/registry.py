@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import os
+
 from ai_contract import HarnessAdapter
 from runtime.config import settings
 
@@ -37,9 +39,11 @@ def _load(key: str) -> None:
 
         register("litellm", LiteLLMHarness())
     elif key == "claude-sdk":
-        from ai_harness_claude_sdk import ClaudeSdkHarness  # optional dependency（可选依赖）
+        from ai_harness_claude_sdk import ClaudeSdkConfig, ClaudeSdkHarness  # optional dependency（可选依赖）
 
-        register("claude-sdk", ClaudeSdkHarness())
+        # 网关凭据可能来自 Vault / 挂载文件（S2.4），不在 os.environ 里：显式交给适配器
+        env = {**os.environ, "CLAUDE_SDK_AUTH_TOKEN": settings.claude_sdk_auth_token or settings.model_gateway_api_key}
+        register("claude-sdk", ClaudeSdkHarness(config=ClaudeSdkConfig.from_env(env)))
     elif key == "stdio":
         from ai_harness_stdio import StdioHarness  # optional dependency（可选依赖）
 

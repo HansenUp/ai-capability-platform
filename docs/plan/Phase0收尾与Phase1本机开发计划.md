@@ -131,3 +131,26 @@
 
 S1 遗留（进入后续 Sprint）：见决策纪要 `docs/decisions/2026-10-17-S1架构决策.md` 第 3 节。
 
+## 8. S2 执行结果（2026-10-17）
+
+| 任务 | 结果 | 说明 |
+|---|---|---|
+| S2.1 | 完成 | `api/auth.py`：JWKS 本地验签（只收非对称算法、kid 必填、iss / aud / exp 校验），JWKS 缓存 5 分钟、未知 kid 限频刷新；`/v1`、`/admin` 路由器整体挂鉴权，未带令牌 401 |
+| S2.2 | 完成 | Keycloak Client Credentials 令牌识别为应用（`app:<client_id>`）；用户令牌的 `act` 声明记为执行者；按 `tenant` 声明做 Agent 与 Run 的租户隔离；`/admin` 要求 `platform-admin` |
+| S2.3 | 完成 | Alembic 0002 给 `t_audit` 增加 act、auth_method、tenant_id；请求级审计中间件 + 工具判定审计 + 管理写审计；每行审计镜像为 Langfuse span，与 Run 同会话 |
+| S2.4 | 完成 | `runtime/secret_store.py`：Vault > `<NAME>_FILE` > 环境变量；compose 增加 Vault dev 与 `vault-init`；Helm 改为 Vault Agent Injector + `_FILE`；`RUNTIME_ENV=prod` 安全基线 |
+| S2.6 | 完成 | MODEL_RESPONSE 事件与模型 span 带稳定前缀哈希与命中统计；Langfuse 用量明细区分命中与未命中输入 |
+
+本机出口标准核对：
+
+| 标准 | 结果 | 证据 |
+|---|---|---|
+| 任意一次请求可在审计表中回答"谁、何时、以何身份、调了什么" | 通过 | `make verify-s2` 打印并断言 401 / 403 / 对话 / 工具判定 / 管理写各类审计行，身份字段齐全 |
+| 未带令牌请求被 401 | 通过 | `make verify-s2`（Keycloak 实际签发的令牌）；`tests/test_auth.py` 覆盖全部接口与 9 类无效令牌 |
+| Prompt Cache 命中率在 Langfuse 可统计 | 通过 | `make verify-s2`：Langfuse 用量明细统计命中率 94.9%，与事件日志一致 |
+
+验证基线：`make test` 236 通过 / 5 跳过；`make test-mysql` 148 通过 / 2 跳过；`make lint`、`make openapi-check` 通过；`make verify-s1` 回归通过。
+
+独立代码评审 12 项，9 项已修复（含高风险的"应用自批高风险调用"），其余转入遗留。
+
+S2 遗留（进入后续 Sprint）：见决策纪要 `docs/decisions/2026-10-17-S2架构决策.md` 第 4 节。
