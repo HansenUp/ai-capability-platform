@@ -35,6 +35,11 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}         # embed-default 别名使用
       COHERE_API_KEY: ${COHERE_API_KEY:-}         # rerank-default 别名使用
+      # 容器出网代理：部分开发机（Docker Desktop）容器无法直连外网，可设 CONTAINER_PROXY=http://http.docker.internal:3128；
+      # 留空则不使用代理（CI / 直连环境）。NO_PROXY 覆盖 compose 内部服务名，避免内网流量绕代理。
+      HTTP_PROXY: ${CONTAINER_PROXY:-}
+      HTTPS_PROXY: ${CONTAINER_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,redis,mysql,minio,elasticsearch,keycloak,litellm-db,langfuse-web,langfuse-worker,langfuse-db,clickhouse,otel-collector
     volumes: ["../../services/model-gateway/config.yaml:/app/config.yaml:ro"]
     ports: ["4000:4000"]
     depends_on: [litellm-db, redis]
