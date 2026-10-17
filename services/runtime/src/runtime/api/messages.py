@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import shutil
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -24,6 +27,7 @@ from runtime.api.auth import Principal, check_approver, current_principal
 from runtime.api.views import ApprovalView, ErrorDetail, RunEventsView, RunStateView, RunView
 from runtime.config import settings
 from runtime.loop import active, runner
+from runtime.loop.toolbroker import ARTIFACT_REF
 from runtime.state.db import AgentVersion, Run, SessionLocal
 from runtime.state.eventlog import EventLog
 
@@ -37,7 +41,8 @@ class MessagesRequest(BaseModel):
     agent_version: str | None = None  # 指定版本，缺省取该 agent 已发布的最新版本
     session_id: str | None = None  # 会话标识（用于多轮关联，当前实现未强制使用）
     messages: list[dict[str, Any]]  # 本轮输入消息
-    attachments: list[str] = Field(default_factory=list)  # 附件引用
+    # 附件：调用方自己此前 Run 产生的外置工件引用（artifact://<id>）；他人的工件一律 403（S4.8 附件隔离）
+    attachments: list[str] = Field(default_factory=list, max_length=10)
     stream: bool = True  # 是否以 SSE 流式返回
     metadata: dict[str, Any] = Field(default_factory=dict)  # 附加元数据
 
@@ -76,6 +81,48 @@ async def run_in_tenant(run_id: str, request: Request, principal: Principal = De
     request.state.audit_object = f"run:{run_id}"
 
 
+ATTACHMENT_SCAN_RUNS = 200  # 查找附件来源时最多检查调用方最近的多少个 Run
+
+
+async def _attachment_sources(refs: list[str], principal: Principal) -> list[tuple[str, str]]:
+    """校验附件归属：每个 artifact:// 引用必须出自调用方本人（同租户）最近的某个 Run 的工作区，否则 403。
+    返回（引用, 源文件路径）。"""
+    async with SessionLocal() as s:
+        q = (
+            select(Run.run_id)
+            .where(Run.subject == principal.subject, Run.tenant_id == principal.tenant_id)
+            .order_by(Run.created_at.desc())
+            .limit(ATTACHMENT_SCAN_RUNS)
+        )
+        own_runs = list((await s.execute(q)).scalars())
+    return await asyncio.to_thread(_find_sources, refs, own_runs)
+
+
+def _find_sources(refs: list[str], own_runs: list[str]) -> list[tuple[str, str]]:
+    """在调用方自己的 Run 工作区中查找每个附件的源文件（文件系统操作，放在线程里执行）。"""
+    out: list[tuple[str, str]] = []
+    for ref in refs:
+        m = ARTIFACT_REF.match(ref)
+        candidates = (os.path.join(settings.workspace_dir, r, f"{m.group(1)}.txt") for r in own_runs) if m else iter(())
+        src = next((p for p in candidates if os.path.isfile(p)), None)
+        if src is None:
+            raise HTTPException(403, f"attachment not accessible: {ref[:80]}")
+        out.append((ref, src))
+    return out
+
+
+def _attach(run_id: str, sources: list[tuple[str, str]], messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把附件复制进新 Run 的工作区（read_artifact 只能读本 Run 的工作区），并在最后一条用户消息后注明附件引用。"""
+    if not sources:
+        return messages
+    dest = os.path.join(settings.workspace_dir, run_id)
+    os.makedirs(dest, exist_ok=True)
+    for _ref, src in sources:
+        shutil.copyfile(src, os.path.join(dest, os.path.basename(src)))
+    note = "附件（可用 read_artifact 读取）：" + "、".join(ref for ref, _ in sources)
+    return [*messages, {"role": "user", "content": note}]
+
+
 def _sse(ev: Event) -> dict[str, str]:
     """将统一事件对象转换为 SSE 帧（event 字段为事件类型，data 字段为其 JSON 序列化）。"""
     return {"event": ev.type, "data": ev.model_dump_json()}
@@ -91,9 +138,11 @@ def _client_visible(ev: Event) -> bool:
 async def messages(req: MessagesRequest, request: Request, principal: Principal = Depends(current_principal)) -> Any:
     """对话式入口：创建 Run 并驱动一次执行；支持流式（SSE）与非流式（聚合后一次性返回）两种模式。"""
     agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
+    sources = await _attachment_sources(req.attachments, principal) if req.attachments else []
     run_id = await runner.create_run(agent, principal.subject, req.session_id, actor=principal.actor, rollout=reason)
     request.state.audit_object = f"run:{run_id}"
-    gen = runner.drive(run_id, agent, principal.subject, req.messages)
+    messages = _attach(run_id, sources, req.messages)
+    gen = runner.drive(run_id, agent, principal.subject, messages, credential=principal.token)
     if req.stream:
 
         async def stream() -> AsyncIterator[dict[str, str]]:
@@ -149,7 +198,7 @@ async def create_run(req: RunCreate, request: Request, principal: Principal = De
     import asyncio
 
     async def _bg() -> None:
-        async for _ in runner.drive(run_id, agent, principal.subject, req.input):
+        async for _ in runner.drive(run_id, agent, principal.subject, req.input, credential=principal.token):
             pass  # 后台驱动只需消费生成器使其执行完成，事件已在 drive 内部写入事件日志
 
     asyncio.create_task(_bg())
@@ -297,7 +346,7 @@ async def resume(run_id: str, body: ResumeBody, principal: Principal = Depends(c
 
     async def stream() -> AsyncIterator[dict[str, str]]:
         # 续跑仍以 Run 发起人的身份执行（闸口判定、Trace 归属不随续跑者变化）；续跑者本人记在请求审计里
-        async for ev in runner.drive(run_id, agent, run.subject, body.messages):
+        async for ev in runner.drive(run_id, agent, run.subject, body.messages, credential=principal.token):
             if _client_visible(ev):
                 yield _sse(ev)
 

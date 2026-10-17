@@ -107,7 +107,9 @@ async def create_run(
     return run_id
 
 
-async def drive(run_id: str, agent: AgentVersion, subject: str, messages: list[dict[str, Any]]) -> AsyncIterator[Event]:
+async def drive(
+    run_id: str, agent: AgentVersion, subject: str, messages: list[dict[str, Any]], credential: str | None = None
+) -> AsyncIterator[Event]:
     """驱动一个 Run 的执行（首次执行或续跑均走此函数）：
     1) 组装上下文与工具集，构造 SessionSpec；
     2) 读取事件日志判断是应该 open_session 还是 resume（重放）；若存在未完成的挂起调用，先补完；
@@ -122,7 +124,7 @@ async def drive(run_id: str, agent: AgentVersion, subject: str, messages: list[d
     本包装层只给 DoneEvent 补 trace_id 并记录停止原因，事件的种类、顺序与消费语义与 _drive 完全一致。
     """
     with tracing.run_span(run_id, agent, subject, agent.model_alias) as rs:
-        async with aclosing(_drive(run_id, agent, subject, messages, rs)) as events:
+        async with aclosing(_drive(run_id, agent, subject, messages, rs, credential)) as events:
             async for ev in events:
                 if isinstance(ev, DoneEvent):
                     ev = ev.model_copy(update={"trace_id": rs.trace_id})
@@ -179,7 +181,7 @@ def _replayed_taint(prior: list[RunEvent], tools_by_name: dict[str, ToolSpec]) -
 
 
 async def _drive(
-    run_id: str, agent: AgentVersion, subject: str, messages: list[dict[str, Any]], rs: tracing.RunSpan
+    run_id: str, agent: AgentVersion, subject: str, messages: list[dict[str, Any]], rs: tracing.RunSpan, credential: str | None = None
 ) -> AsyncGenerator[Event, None]:
     """drive() 的实际执行体（步骤见 drive 的说明）；rs 为本次 drive 的根 span，模型轮次与工具调用的子 span 挂在其下。
 
@@ -202,6 +204,7 @@ async def _drive(
     )
     initial_messages = list(messages)
     rc = RunCtx(
+        credential=credential,  # 终端用户令牌：工具经能力网关执行时换取 OBO 令牌，只在内存中
         run_id=run_id,
         agent=agent,
         spec=spec,
@@ -309,6 +312,18 @@ async def _drive(
             # 每轮开始前检查 Run 是否已被取消 API 抢先置为 canceled（例如上一轮工具执行期间被取消）。
             if await _stop_if_canceled(run_id):
                 yield DoneEvent(run_id=run_id, stop_reason="cancelled")
+                return
+            # 数据分级矩阵（S4.9）：Run 已带 confidential 污点而模型不在机密数据允许清单内——不再把上下文发给该模型，
+            # 以失败收尾（宁可中断，不让机密数据流向未授权的模型）。
+            if "confidential" in rc.gate.taint and agent.model_alias not in settings.confidential_model_aliases:
+                msg = f"model '{agent.model_alias}' is not authorized for confidential data"
+                async with SessionLocal() as s:
+                    log = EventLog(s)
+                    await log.append(run_id, RunEventType.RUN_ERROR, {"code": "DATA_CLASS_MODEL_BLOCKED", "message": msg})
+                    await log.transition(run_id, RunState.FAILED, "data_class")
+                    await s.commit()
+                yield ErrorEvent(code="DATA_CLASS_MODEL_BLOCKED", message=msg)
+                yield DoneEvent(run_id=run_id, stop_reason="error")
                 return
             async with SessionLocal() as s:
                 log = EventLog(s)

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import httpx
@@ -49,6 +49,8 @@ class Principal:
     auth_method: AuthMethod = "dev"  # 身份来源：dev 请求头 / 用户 JWT / 应用 Client Credentials
     client_id: str | None = None  # 签发令牌的 OIDC 客户端（azp）
     roles: frozenset[str] = frozenset()  # 令牌中的 realm 角色（realm_access.roles）
+    # 原始访问令牌：只在内存中随 Run 传给工具代理，由能力网关换取 OBO 令牌；不进日志、审计与 repr
+    token: str | None = field(default=None, repr=False, compare=False)
 
 
 def _unauthorized(request: Request | None, detail: str) -> HTTPException:
@@ -212,9 +214,10 @@ async def current_principal(
     if settings.auth_required:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise _unauthorized(request, "missing bearer token")
-        claims = await verify_jwt(authorization.split(" ", 1)[1].strip(), request)
+        raw = authorization.split(" ", 1)[1].strip()
+        claims = await verify_jwt(raw, request)
         try:
-            principal = principal_from_claims(claims)
+            principal = replace(principal_from_claims(claims), token=raw)
         except HTTPException as e:
             request.state.auth_error = e.detail
             raise

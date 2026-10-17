@@ -1,0 +1,11 @@
+{"run_id":"snap-ticket-summary-empty","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-ticket-summary-empty","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
+{"run_id":"snap-ticket-summary-empty","seq":3,"type":"model.request","payload":{"n_messages":1}}
+{"run_id":"snap-ticket-summary-empty","seq":4,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.search","input":{"q":"退款"},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-empty","seq":5,"type":"tool.decision","payload":{"call_id":"c1","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-empty","seq":6,"type":"tool.executed","payload":{"call_id":"c1","tool":"ticket.search"}}
+{"run_id":"snap-ticket-summary-empty","seq":7,"type":"tool.result","payload":{"call_id":"c1","status":"ok","output":{"items":[],"next_cursor":null,"total":0}}}
+{"run_id":"snap-ticket-summary-empty","seq":8,"type":"model.request","payload":{"n_messages":3}}
+{"run_id":"snap-ticket-summary-empty","seq":9,"type":"model.response","payload":{"text":"没有检索到与“退款”相关且您有权限查看的工单，请换个关键词或放宽时间范围再试。"}}
+{"run_id":"snap-ticket-summary-empty","seq":10,"type":"run.done","payload":{"stop_reason":"end_turn"}}
+{"run_id":"snap-ticket-summary-empty","seq":11,"type":"run.state_changed","payload":{"from":"working","to":"completed","reason":"end_turn"}}

@@ -400,6 +400,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 10,
             "title": "Attachments",
             "type": "array"
           },

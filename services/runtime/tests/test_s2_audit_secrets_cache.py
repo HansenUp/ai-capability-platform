@@ -161,7 +161,7 @@ def test_production_baseline(monkeypatch: pytest.MonkeyPatch, clean_vault: None)
     )
     monkeypatch.setattr(secret_store, "source", lambda name: "file")  # 其余密钥项同样经文件注入
     assert any("SQLite" in p for p in config.production_problems(ok))  # 数据库仍是默认 SQLite
-    ok = dataclasses.replace(ok, database_url="mysql+asyncmy://u:p@db:3306/ai")
+    ok = dataclasses.replace(ok, database_url="mysql+asyncmy://u:p@db:3306/ai", tool_dispatch="gateway")
     assert config.production_problems(ok) == []
     assert "u:p" not in repr(ok) and "sk-real" not in repr(ok)  # 密钥项不进 repr（日志、异常栈）
     assert config.production_problems(dataclasses.replace(ok, model_gateway_api_key=config.DEV_GATEWAY_KEY))

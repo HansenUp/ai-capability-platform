@@ -33,7 +33,9 @@ router_settings:
 
 litellm_settings:
   drop_params: true                     # 丢弃目标模型不支持的参数而不是报错
-  cache: true                           # 响应缓存（Redis）
+  # 响应缓存关闭（S4，D70）：Agent 场景下完全相同的请求会被回放旧回答与旧用量，连同其中的工具调用（指向其他 Run 的
+  # 工件引用）一起回放，造成错误结果与计费失真；厂商侧的 Prompt Cache 不受影响。需要时只对无工具的只读场景单独开启。
+  cache: false
   cache_params: { type: redis, host: os.environ/REDIS_HOST, port: 6379 }
   success_callback: ["langfuse"]        # 调用成功后把 Trace 回调到 Langfuse（ADR-0002）
 

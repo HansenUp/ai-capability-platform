@@ -41,6 +41,18 @@ LOCAL_TOOLS: dict[str, ToolSpec] = {
         input_schema={"type": "object", "properties": {"text": {"type": "string", "description": "要回显的文本"}}},
     ),
     "ticket.search": ToolSpec(name="ticket.search", description="查询工单", capability_id="cap.ticket.search"),
+    "ticket.get": ToolSpec(
+        name="ticket.get",
+        description="按工单号查询工单详情",
+        capability_id="cap.ticket.get",
+        input_schema={"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+    ),
+    # 数据分级演示用（与能力网关种子数据一致）：机密数据查询、知识检索、外发
+    "data.query": ToolSpec(
+        name="data.query", description="受限视图只读查询（机密）", capability_id="cap.data.query", data_class="confidential"
+    ),
+    "knowledge.search": ToolSpec(name="knowledge.search", description="知识库检索", capability_id="cap.knowledge.search"),
+    "mail.send": ToolSpec(name="mail.send", description="发送邮件（外发）", capability_id="cap.mail.send", risk_level=RiskLevel.WRITE_LOW),
     "ticket.close_batch": ToolSpec(
         name="ticket.close_batch",
         description="批量关闭工单（高风险写）",
@@ -64,14 +76,27 @@ class Assembled:
 
 
 async def discover_core_tools(subject: str, agent_id: str, declared: list[str]) -> list[ToolSpec]:
-    """向能力网关按 subject/agent 查询可用的核心工具；网关不可达时回退到本地工具注册表（仅取 agent 已声明的部分）。"""
+    """按 Agent 版本快照声明的工具白名单组装工具集（S4.8 固定白名单）：
+
+    向能力网关查询白名单中已登记、已发布的能力（取网关上的权威元数据：风险等级、数据分级、入参 schema）；
+    只在进程内执行的开发工具（echo）取本地定义；白名单之外的工具一律不暴露，网关侧的 core_for_agents 不能额外加工具。
+    网关不可达时回退到本地工具注册表（同样只取白名单内的部分）。"""
+    names = [n for n in declared if n]
     try:
         async with httpx.AsyncClient(timeout=2.0) as c:
-            r = await c.get(f"{settings.capability_gateway_url}/capabilities", params={"subject": subject, "agent": agent_id})
+            params = {"subject": subject, "agent": agent_id, "names": ",".join(names)}
+            r = await c.get(f"{settings.capability_gateway_url}/capabilities", params=params)
             r.raise_for_status()
-            return [ToolSpec(**t) for t in r.json().get("tools", [])]
+            remote = {t["name"]: ToolSpec(**t) for t in r.json().get("tools", []) if t.get("name") in names}
     except httpx.HTTPError:
-        return [LOCAL_TOOLS[n] for n in declared if n in LOCAL_TOOLS]
+        remote = {}
+    out: list[ToolSpec] = []
+    for n in names:
+        if n in remote:
+            out.append(remote[n])
+        elif n in LOCAL_TOOLS and (not remote or n == "echo"):
+            out.append(LOCAL_TOOLS[n])
+    return out
 
 
 def load_skills(skill_refs: list[dict[str, str]], base: Path = Path("skills")) -> list[SkillDir]:

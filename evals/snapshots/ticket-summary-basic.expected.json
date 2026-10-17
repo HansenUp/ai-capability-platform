@@ -1,0 +1,5 @@
+{
+  "initial_messages": [{"role": "user", "content": "总结所有工单"}],
+  "final_state": "completed",
+  "final_text": "共 1 张工单。"
+}

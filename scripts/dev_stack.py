@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """本机联调用的应用进程启停（compose 中的基础设施另行 `make compose-up`）。
 
-启动 5 个进程，日志写到 .dev/logs/，进程号记在 .dev/pids.json：
+启动 7 个进程，日志写到 .dev/logs/，进程号记在 .dev/pids.json：
+- mcp-ticket     :8091  工单系统只读 MCP Server（mock 数据，按 OBO 令牌做行级权限）
+- gateway        :8082  能力网关（Token Exchange 换取 OBO 令牌后分发工具调用）
 - runtime        :8080  强制鉴权（Keycloak JWT）、litellm 真实模型、MySQL、网关 Key 来自 Vault、反馈经观测适配器
 - console-api    :8081  MySQL；同步 Runtime 时用 console-api 的 Client Credentials 令牌
 - observe-adapter:8084  反馈转发 Langfuse
@@ -39,7 +41,8 @@ RUNTIME_ENV = {
     "WORKSPACE_DIR": str(ROOT / "runtime-workspace"),
     "HARNESS": "litellm",
     "POLICY_URL": "http://127.0.0.1:1",  # 策略服务尚未接入 → 闸口回退基线规则
-    "CAPABILITY_GATEWAY_URL": "http://127.0.0.1:1",
+    "CAPABILITY_GATEWAY_URL": "http://127.0.0.1:8082",
+    "TOOL_DISPATCH": "gateway",  # 工具经能力网关分发到 MCP Server（S4.3）
     "AUTH_REQUIRED": "true",
     "JWKS_URL": f"{REALM}/protocol/openid-connect/certs",
     "JWT_ISSUER": REALM,
@@ -55,6 +58,18 @@ CONSOLE_ENV = {
     "CONSOLE_OIDC_TOKEN_URL": f"{REALM}/protocol/openid-connect/token",
     "CONSOLE_CLIENT_SECRET": "console-api-dev-secret",
 }
+MCP_TICKET_ENV = {
+    "MCP_TICKET_JWKS_URL": f"{REALM}/protocol/openid-connect/certs",
+    "MCP_TICKET_ISSUER": REALM,
+    "MCP_TICKET_AUDIENCE": "mcp-ticket",
+    "MCP_TICKET_DB": str(DEV / "mcp-ticket.db"),
+}
+GATEWAY_ENV = {
+    "KEYCLOAK_TOKEN_URL": f"{REALM}/protocol/openid-connect/token",
+    "GATEWAY_CLIENT_SECRET": "capability-gateway-dev-secret",
+    "MCP_TICKET_URL": "http://127.0.0.1:8091",
+    "POLICY_URL": "http://127.0.0.1:1",
+}
 OBSERVE_ENV = {"LANGFUSE_HOST": "http://localhost:3000", "LANGFUSE_PUBLIC_KEY": "pk-lf-dev", "LANGFUSE_SECRET_KEY": "sk-lf-dev"}
 
 
@@ -63,6 +78,13 @@ def uvicorn(app: str, app_dir: str, port: int) -> list[str]:
 
 
 SERVICES: list[tuple[str, list[str], dict[str, str], str]] = [
+    ("mcp-ticket", uvicorn("mcp_ticket.main:app", "mcp-servers/ticket/src", 8091), MCP_TICKET_ENV, "http://127.0.0.1:8091/healthz"),
+    (
+        "gateway",
+        uvicorn("capability_gateway.main:app", "services/capability-gateway/src", 8082),
+        GATEWAY_ENV,
+        "http://127.0.0.1:8082/healthz",
+    ),
     ("runtime", uvicorn("runtime.main:app", "services/runtime/src", 8080), RUNTIME_ENV, "http://127.0.0.1:8080/healthz"),
     ("console-api", uvicorn("console_api.main:app", "services/console-api/src", 8081), CONSOLE_ENV, "http://127.0.0.1:8081/healthz"),
     (

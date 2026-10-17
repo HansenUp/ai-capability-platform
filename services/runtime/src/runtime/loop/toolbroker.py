@@ -11,9 +11,13 @@
 
 from __future__ import annotations
 
+import os
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+import httpx
 
 from ai_contract import (
     CardEvent,
@@ -35,16 +39,102 @@ from runtime.observe import audit
 from runtime.state.db import AgentVersion, SessionLocal
 from runtime.state.eventlog import EventLog
 
+LOCAL_ONLY_TOOLS = frozenset({"echo"})  # 只在进程内执行、不经能力网关的开发工具（元工具 read_artifact 等另行处理）
 
-async def execute_tool(tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool = False) -> Any:
-    """Dev executor. Production dispatches to MCP servers via the capability gateway with an OBO token.
-    （开发环境的工具执行器：直接在进程内模拟结果。生产环境应通过能力网关，携带 OBO（On-Behalf-Of）
-    令牌把调用分发给真实的 MCP 服务器执行——这部分分发逻辑属于 S6 工作包实现。）
+
+class GatewayToolError(Exception):
+    """能力网关层面的失败（未登记、令牌换取失败、MCP 不可达）：工具调用无法到达业务系统。"""
+
+
+async def execute_tool(
+    tool: ToolSpec,
+    tool_input: dict[str, Any],
+    dry_run: bool = False,
+    rc: RunCtx | None = None,
+    call_id: str | None = None,
+    idempotency_key: str | None = None,
+) -> Any:
+    """执行一次已经闸口放行的工具调用。
+
+    - TOOL_DISPATCH=gateway 且工具来自能力目录（有 capability_id）：经能力网关 `/invoke` 分发到 MCP Server，
+      携带终端用户令牌（网关换取 OBO 令牌）；业务系统返回的 4xx（无权限 / 不存在 / 参数错误）作为工具错误结果
+      `{"error": ..., "status_code": n}` 交还模型；网关自身失败抛 GatewayToolError。
+    - 其他情况：进程内开发执行器（测试与无网关的本机调试）。
     """
+    if tool.name == "read_artifact":
+        return read_artifact(rc.workspace if rc else ".", str(tool_input.get("ref", "")))
+    if settings.tool_dispatch == "gateway" and tool.capability_id and tool.name not in LOCAL_ONLY_TOOLS:
+        return await _dispatch_via_gateway(tool, tool_input, dry_run, rc, call_id, idempotency_key)
+    return await _dev_execute(tool, tool_input, dry_run)
+
+
+async def _dispatch_via_gateway(
+    tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool, rc: RunCtx | None, call_id: str | None, idempotency_key: str | None
+) -> Any:
+    body = {
+        "tool": tool.name,
+        "input": tool_input,
+        "subject": rc.gate.subject if rc else "",
+        "agent_id": rc.agent.agent_id if rc else "",
+        "agent_version": rc.agent.version if rc else "",
+        "run_id": rc.run_id if rc else None,
+        "call_id": call_id,
+        "idempotency_key": idempotency_key,
+        "dry_run": dry_run,
+    }
+    headers = {"Authorization": f"Bearer {rc.credential}"} if rc and rc.credential else {}
+    try:
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_s, transport=_gateway_transport) as c:
+            r = await c.post(f"{settings.capability_gateway_url.rstrip('/')}/invoke", json=body, headers=headers)
+    except httpx.HTTPError as e:
+        raise GatewayToolError(f"capability gateway unreachable: {type(e).__name__}") from e
+    if r.status_code != 200:
+        raise GatewayToolError(f"capability gateway returned HTTP {r.status_code}: {r.text[:200]}")
+    data = r.json()
+    if data.get("ok"):
+        return data.get("output")
+    output = data.get("output")
+    detail = output.get("detail") if isinstance(output, dict) else output
+    return {"error": detail or "tool call failed", "status_code": data.get("status_code")}
+
+
+# 外置结果引用：只接受 32 位十六进制 id（模型有时省略 artifact:// 前缀，同样接受），杜绝路径穿越
+ARTIFACT_REF = re.compile(r"^(?:artifact://)?([0-9a-f]{32})$")
+
+
+def read_artifact(workspace: str, ref: str) -> Any:
+    """read_artifact 元工具（S4.8 附件隔离）：只能读取当前 Run 工作区内的外置结果 / 附件，
+    其他 Run（包括同一用户的其他 Run）的工件一律视为不存在。"""
+    m = ARTIFACT_REF.match(ref)
+    path = os.path.join(workspace, f"{m.group(1)}.txt") if m else None
+    if path is None or not os.path.isfile(path):
+        return {"error": "artifact not found in this run"}
+    with open(path, encoding="utf-8") as f:
+        return {"ref": ref, "content": f.read()}
+
+
+_gateway_transport: httpx.AsyncBaseTransport | None = None  # 测试注入
+
+
+def set_gateway_transport_for_tests(transport: httpx.AsyncBaseTransport | None) -> None:
+    global _gateway_transport
+    _gateway_transport = transport
+
+
+async def _dev_execute(tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool = False) -> Any:
+    """进程内开发执行器：模拟结果，不访问任何业务系统。"""
     if tool.name == "echo":
         return {"echo": tool_input}
     if tool.name == "ticket.search":
         return {"tickets": [{"id": f"T-{i}", "title": f"示例工单 {i}", "status": "open"} for i in range(1, 6)]}
+    if tool.name == "ticket.get":
+        return {"id": tool_input.get("id"), "title": "示例工单", "status": "closed", "records": []}
+    if tool.name == "data.query":
+        return {"rows": [{"customer": "某客户", "contract_value": 1200000}]}
+    if tool.name == "knowledge.search":
+        return {"hits": []}
+    if tool.name == "mail.send":
+        return {"sent": True}
     if tool.name == "ticket.close_batch":
         ids = tool_input.get("ids", [])
         if dry_run:
@@ -52,6 +142,19 @@ async def execute_tool(tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool
             return {"impact_preview": {"tickets": len(ids), "notifications": len(ids)}}
         return {"closed": ids}
     return {"error": f"tool {tool.name} not available in dev executor"}
+
+
+async def _unknown_result(
+    log: EventLog, s: Any, rc: RunCtx, call: ToolUseEvent, tool: ToolSpec, operation_id: str | None, exc: Exception
+) -> AsyncIterator[Event]:
+    """写操作执行抛异常：副作用是否已发生无从判断，当场走结果未知路径——
+    记错误、迁移到 input-required、推对账卡片，SSE 流以 done 正常收尾，不自动重试。"""
+    unknown = {"call_id": call.call_id, "tool": tool.name, "operation_id": operation_id}
+    await record_unknown_result(log, rc.run_id, unknown, cause=type(exc).__name__)
+    await s.commit()
+    rc.suspended = True
+    yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown)
+    yield DoneEvent(run_id=rc.run_id, stop_reason="awaiting")
 
 
 async def record_unknown_result(log: EventLog, run_id: str, unknown: dict[str, Any], cause: str | None = None) -> None:
@@ -82,6 +185,7 @@ class RunCtx:
     history: list[dict[str, Any]]  # 当前模型可见的消息历史
     suspended: bool = False  # 本轮是否因等待审批而挂起（挂起时 drive 应立即返回）
     workspace: str = field(default=".")  # 本次 Run 的工作区目录，用于工具结果外置
+    credential: str | None = field(default=None, repr=False)  # 终端用户访问令牌（只在内存中），经网关执行工具时换取 OBO 令牌
 
 
 async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = False, reasoning: str | None = None) -> AsyncIterator[Event]:
@@ -168,7 +272,13 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
         if gate.decision == "require_approval":
             # 需要人工审批：若工具支持 dry-run，先生成影响预览；随后把 Run 状态迁移到
             # auth-required 并挂起，等待 /approve 调用后再通过 /resume 续跑完成本次调用。
-            preview = await execute_tool(tool, call.input, dry_run=True) if tool.supports_dry_run else {}
+            preview: Any = {}
+            if tool.supports_dry_run:
+                try:
+                    preview = await execute_tool(tool, call.input, dry_run=True, rc=rc, call_id=call.call_id)
+                except GatewayToolError as exc:
+                    # 影响预演失败不阻断审批流程：卡片如实标注"预演不可用"，由审批人决定（dry-run 不产生副作用）
+                    preview = {"error": f"impact preview unavailable: {exc}"}
             await log.transition(rc.run_id, RunState.AUTH_REQUIRED, f"tool {tool.name} needs approval")
             await s.commit()
             rc.suspended = True
@@ -194,31 +304,38 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             )
             await s.commit()
             try:
-                result = await execute_tool(tool, call.input)
+                result = await execute_tool(tool, call.input, rc=rc, call_id=call.call_id, idempotency_key=gate.idempotency_key)
+            except GatewayToolError as exc:
+                if tool.risk_level != RiskLevel.READ:
+                    async for ev in _unknown_result(log, s, rc, call, tool, gate.idempotency_key, exc):
+                        yield ev
+                    return
+                # 只读调用经网关失败（用户令牌过期、网关不可达等）不会留下副作用：作为工具错误结果交还模型，Run 继续
+                result = {"error": f"tool unavailable: {exc}"}
             except Exception as exc:
                 if tool.risk_level == RiskLevel.READ:
                     raise
-                # 写操作执行抛异常：副作用是否已发生无从判断，当场走结果未知路径——
-                # 记错误、迁移到 input-required、推对账卡片，SSE 流以 done 正常收尾，不自动重试。
-                unknown = {"call_id": call.call_id, "tool": tool.name, "operation_id": gate.idempotency_key}
-                await record_unknown_result(log, rc.run_id, unknown, cause=type(exc).__name__)
-                await s.commit()
-                rc.suspended = True
-                yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown)
-                yield DoneEvent(run_id=rc.run_id, stop_reason="awaiting")
+                async for ev in _unknown_result(log, s, rc, call, tool, gate.idempotency_key, exc):
+                    yield ev
                 return
             await log.append(
                 rc.run_id, RunEventType.TOOL_EXECUTED, {"call_id": call.call_id, "tool": tool.name}, idempotency_key=gate.idempotency_key
             )
         if tool.data_class == "confidential":
             rc.gate.taint.add("confidential")  # 污点传播：本次 run 后续的外发类工具调用会因此被收紧为需审批
-        summary, ref = ctx.offload_if_large(result, rc.workspace, settings.tool_result_offload_tokens)
+        if tool.name == "read_artifact":
+            # read_artifact 读回的就是外置内容：不再外置，否则模型永远读不到原文，只能反复读取直到轮数耗尽
+            summary, ref = result, None
+        else:
+            summary, ref = ctx.offload_if_large(result, rc.workspace, settings.tool_result_offload_tokens)
         # 结果事件带上工具的数据分类：续跑时据此重建污点，不依赖届时的工具表（工具定义可能已变化）。
+        # 业务系统拒绝 / 不存在等作为工具错误
+        status: Literal["ok", "error"] = "error" if isinstance(result, dict) and "error" in result else "ok"
         await log.append(
             rc.run_id,
             RunEventType.TOOL_RESULT,
-            {"call_id": call.call_id, "status": "ok", "output": summary, "output_ref": ref, "data_class": tool.data_class},
+            {"call_id": call.call_id, "status": status, "output": summary, "output_ref": ref, "data_class": tool.data_class},
         )
         await s.commit()
     rc.history.append({"role": "tool", "call_id": call.call_id, "content": ref or summary})
-    yield ToolResultEvent(call_id=call.call_id, status="ok", output=summary, output_ref=ref)
+    yield ToolResultEvent(call_id=call.call_id, status=status, output=summary, output_ref=ref)

@@ -67,7 +67,7 @@ def exec_calls(monkeypatch):
     calls: list[tuple[str, dict]] = []
     original = toolbroker.execute_tool
 
-    async def _record(tool, tool_input, dry_run=False):
+    async def _record(tool, tool_input, dry_run=False, **_):
         if dry_run:
             return await original(tool, tool_input, dry_run=True)
         calls.append((tool.name, tool_input))
@@ -122,7 +122,7 @@ def test_gate_evaluated_before_every_execution(client, monkeypatch):
         trace.append(("gate", tool.name))
         return await real_eval(ctx, tool, tool_input, call_id)
 
-    async def _exec(tool, tool_input, dry_run=False):
+    async def _exec(tool, tool_input, dry_run=False, **_):
         trace.append(("exec", tool.name))
         return await real_exec(tool, tool_input, dry_run)
 
@@ -192,7 +192,7 @@ def test_write_ahead_committed_before_high_risk_execution(client, monkeypatch):
     seen_during_exec: list[list[str]] = []
     original = toolbroker.execute_tool
 
-    async def _probe(tool, tool_input, dry_run=False):
+    async def _probe(tool, tool_input, dry_run=False, **_):
         if not dry_run:
             async with SessionLocal() as s:  # 独立会话：只能看到已提交的数据
                 seen_during_exec.append([e.type.value for e in await EventLog(s).list(run_id)])
@@ -229,7 +229,7 @@ def test_high_risk_unknown_result_requires_reconciliation_without_retry(client, 
     attempts: list[dict] = []
     original = toolbroker.execute_tool
 
-    async def _crash(tool, tool_input, dry_run=False):
+    async def _crash(tool, tool_input, dry_run=False, **_):
         if dry_run:
             return await original(tool, tool_input, dry_run=True)
         attempts.append(tool_input)

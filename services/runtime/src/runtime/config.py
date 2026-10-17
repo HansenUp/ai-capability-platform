@@ -38,6 +38,19 @@ class Settings:
     llm_max_retries: int = field(default_factory=lambda: int(_env("LLM_MAX_RETRIES", "2")))  # 可重试错误（429/5xx/网络）的最大重试次数
     # OTLP/HTTP 端点（基址），未设置则只装 TracerProvider、不导出 Trace
     otel_exporter_endpoint: str | None = field(default_factory=lambda: os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
+    # 数据分级最小矩阵（S4.9）：Run 带 confidential 污点后，只有这些模型别名可以继续接收上下文（如私有化部署的模型）；
+    # 空表示一律阻断。逗号分隔。
+    confidential_model_aliases: tuple[str, ...] = field(
+        default_factory=lambda: tuple(x for x in _env("CONFIDENTIAL_MODEL_ALIASES", "").split(",") if x)
+    )
+    # confidential 污点下一律拒绝的检索 / 外部查询类工具（按名称前缀）：查询语句本身会把机密上下文带出去
+    confidential_blocked_tool_prefixes: tuple[str, ...] = field(
+        default_factory=lambda: tuple(x for x in _env("CONFIDENTIAL_BLOCKED_TOOL_PREFIXES", "knowledge.,web.,search.").split(",") if x)
+    )
+    # 发布时校验模型别名在模型网关上存在（受控模型出口，S4.8）；mock harness 不校验
+    publish_check_model_alias: bool = field(default_factory=lambda: _env("PUBLISH_CHECK_MODEL_ALIAS", "true").lower() == "true")
+    # 工具执行方式：local = 进程内开发执行器（测试 / 无网关时）；gateway = 经能力网关分发到 MCP Server（S4.3）
+    tool_dispatch: str = field(default_factory=lambda: _env("TOOL_DISPATCH", "local"))
     capability_gateway_url: str = field(default_factory=lambda: _env("CAPABILITY_GATEWAY_URL", "http://localhost:8082"))  # 能力网关地址
     policy_url: str = field(default_factory=lambda: _env("POLICY_URL", "http://localhost:8083"))  # 策略服务（Cedar）地址
     # 观测适配器（S3.5 反馈写 Langfuse score 的落点）；只在内网可达
@@ -78,6 +91,8 @@ def production_problems(s: Settings) -> list[str]:
         problems.append("MODEL_GATEWAY_API_KEY 未配置或仍为开发主密钥")
     if secret_store.source("DATABASE_URL") not in ("vault", "file") or s.database_url.startswith("sqlite"):
         problems.append("DATABASE_URL 未经 Vault / DATABASE_URL_FILE 注入，或仍指向 SQLite")
+    if s.tool_dispatch != "gateway":
+        problems.append("TOOL_DISPATCH 必须为 gateway（进程内开发执行器只返回模拟结果）")
     for name in secret_store.SECRET_NAMES:
         if secret_store.source(name) == "env":
             problems.append(f"{name} 来自明文环境变量，生产须经 Vault 或 {name}_FILE 注入")

@@ -1,0 +1,14 @@
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":3,"type":"model.request","payload":{"n_messages":1}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":4,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.close_batch","input":{"ids":["T-3001"]},"risk_level":"unknown"}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":5,"type":"tool.result","payload":{"call_id":"c1","status":"error","output":{"error":"unknown tool"}}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":6,"type":"model.request","payload":{"n_messages":3}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":7,"type":"tool.requested","payload":{"call_id":"c2","tool":"ticket.get","input":{"id":"T-3001"},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":8,"type":"tool.decision","payload":{"call_id":"c2","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":9,"type":"tool.executed","payload":{"call_id":"c2","tool":"ticket.get"}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":10,"type":"tool.result","payload":{"call_id":"c2","status":"ok","output":{"id":"T-3001","title":"导出报表为空","status":"open","description":"导出本月报表得到空文件。","records":[{"time":"2026-10-12T02:00:00Z","actor":"u-ops-2","type":"备注","content":"筛选条件时区错误，导致无数据。"}],"customer_feedback":{}}}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":11,"type":"model.request","payload":{"n_messages":5}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":12,"type":"model.response","payload":{"text":"本场景只读，不能关闭工单，也不会通知客户；关闭请在工单系统中操作。以下为 T-3001 的总结：\n- 问题：导出本月报表得到空文件。\n- 根因：筛选条件时区错误。\n- 处理过程：已定位，工单仍在处理中。\n- 客户反馈：暂无反馈。\n- 可复用经验：导出类问题先核对时区与筛选条件。"}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":13,"type":"run.done","payload":{"stop_reason":"end_turn"}}
+{"run_id":"snap-ticket-summary-unlisted-tool","seq":14,"type":"run.state_changed","payload":{"from":"working","to":"completed","reason":"end_turn"}}

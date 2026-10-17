@@ -50,10 +50,27 @@ SEED: list[Capability] = [
     Capability(
         id="cap.ticket.search",
         name="ticket.search",
-        description="按条件查询售后工单（只读）",
+        description="按关键字与条件查询售后工单（只读，只返回调用者有权查看的工单摘要）",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "q": {"type": "string", "description": "关键字，匹配标题、描述与分类"},
+                "status": {"type": "string", "description": "状态：open / processing / closed"},
+                "limit": {"type": "integer", "description": "条数，默认 20，最多 50"},
+                "cursor": {"type": "string", "description": "分页游标（上一页返回的 next_cursor）"},
+            },
+        },
         system="ticket",
         owner="售后系统组",
         core_for_agents=["demo"],
+    ),
+    Capability(
+        id="cap.ticket.get",
+        name="ticket.get",
+        description="按工单号查询工单详情（含处理记录与客户反馈，只读）",
+        input_schema={"type": "object", "properties": {"id": {"type": "string", "description": "工单号，如 T-1001"}}, "required": ["id"]},
+        system="ticket",
+        owner="售后系统组",
     ),
     Capability(
         id="cap.ticket.close_batch",
@@ -112,6 +129,10 @@ class Registry:
         """新增或覆盖一条能力。"""
         self._items[c.id] = c
         return c
+
+    def by_name(self, name: str) -> Capability | None:
+        """按暴露给模型的工具名取一条已发布能力。"""
+        return next((c for c in self.list() if c.name == name), None)
 
     def core_for(self, agent: str) -> list[Capability]:
         """第一级发现：某 Agent 需要预载的核心能力。"""

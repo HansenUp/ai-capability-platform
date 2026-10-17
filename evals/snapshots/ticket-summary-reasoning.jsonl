@@ -1,0 +1,12 @@
+{"run_id":"snap-ticket-summary-reasoning","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-ticket-summary-reasoning","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
+{"run_id":"snap-ticket-summary-reasoning","seq":3,"type":"model.request","payload":{"n_messages":1}}
+{"run_id":"snap-ticket-summary-reasoning","seq":4,"type":"model.response","payload":{"text":"","thinking":"用户给了明确工单号 T-4001，直接用 ticket.get 取详情与处理记录，无需先检索。"}}
+{"run_id":"snap-ticket-summary-reasoning","seq":5,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.get","input":{"id":"T-4001"},"risk_level":"read","reasoning":"用户给了明确工单号 T-4001，直接用 ticket.get 取详情与处理记录，无需先检索。"}}
+{"run_id":"snap-ticket-summary-reasoning","seq":6,"type":"tool.decision","payload":{"call_id":"c1","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-reasoning","seq":7,"type":"tool.executed","payload":{"call_id":"c1","tool":"ticket.get"}}
+{"run_id":"snap-ticket-summary-reasoning","seq":8,"type":"tool.result","payload":{"call_id":"c1","status":"ok","output":{"id":"T-4001","title":"短信验证码延迟","status":"closed","description":"验证码平均延迟 2 分钟。","records":[{"time":"2026-10-11T06:00:00Z","actor":"u-dev-9","type":"回复","content":"短信通道限流，切换备用通道。"}],"customer_feedback":{"score":4,"comment":"已恢复"}}}}
+{"run_id":"snap-ticket-summary-reasoning","seq":9,"type":"model.request","payload":{"n_messages":3}}
+{"run_id":"snap-ticket-summary-reasoning","seq":10,"type":"model.response","payload":{"text":"工单 T-4001 总结：\n- 问题：验证码平均延迟 2 分钟。\n- 根因：短信通道限流。\n- 处理过程：切换备用通道。\n- 客户反馈：评分 4，已恢复。\n- 可复用经验：关键通道需配置备用通道与限流告警。","thinking":"记录完整，按五个字段整理。"}}
+{"run_id":"snap-ticket-summary-reasoning","seq":11,"type":"run.done","payload":{"stop_reason":"end_turn"}}
+{"run_id":"snap-ticket-summary-reasoning","seq":12,"type":"run.state_changed","payload":{"from":"working","to":"completed","reason":"end_turn"}}

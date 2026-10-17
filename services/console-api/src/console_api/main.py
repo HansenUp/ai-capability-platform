@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from console_api import runtime_client
+from console_api import eval_gate, runtime_client
 from console_api.auth import Operator, Role, assert_assigned, require
 from console_api.db import Agent, AgentVersion, Audit, SessionLocal, UserAgent, Visibility, init_db
 
@@ -145,8 +145,13 @@ async def publish(agent_id: str, version: str, body: PublishIn, op: Operator = D
     async with SessionLocal() as s:
         await assert_assigned(s, op, agent_id)
         v = await _version(s, op, agent_id, version)
-        if body.eval_passed is not True:
-            raise HTTPException(409, "publish gate: evaluation must pass (eval_passed=true with eval_run_ref)")  # 业务规则拒绝统一用 409
+        # 评测闸门：对外放量（比例大于 0）必须通过；0% + 白名单为预发布，只供评测账号使用，不经闸门
+        if body.canary_percent > 0:
+            reason = await eval_gate.check(agent_id, version, body.eval_run_ref, body.eval_passed)
+            if reason:
+                raise HTTPException(409, f"publish gate: {reason}")  # 业务规则拒绝统一用 409
+        elif not body.canary_allowlist:
+            raise HTTPException(409, "pre-release (canary_percent=0) requires an allowlist of evaluators")
         snapshot = {"agent_id": agent_id, "version": version, "system_prompt": v.system_prompt, "model_alias": v.model_alias}
         await _push_snapshot(op, snapshot | {"harness": v.harness, "config": v.config, "tenant_id": op.tenant})
         publish_body = {
@@ -164,10 +169,12 @@ async def publish(agent_id: str, version: str, body: PublishIn, op: Operator = D
 
 
 class CanaryIn(BaseModel):
-    """调整灰度：放量比例与白名单。"""
+    """调整灰度：放量比例与白名单；从预发布（0%）放量时需附评测结果。"""
 
     percent: int = Field(ge=0, le=100)
     allowlist: list[Subject] = Field(default_factory=list, max_length=1000)
+    eval_run_ref: str | None = Field(default=None, max_length=128)
+    eval_passed: bool | None = None
 
 
 @app.put("/agents/{agent_id}/versions/{version}/canary")
@@ -178,7 +185,14 @@ async def set_canary(agent_id: str, version: str, body: CanaryIn, op: Operator =
         v = await _version(s, op, agent_id, version)
         if v.status != "published":
             raise HTTPException(409, f"version status is {v.status}")
-        await _sync("PUT", f"/admin/agents/{agent_id}/versions/{version}/rollout", op, body.model_dump())
+        if v.canary_percent == 0 and body.percent > 0:  # 预发布 → 对外放量：过评测闸门
+            reason = await eval_gate.check(agent_id, version, body.eval_run_ref or v.eval_run_ref, body.eval_passed)
+            if reason:
+                raise HTTPException(409, f"publish gate: {reason}")
+            v.eval_run_ref = body.eval_run_ref or v.eval_run_ref
+        await _sync(
+            "PUT", f"/admin/agents/{agent_id}/versions/{version}/rollout", op, {"percent": body.percent, "allowlist": body.allowlist}
+        )
         before = v.canary_percent
         v.canary_percent, v.canary_allowlist = body.percent, list(body.allowlist)
         _audit(s, op, "agent.canary", f"{agent_id}@{version}", {"from": before, "to": body.percent})
@@ -194,6 +208,9 @@ async def rollback(agent_id: str, version: str, op: Operator = Depends(require(R
         target = await _version(s, op, agent_id, version)
         if target.status == "draft":
             raise HTTPException(409, "cannot roll back to a draft version")
+        if target.canary_percent == 0:
+            # 预发布版本（0% + 评测白名单）没有过评测闸门：不能借回滚直接成为全量稳定版，应走放量（过闸门）
+            raise HTTPException(409, "cannot roll back to a pre-release version; promote it via canary (evaluation gate)")
         await _sync("POST", f"/admin/agents/{agent_id}/versions/{version}/rollback", op)
         q = select(AgentVersion).where(
             AgentVersion.tenant_id == op.tenant, AgentVersion.agent_id == agent_id, AgentVersion.status == "published"

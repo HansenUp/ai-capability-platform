@@ -1,0 +1,10 @@
+{
+  "initial_messages": [
+    {
+      "role": "user",
+      "content": "总结工单 T-9999"
+    }
+  ],
+  "final_state": "completed",
+  "final_text": "无法访问工单 T-9999：该工单不存在或您没有查看权限。请确认工单号，或联系工单所属人授权后再试。"
+}

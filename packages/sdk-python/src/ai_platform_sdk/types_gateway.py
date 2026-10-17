@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, constr
 
 
 class AuthzIn(BaseModel):
@@ -86,6 +86,22 @@ class ExchangeIn(BaseModel):
     agent_version: str = Field(..., title="Agent Version")
     audience: str = Field(..., title="Audience")
     subject_token: str = Field(..., title="Subject Token")
+
+
+class InvokeIn(BaseModel):
+    """
+    工具调用请求（由 Runtime 的工具代理在闸口放行后发出）。
+    """
+
+    agent_id: constr(max_length=64) = Field(..., title="Agent Id")
+    agent_version: constr(max_length=32) = Field(..., title="Agent Version")
+    call_id: constr(max_length=128) | None = Field(None, title="Call Id")
+    dry_run: bool | None = Field(False, title="Dry Run")
+    idempotency_key: constr(max_length=128) | None = Field(None, title="Idempotency Key")
+    input: dict[str, Any] | None = Field(None, title="Input")
+    run_id: constr(max_length=40) | None = Field(None, title="Run Id")
+    subject: constr(max_length=128) = Field(..., title="Subject")
+    tool: constr(max_length=128) = Field(..., title="Tool")
 
 
 class McpServerIn(BaseModel):

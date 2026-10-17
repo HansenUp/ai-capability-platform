@@ -1,0 +1,15 @@
+# 夜间评测：每天 18:00 UTC（北京时间次日 02:00）回放 evals/ 下的快照，也可手动触发。全程不调用任何模型。
+name: nightly-evals
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+jobs:
+  evals:                                  # 快照回放：安装全部包 → pytest evals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: make setup
+      - run: .venv/bin/python -m pytest evals -q

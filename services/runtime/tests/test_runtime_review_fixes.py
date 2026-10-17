@@ -117,7 +117,7 @@ def test_resume_rebuilds_confidential_taint_and_redacts(
     monkeypatch.setitem(assembler.LOCAL_TOOLS, "kb.secret", secret)
     original = toolbroker.execute_tool
 
-    async def _exec(tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool = False) -> Any:
+    async def _exec(tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool = False, **_: Any) -> Any:
         if tool.name == "kb.secret":
             return {"doc": "机密正文"}
         return await original(tool, tool_input, dry_run)

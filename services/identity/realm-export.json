@@ -40,8 +40,16 @@
       "publicClient": false,
       "serviceAccountsEnabled": true,
       "attributes": {
-        "token.exchange.enabled": "true"
-      }
+        "standard.token.exchange.enabled": "true"
+      },
+      "secret": "capability-gateway-dev-secret",
+      "standardFlowEnabled": false,
+      "defaultClientScopes": [
+        "ai-runtime"
+      ],
+      "optionalClientScopes": [
+        "mcp-ticket-audience"
+      ]
     },
     {
       "clientId": "mcp-ticket",
@@ -214,6 +222,37 @@
             "user.attribute": "username",
             "claim.name": "preferred_username",
             "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "audience-capability-gateway",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "included.client.audience": "capability-gateway"
+          }
+        }
+      ]
+    },
+    {
+      "name": "mcp-ticket-audience",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-mcp-ticket",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "included.client.audience": "mcp-ticket"
           }
         }
       ]

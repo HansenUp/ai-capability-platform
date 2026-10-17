@@ -202,6 +202,85 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "InvokeIn": {
+        "description": "工具调用请求（由 Runtime 的工具代理在闸口放行后发出）。",
+        "properties": {
+          "agent_id": {
+            "maxLength": 64,
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_version": {
+            "maxLength": 32,
+            "title": "Agent Version",
+            "type": "string"
+          },
+          "call_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Id"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "input": {
+            "additionalProperties": true,
+            "title": "Input",
+            "type": "object"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "subject": {
+            "maxLength": 128,
+            "title": "Subject",
+            "type": "string"
+          },
+          "tool": {
+            "maxLength": 128,
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "subject",
+          "agent_id",
+          "agent_version"
+        ],
+        "title": "InvokeIn",
+        "type": "object"
+      },
       "McpServerIn": {
         "description": "MCP Server 登记信息。",
         "properties": {
@@ -420,7 +499,7 @@
     },
     "/capabilities": {
       "get": {
-        "description": "第一级发现：返回该 Agent 需要预载的核心工具（受 CORE_LIMIT 限制）。",
+        "description": "第一级发现：返回该 Agent 需要预载的核心工具（受 CORE_LIMIT 限制）。\n带 names（逗号分隔的工具名，即 Agent 版本快照声明的白名单）时只返回其中已发布的能力——Runtime 据此组装，\n网关侧登记的 core_for_agents 不能给 Agent 额外加工具。",
         "operationId": "core_capabilities_capabilities_get",
         "parameters": [
           {
@@ -439,6 +518,22 @@
             "schema": {
               "title": "Agent",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "names",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Names"
             }
           }
         ],
@@ -471,6 +566,24 @@
       "post": {
         "description": "登记或更新一条能力（生产由 Console 管理员操作）。",
         "operationId": "upsert_capability_capabilities_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -610,6 +723,105 @@
         "summary": "Healthz"
       }
     },
+    "/invoke": {
+      "post": {
+        "description": "把一次工具调用分发到能力所属系统的 MCP Server。\n\n- 能力必须已登记且已发布；策略判定为 deny 时 403（Runtime 闸口之外的第二道防线）；\n- 身份：配置了 KEYCLOAK_TOKEN_URL 时必须带终端用户令牌（Authorization: Bearer），网关换取 OBO 令牌后转发，\n  执行 Agent 以 `X-AI-Act` 头声明（MCP Server 只信任 azp 为本网关的令牌携带的该头）；未配置时为开发态，\n  以 `X-AI-Dev-Sub` 头转发发起主体（MCP Server 需显式开启开发身份）；\n- MCP Server 的业务结果（含 4xx，如无权限 / 不存在）原样包在 `{ok, status_code, output}` 中返回，\n  网关自身的问题（未登记、令牌换取失败、MCP 不可达）才用 HTTP 错误码。",
+        "operationId": "invoke_invoke_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvokeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Invoke Invoke Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          }
+        },
+        "summary": "Invoke"
+      }
+    },
     "/mcp/servers": {
       "get": {
         "description": "列出已登记的 MCP Server。",
@@ -636,6 +848,24 @@
       "post": {
         "description": "登记一个 MCP Server（健康状态由 S6 工作包的探活任务维护）。",
         "operationId": "register_mcp_mcp_servers_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

@@ -4,9 +4,9 @@ VENV ?= .venv
 PIP := $(VENV)/bin/pip
 PYTHON := $(VENV)/bin/python
 # 需要以可编辑模式安装的全部 Python 包（顺序无关，contract 会作为依赖被自动安装）
-PKGS := packages/contract packages/sdk-python services/runtime services/console-api services/capability-gateway services/policy services/observe-adapter harness-adapters/claude-sdk harness-adapters/stdio mcp-servers/template
+PKGS := packages/contract packages/sdk-python services/runtime services/console-api services/capability-gateway services/policy services/observe-adapter harness-adapters/claude-sdk harness-adapters/stdio mcp-servers/template mcp-servers/ticket
 
-.PHONY: setup test test-mysql migrate migrate-new verify-s1 verify-s2 verify-s3 lint openapi openapi-check sdk-types run-runtime run-console run-gateway run-observe compose-up compose-down compose-ps precommit-install precommit images
+.PHONY: setup test test-mysql migrate migrate-new verify-s1 verify-s2 verify-s3 verify-s4 eval-ticket-summary lint openapi openapi-check sdk-types run-runtime run-console run-gateway run-observe compose-up compose-down compose-ps precommit-install precommit images
 
 # 创建虚拟环境并安装所有包；优先带 [dev] 额外依赖，包未声明 dev 时退回普通安装
 setup:
@@ -101,6 +101,12 @@ images:
 
 verify-s1:  ## S1 本机出口验证：两种 Harness 真实对话 + Langfuse 查 Trace（需 compose observe profile 与模型 Key）
 	$(PYTHON) scripts/verify_s1_e2e.py
+
+verify-s4:  ## S4 本机出口验证：工单总结 Agent 全链路（网关 + MCP Server + OBO）、30 条评测与闸门、安全测试（需 keycloak 26.3、litellm、observe profile）
+	$(PYTHON) scripts/verify_s4_e2e.py
+
+eval-ticket-summary:  ## 对运行中的 Runtime 执行工单总结评测（30 条，结果写回 Langfuse）
+	$(PYTHON) scripts/eval_ticket_summary.py --runtime http://localhost:8080 --agent ticket-summary --version 1
 
 verify-s3:  ## S3 本机出口验证：Console 灰度放量与回滚、门户 PKCE 登录后对话、反馈进 Langfuse（需 keycloak、litellm、observe profile）
 	$(PYTHON) scripts/verify_s3_e2e.py

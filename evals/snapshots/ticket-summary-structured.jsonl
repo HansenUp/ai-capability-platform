@@ -1,0 +1,16 @@
+{"run_id":"snap-ticket-summary-structured","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-ticket-summary-structured","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
+{"run_id":"snap-ticket-summary-structured","seq":3,"type":"model.request","payload":{"n_messages":1}}
+{"run_id":"snap-ticket-summary-structured","seq":4,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.search","input":{"q":"登录失败"},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-structured","seq":5,"type":"tool.decision","payload":{"call_id":"c1","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-structured","seq":6,"type":"tool.executed","payload":{"call_id":"c1","tool":"ticket.search"}}
+{"run_id":"snap-ticket-summary-structured","seq":7,"type":"tool.result","payload":{"call_id":"c1","status":"ok","output":{"items":[{"id":"T-1001","title":"客户端登录报 401","status":"closed"}],"next_cursor":null,"total":1}}}
+{"run_id":"snap-ticket-summary-structured","seq":8,"type":"model.request","payload":{"n_messages":3}}
+{"run_id":"snap-ticket-summary-structured","seq":9,"type":"tool.requested","payload":{"call_id":"c2","tool":"ticket.get","input":{"id":"T-1001"},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-structured","seq":10,"type":"tool.decision","payload":{"call_id":"c2","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-structured","seq":11,"type":"tool.executed","payload":{"call_id":"c2","tool":"ticket.get"}}
+{"run_id":"snap-ticket-summary-structured","seq":12,"type":"tool.result","payload":{"call_id":"c2","status":"ok","output":{"id":"T-1001","title":"客户端登录报 401","status":"closed","owner":"u-ops-7","description":"多名用户自昨晚起登录返回 401，重试无效。","records":[{"time":"2026-10-10T09:05:00Z","actor":"u-ops-7","type":"备注","content":"复现：仅新版客户端受影响。"},{"time":"2026-10-10T10:20:00Z","actor":"u-dev-3","type":"回复","content":"网关 JWKS 缓存过期未刷新，已手动刷新并加告警。"}],"customer_feedback":{"score":5,"comment":"恢复很快，谢谢"},"closed_at":"2026-10-10T11:00:00Z"}}}
+{"run_id":"snap-ticket-summary-structured","seq":13,"type":"model.request","payload":{"n_messages":5}}
+{"run_id":"snap-ticket-summary-structured","seq":14,"type":"model.response","payload":{"text":"工单 T-1001 总结：\n- 问题：多名用户登录返回 401，重试无效。\n- 根因：网关 JWKS 缓存过期未刷新。\n- 处理过程：复现并确认仅新版客户端受影响，手动刷新缓存并加告警。\n- 客户反馈：评分 5，恢复很快。\n- 可复用经验：令牌验签类故障先检查 JWKS 缓存刷新与告警。"}}
+{"run_id":"snap-ticket-summary-structured","seq":15,"type":"run.done","payload":{"stop_reason":"end_turn"}}
+{"run_id":"snap-ticket-summary-structured","seq":16,"type":"run.state_changed","payload":{"from":"working","to":"completed","reason":"end_turn"}}

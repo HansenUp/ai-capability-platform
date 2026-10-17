@@ -1,0 +1,11 @@
+{"run_id":"snap-ticket-summary-forbidden","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":3,"type":"model.request","payload":{"n_messages":1}}
+{"run_id":"snap-ticket-summary-forbidden","seq":4,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.get","input":{"id":"T-9999"},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":5,"type":"tool.decision","payload":{"call_id":"c1","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":6,"type":"tool.executed","payload":{"call_id":"c1","tool":"ticket.get"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":7,"type":"tool.result","payload":{"call_id":"c1","status":"ok","output":{"error":"NOT_FOUND_OR_FORBIDDEN","message":"工单不存在或无权限"}}}
+{"run_id":"snap-ticket-summary-forbidden","seq":8,"type":"model.request","payload":{"n_messages":3}}
+{"run_id":"snap-ticket-summary-forbidden","seq":9,"type":"model.response","payload":{"text":"无法访问工单 T-9999：该工单不存在或您没有查看权限。请确认工单号，或联系工单所属人授权后再试。"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":10,"type":"run.done","payload":{"stop_reason":"end_turn"}}
+{"run_id":"snap-ticket-summary-forbidden","seq":11,"type":"run.state_changed","payload":{"from":"working","to":"completed","reason":"end_turn"}}

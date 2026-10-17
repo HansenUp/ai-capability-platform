@@ -1,4 +1,4 @@
-{"run_id":"snap-1","seq":1,"type":"run.created","payload":{"agent_id":"demo","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-1","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
 {"run_id":"snap-1","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
 {"run_id":"snap-1","seq":3,"type":"model.request","payload":{"n_messages":1}}
 {"run_id":"snap-1","seq":4,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.search","input":{"q":"all"},"risk_level":"read"}}

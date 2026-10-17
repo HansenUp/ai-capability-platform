@@ -115,6 +115,9 @@ async def evaluate(ctx: GateContext, tool: ToolSpec, tool_input: dict[str, Any],
         return GateResult("deny", "policy", policy_decision_id=decision_id)
     # 3) risk level + taint: reading confidential data tightens outbound tools
     # （风险等级与污点收紧：若本次 run 已读取过机密数据，任何外发类工具都需要人工审批。）
+    if "confidential" in ctx.taint and tool.name.startswith(settings.confidential_blocked_tool_prefixes):
+        # 数据分级矩阵（S4.9）：机密污点下，检索 / 外部查询类服务一律阻断（查询语句本身就会带出机密上下文）
+        return GateResult("deny", "data_class:confidential", policy_decision_id=decision_id)
     if "confidential" in ctx.taint and tool.name.startswith(EXTERNAL_SEND_TOOL_PREFIXES):
         decision = "require_approval"
     if tool.risk_level == RiskLevel.WRITE_HIGH and decision == "allow":

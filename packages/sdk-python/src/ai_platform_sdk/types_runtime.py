@@ -127,7 +127,7 @@ class MessagesRequest(BaseModel):
 
     agent_id: str = Field(..., title="Agent Id")
     agent_version: str | None = Field(None, title="Agent Version")
-    attachments: list[str] | None = Field(None, title="Attachments")
+    attachments: list[str] | None = Field(None, max_length=10, title="Attachments")
     messages: list[dict[str, Any]] = Field(..., title="Messages")
     metadata: dict[str, Any] | None = Field(None, title="Metadata")
     session_id: str | None = Field(None, title="Session Id")

@@ -175,3 +175,18 @@ S2 遗留（进入后续 Sprint）：见决策纪要 `docs/decisions/2026-10-17-
 验证基线：`make test` 254 通过 / 5 跳过；`make test-mysql` Runtime 162 通过 / 2 跳过、Console 6 通过；`make lint`、`make openapi-check`、`pnpm -r build`、`pnpm -r lint` 通过。
 
 S3 遗留：见决策纪要 `docs/decisions/2026-10-17-S3架构决策.md` 第 4 节（本阶段未做独立代码评审）。
+
+## 10. S4 执行结果（2026-10-17）
+
+| 任务 | 结果 | 说明 |
+|---|---|---|
+| S4.2 | 完成（mock 数据） | `mcp-servers/ticket`：ticket.search / ticket.get，JWKS 验签 OBO 令牌，行级权限，无权限与不存在不可区分 |
+| S4.3 | 完成 | Runtime 工具经能力网关 `/invoke` 分发；网关以 Keycloak 标准 Token Exchange 换取 OBO 令牌（Keycloak 升级到 26.3） |
+| S4.5 | 完成 | 8 条工单总结快照 + 夜间 CI 任务 |
+| S4.6 | 完成 | Langfuse 数据集 `ticket-summary` 30 条；Console 评测闸门读取 Langfuse 评测运行通过率；本次评测 28/30 |
+| S4.7 | 暂缓 | 依赖 Helm（D47） |
+| S4.8 | 完成 | 固定工具白名单、附件隔离、read_artifact 限本 Run、受控模型出口、令牌不进日志 |
+| S4.9 | 完成 | 机密污点下未授权模型中止、检索类工具拒绝、外发需审批、Trace 只记元数据 |
+| S4.10 | 完成（mock 业务系统） | close_batch 幂等表与状态变更同事务；真实工单系统待业务方按同一标准实现 |
+
+本机出口标准与验证：见 `docs/decisions/2026-10-17-S4架构决策.md` 第 3 节；`make verify-s4` 全部通过；`make test` 341 通过 / 5 跳过；`make test-mysql` Runtime 174、Console 9 通过。

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_contract import RiskLevel, capability_tier
+from runtime import llm
 from runtime.api.auth import Principal, require_admin
 from runtime.api.views import ErrorDetail
 from runtime.assemble.assembler import LOCAL_TOOLS, load_skills, skills_digest
@@ -111,6 +112,7 @@ async def publish(
             await _ensure_newest(s, av)
         if body.eval_passed is False:
             raise HTTPException(409, "evaluation gate failed; publish blocked")
+        await _check_model_alias(av)
         caps = registry.get(av.harness).capabilities()
         tier = capability_tier(caps)
         cfg = av.config or {}
@@ -146,6 +148,22 @@ async def publish(
         await s.commit()
     audit.mirror(row)
     return {"agent_id": agent_id, "version": version, "status": "published", "rollout_percent": body.rollout_percent}
+
+
+MODEL_HARNESSES = frozenset({"litellm", "claude-sdk"})  # 经模型网关访问真实模型的 harness
+
+
+async def _check_model_alias(av: AgentVersion) -> None:
+    """受控模型出口（S4.8）：真实模型 harness 的版本只能绑定模型网关上已登记的别名——模型访问只能经网关，
+    不能用未登记的别名绕过网关的模型清单与配额。网关不可达时同样拒绝发布（fail closed）。"""
+    if not settings.publish_check_model_alias or (av.harness or settings.harness) not in MODEL_HARNESSES:
+        return
+    try:
+        await llm.get_client().resolve_alias(av.model_alias)
+    except llm.UnknownModelAlias:
+        raise HTTPException(409, f"model alias '{av.model_alias}' is not registered on the model gateway") from None
+    except llm.LLMError:
+        raise HTTPException(409, "model gateway unavailable; cannot verify model alias") from None
 
 
 async def _get_version(s: AsyncSession, agent_id: str, version: str, tenant_id: str | None = None) -> AgentVersion:
@@ -204,6 +222,8 @@ async def rollback(
         target = await _get_version(s, agent_id, version, tenant_id)
         if target.status == "draft":
             raise HTTPException(409, "cannot roll back to a draft version")
+        if target.rollout_percent == 0:
+            raise HTTPException(409, "cannot roll back to a pre-release (0%) version; raise its rollout instead")
         q = select(AgentVersion).where(
             AgentVersion.tenant_id == target.tenant_id, AgentVersion.agent_id == agent_id, AgentVersion.status == "published"
         )

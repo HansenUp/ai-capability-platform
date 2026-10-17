@@ -30,7 +30,7 @@ services:
     environment: { discovery.type: single-node, xpack.security.enabled: "false", ES_JAVA_OPTS: "-Xms512m -Xmx512m" }
     ports: ["127.0.0.1:9200:9200"]
   keycloak:                               # 身份中心：OIDC 登录、Token Exchange；启动时自动导入 realm
-    image: quay.io/keycloak/keycloak:26.0
+    image: quay.io/keycloak/keycloak:26.3     # 26.2 起标准 Token Exchange（V2）默认可用，能力网关据此换取 OBO 令牌（S4.3）
     command: start-dev --import-realm
     environment: { KC_BOOTSTRAP_ADMIN_USERNAME: admin, KC_BOOTSTRAP_ADMIN_PASSWORD: admin }
     volumes: ["../../services/identity/realm-export.json:/opt/keycloak/data/import/realm.json:ro"]

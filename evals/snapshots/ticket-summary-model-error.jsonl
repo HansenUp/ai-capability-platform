@@ -1,0 +1,10 @@
+{"run_id":"snap-ticket-summary-model-error","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-ticket-summary-model-error","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
+{"run_id":"snap-ticket-summary-model-error","seq":3,"type":"model.request","payload":{"n_messages":1}}
+{"run_id":"snap-ticket-summary-model-error","seq":4,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.search","input":{"q":"登录失败"},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-model-error","seq":5,"type":"tool.decision","payload":{"call_id":"c1","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-model-error","seq":6,"type":"tool.executed","payload":{"call_id":"c1","tool":"ticket.search"}}
+{"run_id":"snap-ticket-summary-model-error","seq":7,"type":"tool.result","payload":{"call_id":"c1","status":"ok","output":{"items":[{"id":"T-1001","title":"客户端登录报 401","status":"closed"}],"next_cursor":null,"total":1}}}
+{"run_id":"snap-ticket-summary-model-error","seq":8,"type":"model.request","payload":{"n_messages":3}}
+{"run_id":"snap-ticket-summary-model-error","seq":9,"type":"run.error","payload":{"code":"LLM_UPSTREAM_ERROR","message":"model gateway returned 503","retryable":true}}
+{"run_id":"snap-ticket-summary-model-error","seq":10,"type":"run.state_changed","payload":{"from":"working","to":"failed","reason":"LLM_UPSTREAM_ERROR"}}

@@ -52,7 +52,10 @@ os.environ["WORKSPACE_DIR"] = f"{_tmp}/ws"
 os.environ["HARNESS"] = "mock"
 os.environ["POLICY_URL"] = "http://127.0.0.1:1"  # unreachable → gate uses baseline fallback（不可达，闸口回退到基线策略）
 os.environ["CAPABILITY_GATEWAY_URL"] = "http://127.0.0.1:1"
-os.environ["TOOL_RESULT_OFFLOAD_TOKENS"] = "20"  # 调小阈值，便于测试触发工具结果外置逻辑
+os.environ["TOOL_RESULT_OFFLOAD_TOKENS"] = "20"
+os.environ["CONFIDENTIAL_MODEL_ALIASES"] = (
+    "default-chat"  # 测试默认允许 demo 的别名接收机密数据；阻断场景在用例中单独覆盖  # 调小阈值，便于测试触发工具结果外置逻辑
+)
 
 if _external_db:
     # 以下导入会触发 runtime.config 读取环境变量，必须放在全部 os.environ 设置之后。

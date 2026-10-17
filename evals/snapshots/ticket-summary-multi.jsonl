@@ -1,0 +1,21 @@
+{"run_id":"snap-ticket-summary-multi","seq":1,"type":"run.created","payload":{"agent_id":"ticket-summary","agent_version":"1","model_alias":"default-chat","subject":"human:t"}}
+{"run_id":"snap-ticket-summary-multi","seq":2,"type":"run.state_changed","payload":{"from":"submitted","to":"working","reason":"start"}}
+{"run_id":"snap-ticket-summary-multi","seq":3,"type":"model.request","payload":{"n_messages":1}}
+{"run_id":"snap-ticket-summary-multi","seq":4,"type":"tool.requested","payload":{"call_id":"c1","tool":"ticket.search","input":{"q":"支付超时","limit":2},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-multi","seq":5,"type":"tool.decision","payload":{"call_id":"c1","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-multi","seq":6,"type":"tool.executed","payload":{"call_id":"c1","tool":"ticket.search"}}
+{"run_id":"snap-ticket-summary-multi","seq":7,"type":"tool.result","payload":{"call_id":"c1","status":"ok","output":{"items":[{"id":"T-2001","title":"支付回调超时","status":"closed"},{"id":"T-2002","title":"支付页面卡顿","status":"closed"}],"next_cursor":null,"total":2}}}
+{"run_id":"snap-ticket-summary-multi","seq":8,"type":"model.request","payload":{"n_messages":3}}
+{"run_id":"snap-ticket-summary-multi","seq":9,"type":"tool.requested","payload":{"call_id":"c2","tool":"ticket.get","input":{"id":"T-2001"},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-multi","seq":10,"type":"tool.decision","payload":{"call_id":"c2","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-multi","seq":11,"type":"tool.executed","payload":{"call_id":"c2","tool":"ticket.get"}}
+{"run_id":"snap-ticket-summary-multi","seq":12,"type":"tool.result","payload":{"call_id":"c2","status":"ok","output":{"id":"T-2001","title":"支付回调超时","description":"支付成功但订单长时间未更新。","records":[{"time":"2026-10-08T03:10:00Z","actor":"u-dev-5","type":"回复","content":"回调队列积压，扩容消费者后恢复。"}],"customer_feedback":{"comment":"订单已正常更新"}}}}
+{"run_id":"snap-ticket-summary-multi","seq":13,"type":"model.request","payload":{"n_messages":5}}
+{"run_id":"snap-ticket-summary-multi","seq":14,"type":"tool.requested","payload":{"call_id":"c3","tool":"ticket.get","input":{"id":"T-2002"},"risk_level":"read"}}
+{"run_id":"snap-ticket-summary-multi","seq":15,"type":"tool.decision","payload":{"call_id":"c3","decision":"allow","reason":"ok"}}
+{"run_id":"snap-ticket-summary-multi","seq":16,"type":"tool.executed","payload":{"call_id":"c3","tool":"ticket.get"}}
+{"run_id":"snap-ticket-summary-multi","seq":17,"type":"tool.result","payload":{"call_id":"c3","status":"ok","output":{"id":"T-2002","title":"支付页面卡顿","description":"支付页加载超过 10 秒。","records":[{"time":"2026-10-09T08:30:00Z","actor":"u-dev-5","type":"回复","content":"第三方支付 SDK 超时未设上限，已加 3 秒超时并降级。"}],"customer_feedback":{}}}}
+{"run_id":"snap-ticket-summary-multi","seq":18,"type":"model.request","payload":{"n_messages":7}}
+{"run_id":"snap-ticket-summary-multi","seq":19,"type":"model.response","payload":{"text":"共 2 张工单：\nT-2001：\n- 问题：支付成功但订单长时间未更新。\n- 根因：回调队列积压。\n- 处理过程：扩容消费者后恢复。\n- 客户反馈：订单已正常更新。\n- 可复用经验：队列积压类问题优先看消费者水位并配置自动扩容。\nT-2002：\n- 问题：支付页加载超过 10 秒。\n- 根因：第三方支付 SDK 超时未设上限。\n- 处理过程：加 3 秒超时并降级。\n- 客户反馈：无反馈。\n- 可复用经验：调用第三方 SDK 必须设置超时与降级。"}}
+{"run_id":"snap-ticket-summary-multi","seq":20,"type":"run.done","payload":{"stop_reason":"end_turn"}}
+{"run_id":"snap-ticket-summary-multi","seq":21,"type":"run.state_changed","payload":{"from":"working","to":"completed","reason":"end_turn"}}

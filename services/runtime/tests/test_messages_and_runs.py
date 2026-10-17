@@ -106,7 +106,7 @@ def test_unknown_tool_result_window_requires_reconciliation(client, monkeypatch)
 
     called = []
 
-    async def _crash(tool, tool_input, dry_run=False):
+    async def _crash(tool, tool_input, dry_run=False, **_):
         called.append(tool.name)
         raise RuntimeError("simulated crash after write-ahead log")  # 模拟"执行中崩溃，结果未知"
 

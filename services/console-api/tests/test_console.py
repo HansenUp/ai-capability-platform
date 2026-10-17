@@ -119,3 +119,49 @@ def test_runtime_rejection_other_than_conflict_still_502(c, runtime):
         assert c.post("/agents/rp2/versions/1/publish", json={"eval_passed": True}, headers=TADMIN).status_code == 502
     finally:
         runtime.fail_paths.clear()
+
+
+def test_langfuse_eval_gate(c, runtime, monkeypatch):
+    """S4.6：langfuse 模式下按评测运行的 metadata 判定——版本必须一致、通过率达标；0% + 白名单预发布不经闸门。"""
+    import httpx
+
+    from console_api import eval_gate
+
+    runs = {
+        "ok": {"metadata": {"agent_id": "ev", "agent_version": "1", "pass_rate": 0.9}},
+        "low": {"metadata": {"agent_id": "ev", "agent_version": "1", "pass_rate": 0.5}},
+        "other": {"metadata": {"agent_id": "ev", "agent_version": "9", "pass_rate": 1.0}},
+    }
+
+    def lf(request):
+        name = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json=runs[name]) if name in runs else httpx.Response(404)
+
+    monkeypatch.setattr(eval_gate, "MODE", "langfuse")
+    eval_gate.set_transport_for_tests(httpx.MockTransport(lf))
+    try:
+        assert c.post("/agents", json={"agent_id": "ev", "version": "1"}, headers=TADMIN).status_code == 201
+        pre = {"canary_percent": 0, "canary_allowlist": ["human:alice"]}
+        assert c.post("/agents/ev/versions/1/publish", json={"canary_percent": 0}, headers=TADMIN).status_code == 409  # 预发布需白名单
+        assert c.post("/agents/ev/versions/1/publish", json=pre, headers=TADMIN).status_code == 200
+        for ref, expect in (
+            ("langfuse:ticket-summary/low", 409),
+            ("langfuse:ticket-summary/other", 409),
+            ("langfuse:ticket-summary/none", 409),
+        ):
+            assert c.put("/agents/ev/versions/1/canary", json={"percent": 100, "eval_run_ref": ref}, headers=TADMIN).status_code == expect
+        r = c.put("/agents/ev/versions/1/canary", json={"percent": 100, "eval_run_ref": "langfuse:ticket-summary/ok"}, headers=TADMIN)
+        assert r.status_code == 200 and r.json()["eval_run_ref"] == "langfuse:ticket-summary/ok"
+        # 请求体自称 eval_passed=true 在 langfuse 模式下无效
+        assert c.post("/agents", json={"agent_id": "ev", "version": "2"}, headers=TADMIN).status_code == 201
+        assert c.post("/agents/ev/versions/2/publish", json={"eval_passed": True}, headers=TADMIN).status_code == 409
+    finally:
+        eval_gate.set_transport_for_tests(None)
+
+
+def test_rollback_to_pre_release_is_refused(c, runtime):
+    """S4 评审：0% 预发布版本不能借回滚绕过评测闸门。"""
+    assert c.post("/agents", json={"agent_id": "prb", "version": "1"}, headers=TADMIN).status_code == 201
+    pre = {"canary_percent": 0, "canary_allowlist": ["human:alice"]}
+    assert c.post("/agents/prb/versions/1/publish", json=pre, headers=TADMIN).status_code == 200
+    assert c.post("/agents/prb/versions/1/rollback", headers=TADMIN).status_code == 409
