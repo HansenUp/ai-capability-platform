@@ -229,6 +229,7 @@
       ]
     },
     {
+      "id": "00000000-0000-4000-8000-0000000a11ce",
       "username": "alice",
       "enabled": true,
       "email": "alice@local.test",
@@ -247,6 +248,78 @@
         {
           "type": "password",
           "value": "alice-dev-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000b0b",
+      "username": "bob",
+      "enabled": true,
+      "email": "bob@local.test",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Dev",
+      "attributes": {
+        "tenant": [
+          "default"
+        ]
+      },
+      "realmRoles": [
+        "aftersales"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "bob-dev-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-0000000ca201",
+      "username": "carol",
+      "enabled": true,
+      "email": "carol@local.test",
+      "emailVerified": true,
+      "firstName": "Carol",
+      "lastName": "Dev",
+      "attributes": {
+        "tenant": [
+          "default"
+        ]
+      },
+      "realmRoles": [
+        "platform-admin"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "carol-dev-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-0000000da7e0",
+      "username": "dave",
+      "enabled": true,
+      "email": "dave@local.test",
+      "emailVerified": true,
+      "firstName": "Dave",
+      "lastName": "Dev",
+      "attributes": {
+        "tenant": [
+          "t2"
+        ]
+      },
+      "realmRoles": [
+        "sales"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dave-dev-password",
           "temporary": false
         }
       ]
