@@ -40,6 +40,8 @@ class Settings:
     otel_exporter_endpoint: str | None = field(default_factory=lambda: os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
     capability_gateway_url: str = field(default_factory=lambda: _env("CAPABILITY_GATEWAY_URL", "http://localhost:8082"))  # 能力网关地址
     policy_url: str = field(default_factory=lambda: _env("POLICY_URL", "http://localhost:8083"))  # 策略服务（Cedar）地址
+    # 观测适配器（S3.5 反馈写 Langfuse score 的落点）；只在内网可达
+    observe_adapter_url: str = field(default_factory=lambda: _env("OBSERVE_ADAPTER_URL", "http://localhost:8084"))
     langfuse_host: str | None = field(default_factory=lambda: os.environ.get("LANGFUSE_HOST"))  # 可观测性 Langfuse 主机
     tool_result_offload_tokens: int = field(
         default_factory=lambda: int(_env("TOOL_RESULT_OFFLOAD_TOKENS", "8000"))

@@ -6,7 +6,9 @@
  * - 调用 Runtime 的 `POST /v1/messages`（SSE 流式）并逐事件渲染；
  * - 处理统一事件流中的 text / card / done（thinking、tool_use、tool_result、usage、error 当前忽略，后续版本展示）；
  * - 收到 `card`（impact_preview 影响预演）时渲染审批卡片，点击"通过"调用 `POST /v1/runs/{run_id}/approve`；
- * - 通过 `tokenProvider` 附加用户 OAuth 令牌，生产环境由 APISIX 验签并注入身份。
+ * - 通过 `tokenProvider` 附加用户 OAuth 令牌，生产环境由 APISIX 验签并注入身份；
+ * - 每条助手回复结束后显示反馈控件（点赞 / 点踩 / 修正），调用 `POST /v1/runs/{run_id}/feedback`，
+ *   由 Runtime 写成 Langfuse score 挂到该 Run 的 Trace 上（S3.5）。
  */
 import { LitElement, css, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -16,6 +18,9 @@ import type { components } from "./types/runtime";
 type Ev = components["schemas"]["Event"];
 /** 审批卡片事件（impact_preview 等），payload 为卡片渲染数据。 */
 type CardEv = components["schemas"]["CardEvent"];
+
+/** 一条对话记录。feedback：已提交的反馈（up / down / correction），correcting：正在填写修正。 */
+interface Item { role: string; text?: string; card?: CardEv; runId?: string; feedback?: string; correcting?: boolean }
 
 /** 用法：<ai-assistant agent-id="demo" base-url="https://gw.example.com"></ai-assistant>
  *  通过 `tokenProvider`（async () => string）提供用户 OAuth 令牌。 */
@@ -29,6 +34,10 @@ export class AiAssistant extends LitElement {
     form { display: flex; gap: 8px; padding: 8px; border-top: 1px solid #e5e7eb; }
     input { flex: 1; padding: 8px; border: 1px solid #cbd5e1; border-radius: 8px; }
     button { padding: 8px 12px; border-radius: 8px; border: 0; background: #2563eb; color: #fff; }
+    .fb { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #646a73; }
+    .fb button { padding: 2px 8px; background: #e5e7eb; color: #1f2329; }
+    .fb input { flex: 1; padding: 4px 6px; }
+    .err { color: #b91c1c; }
   `;
   /** 目标 Agent id（使用已发布版本）。 */
   @property({ attribute: "agent-id" }) agentId = "";
@@ -36,8 +45,8 @@ export class AiAssistant extends LitElement {
   @property({ attribute: "base-url" }) baseUrl = "";
   /** 令牌提供者：返回用户访问令牌，组件以 Bearer 方式附加。 */
   @property({ attribute: false }) tokenProvider?: () => Promise<string>;
-  /** 对话记录：u = 用户，a = 助手，card = 审批卡片。 */
-  @state() private items: { role: string; text?: string; card?: CardEv }[] = [];
+  /** 对话记录：u = 用户，a = 助手，card = 审批卡片，err = 错误提示；助手消息结束后带 runId，用于反馈。 */
+  @state() private items: Item[] = [];
   /** 会话 id：取自上一轮 done 事件的 run_id，用于多轮续接。 */
   @state() private sessionId?: string;
 
@@ -55,8 +64,9 @@ export class AiAssistant extends LitElement {
       method: "POST", headers: await this.headers(),
       body: JSON.stringify({ agent_id: this.agentId, session_id: this.sessionId, messages: [{ role: "user", content: text }], stream: true }),
     });
+    if (!res.ok || !res.body) { this.items = [...this.items, { role: "err", text: `请求失败：HTTP ${res.status}` }]; return; }
     // 逐块读取响应体，按行切分 SSE 帧；只解析 data: 行
-    const reader = res.body!.getReader(); const dec = new TextDecoder(); let buf = ""; let cur = { role: "a", text: "" };
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = ""; const cur: Item = { role: "a", text: "" };
     this.items = [...this.items, cur];
     while (true) {
       const { value, done } = await reader.read(); if (done) break;
@@ -67,7 +77,7 @@ export class AiAssistant extends LitElement {
         const ev: Ev = JSON.parse(line.slice(5));
         if (ev.type === "text") { cur.text += ev.delta; this.items = [...this.items]; }          // 增量文本追加到当前助手消息
         else if (ev.type === "card") { this.items = [...this.items, { role: "card", card: ev }]; } // 审批卡片（impact_preview）
-        else if (ev.type === "done") { this.sessionId = ev.run_id; }                              // 记录 run_id 作为会话延续
+        else if (ev.type === "done") { this.sessionId = ev.run_id; cur.runId = ev.run_id; this.items = [...this.items]; } // run_id：会话延续与反馈
       }
     }
   }
@@ -81,12 +91,35 @@ export class AiAssistant extends LitElement {
     if (!res.ok) throw new Error(`approve failed: HTTP ${res.status}`);
   }
 
+  /** 提交反馈：score +1 / -1，correction 为用户给出的正确答案（视为负反馈）。 */
+  async feedback(item: Item, score: number, correction?: string) {
+    const body = { score, correction: correction || null };
+    const res = await fetch(`${this.baseUrl}/v1/runs/${item.runId}/feedback`, { method: "POST", headers: await this.headers(), body: JSON.stringify(body) });
+    item.correcting = false;
+    item.feedback = res.ok ? (correction ? "correction" : score > 0 ? "up" : "down") : `failed:${res.status}`;
+    this.items = [...this.items];
+  }
+
+  /** 助手消息下方的反馈控件。 */
+  private feedbackBar(i: Item) {
+    if (!i.runId) return null;
+    if (i.feedback) return html`<div class="fb">${i.feedback.startsWith("failed") ? html`<span class="err">反馈提交失败（${i.feedback.slice(7)}）</span>` : "已反馈，谢谢"}</div>`;
+    if (i.correcting) {
+      return html`<form class="fb" @submit=${(e: Event) => { e.preventDefault(); const v = (e.target as HTMLFormElement).querySelector("input")!.value; this.feedback(i, -1, v); }}>
+        <input placeholder="正确答案应为…" /><button>提交修正</button></form>`;
+    }
+    return html`<div class="fb">
+      <button title="有帮助" @click=${() => this.feedback(i, 1)}>👍</button>
+      <button title="没帮助" @click=${() => this.feedback(i, -1)}>👎</button>
+      <button @click=${() => { i.correcting = true; this.items = [...this.items]; }}>修正</button></div>`;
+  }
+
   /** 渲染对话记录与输入框。 */
   render() {
     return html`
       <div class="log">${this.items.map((i) => i.role === "card"
         ? html`<div class="m card">审批：${i.card!.payload?.tool} · 影响 ${JSON.stringify(i.card!.payload?.preview)} <button @click=${() => this.approve(i.card!)}>通过</button></div>`
-        : html`<div class="m ${i.role}">${i.text}</div>`)}</div>
+        : html`<div class="m ${i.role}">${i.text}</div>${i.role === "a" ? this.feedbackBar(i) : null}`)}</div>
       <form @submit=${(e: Event) => { e.preventDefault(); const inp = (e.target as HTMLFormElement).querySelector("input")!; this.send(inp.value); inp.value = ""; }}>
         <input placeholder="输入…" /><button>发送</button>
       </form>`;

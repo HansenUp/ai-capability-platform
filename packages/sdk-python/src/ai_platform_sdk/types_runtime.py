@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, constr
+from pydantic import BaseModel, ConfigDict, Field, RootModel, confloat, conint, constr
 
 
 class AgentVersionIn(BaseModel):
@@ -93,6 +93,16 @@ class ErrorEvent(BaseModel):
     type: Literal["error"] = Field("error", title="Type")
 
 
+class FeedbackBody(BaseModel):
+    """
+    对一次 Run 的用户反馈：点赞 +1 / 点踩 -1，可附说明或修正后的正确答案（可沉淀为评测样本）。
+    """
+
+    comment: constr(max_length=2000) | None = Field("", title="Comment")
+    correction: constr(max_length=8000) | None = Field(None, title="Correction")
+    score: confloat(ge=-1.0, le=1.0) = Field(..., title="Score")
+
+
 class InputRequiredEvent(BaseModel):
     """
     Run 需要用户补充输入（对应 RunState.INPUT_REQUIRED）。
@@ -124,6 +134,10 @@ class MessagesRequest(BaseModel):
     stream: bool | None = Field(True, title="Stream")
 
 
+class RolloutAllowlistItem(RootModel[constr(max_length=128)]):
+    root: constr(max_length=128)
+
+
 class PublishIn(BaseModel):
     """
     发布一个 Agent 版本的请求体，携带评测网关的评测结果引用。
@@ -131,6 +145,8 @@ class PublishIn(BaseModel):
 
     eval_passed: bool | None = Field(None, title="Eval Passed")
     eval_run_ref: str | None = Field(None, title="Eval Run Ref")
+    rollout_allowlist: list[RolloutAllowlistItem] | None = Field(None, max_length=1000, title="Rollout Allowlist")
+    rollout_percent: conint(ge=0, le=100) | None = Field(100, title="Rollout Percent")
 
 
 class ResumeBody(BaseModel):
@@ -140,6 +156,19 @@ class ResumeBody(BaseModel):
     """
 
     messages: list[dict[str, Any]] = Field(..., title="Messages")
+
+
+class AllowlistItem(RootModel[constr(max_length=128)]):
+    root: constr(max_length=128)
+
+
+class RolloutIn(BaseModel):
+    """
+    调整已发布版本的灰度：放量比例与白名单。
+    """
+
+    allowlist: list[AllowlistItem] | None = Field(None, max_length=1000, title="Allowlist")
+    percent: conint(ge=0, le=100) = Field(..., title="Percent")
 
 
 class RunCreate(BaseModel):

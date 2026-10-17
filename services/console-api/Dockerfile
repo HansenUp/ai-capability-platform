@@ -13,6 +13,9 @@ RUN pip install --prefix=/install /build/packages/contract /build/services/conso
 FROM python:3.12-slim AS runtime
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 COPY --from=builder /install /usr/local
+# Alembic 迁移脚本不在 Python 包内：单独拷贝，并通过 CONSOLE_MIGRATIONS_DIR 告知 init_db（启动时自动 upgrade head）
+COPY --from=builder /build/services/console-api/migrations /opt/console/migrations
+ENV CONSOLE_MIGRATIONS_DIR=/opt/console/migrations
 RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
  && mkdir /app && chown app:app /app   # /app 可写：Runtime 默认把 SQLite 与工作区放在当前目录
 USER app

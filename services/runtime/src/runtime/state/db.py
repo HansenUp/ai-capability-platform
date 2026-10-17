@@ -97,6 +97,9 @@ class AgentVersion(Base):
     retrieval_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)  # 检索（RAG）配置快照
     eval_run_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)  # 评测运行引用
     eval_passed: Mapped[bool | None] = mapped_column(nullable=True)  # 评测是否通过
+    # 灰度（S3.2）：已发布版本的放量比例（0～100，100 为全量）与白名单主体；选版逻辑见 runtime.api.rollout
+    rollout_percent: Mapped[int] = mapped_column(Integer, default=100)
+    rollout_allowlist: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)  # 创建时间
     __table_args__ = (UniqueConstraint("agent_id", "version", name="uq_agent_version"),)
 

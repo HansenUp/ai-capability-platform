@@ -33,21 +33,30 @@ async def _forward(path: str, body: dict[str, Any]) -> dict[str, Any]:
 
 
 class Feedback(BaseModel):
-    """用户反馈。"""
+    """用户反馈（由 Runtime 的 /v1/runs/{run_id}/feedback 在鉴权、取出 trace_id 后转发；本接口只应在内网可达）。"""
 
-    trace_id: str  # 对应的 Trace（Run）编号
+    trace_id: str  # 对应的 Trace 编号
     subject: str  # 反馈人
     score: float  # +1 / -1 或 0..1
     comment: str = ""
     correction: str | None = None  # 用户给出的正确答案，可沉淀为评测样本
+    run_id: str | None = None  # 对应的 Run
 
 
 @app.post("/feedback")
 async def feedback(body: Feedback) -> dict[str, Any]:
-    """把反馈写成 Langfuse score（名称 user_feedback）。"""
+    """把反馈写成 Langfuse score（名称 user_feedback，数值型）；反馈人、Run 与修正答案进 score 的 metadata。"""
+    metadata = {"subject": body.subject, "run_id": body.run_id, "correction": body.correction}
     return await _forward(
         "/api/public/scores",
-        {"traceId": body.trace_id, "name": "user_feedback", "value": body.score, "comment": body.comment or body.correction or ""},
+        {
+            "traceId": body.trace_id,
+            "name": "user_feedback",
+            "value": body.score,
+            "dataType": "NUMERIC",
+            "comment": body.comment or body.correction or "",
+            "metadata": {k: v for k, v in metadata.items() if v is not None},
+        },
     )
 
 

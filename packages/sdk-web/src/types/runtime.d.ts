@@ -53,6 +53,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/agents/{agent_id}/versions/{version}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rollback
+         * @description 一键回滚：目标版本（曾发布过）置为全量稳定版，该 Agent 其他已发布版本一律 retired，灰度随之结束。
+         */
+        post: operations["rollback_admin_agents__agent_id__versions__version__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/agents/{agent_id}/versions/{version}/rollout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Rollout
+         * @description 调整已发布版本的放量比例与白名单（放量到 100 即转为稳定版）。
+         */
+        put: operations["set_rollout_admin_agents__agent_id__versions__version__rollout_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/node": {
         parameters: {
             query?: never;
@@ -85,6 +125,27 @@ export interface paths {
          * @description 健康检查端点，返回节点状态与节点标识。
          */
         get: operations["healthz_healthz_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List My Agents
+         * @description 门户用：调用方租户内有已发布版本的 Agent，以及按灰度规则该调用方会用到的版本。
+         *     （门户可见范围按 Console 的 visibility 过滤在 S4 接入。）
+         */
+        get: operations["list_my_agents_v1_agents_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -213,6 +274,27 @@ export interface paths {
         get: operations["run_events_v1_runs__run_id__events_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Feedback
+         * @description 反馈（S3.5）：只有 Run 发起人能反馈；trace_id 由 Runtime 从 t_run 取，调用方无法把评分挂到任意 Trace 上。
+         *     经观测适配器写成 Langfuse score（user_feedback），挂在该 Run 最近一次执行的 Trace 上。
+         */
+        post: operations["feedback_v1_runs__run_id__feedback_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -407,6 +489,21 @@ export interface components {
         };
         /** Event */
         Event: components["schemas"]["TextEvent"] | components["schemas"]["ThinkingEvent"] | components["schemas"]["ToolUseEvent"] | components["schemas"]["ToolResultEvent"] | components["schemas"]["CardEvent"] | components["schemas"]["InputRequiredEvent"] | components["schemas"]["UsageEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["DoneEvent"];
+        /**
+         * FeedbackBody
+         * @description 对一次 Run 的用户反馈：点赞 +1 / 点踩 -1，可附说明或修正后的正确答案（可沉淀为评测样本）。
+         */
+        FeedbackBody: {
+            /**
+             * Comment
+             * @default
+             */
+            comment: string;
+            /** Correction */
+            correction?: string | null;
+            /** Score */
+            score: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -476,6 +573,13 @@ export interface components {
             eval_passed?: boolean | null;
             /** Eval Run Ref */
             eval_run_ref?: string | null;
+            /** Rollout Allowlist */
+            rollout_allowlist?: string[];
+            /**
+             * Rollout Percent
+             * @default 100
+             */
+            rollout_percent: number;
         };
         /**
          * ResumeBody
@@ -487,6 +591,16 @@ export interface components {
             messages: {
                 [key: string]: unknown;
             }[];
+        };
+        /**
+         * RolloutIn
+         * @description 调整已发布版本的灰度：放量比例与白名单。
+         */
+        RolloutIn: {
+            /** Allowlist */
+            allowlist?: string[];
+            /** Percent */
+            percent: number;
         };
         /**
          * RunCreate
@@ -893,6 +1007,122 @@ export interface operations {
             };
         };
     };
+    rollback_admin_agents__agent_id__versions__version__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-ai-subject"?: string | null;
+                "x-ai-tenant"?: string | null;
+            };
+            path: {
+                agent_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_rollout_admin_agents__agent_id__versions__version__rollout_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-ai-subject"?: string | null;
+                "x-ai-tenant"?: string | null;
+            };
+            path: {
+                agent_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RolloutIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     node_status_admin_node_get: {
         parameters: {
             query?: never;
@@ -946,6 +1176,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    list_my_agents_v1_agents_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-ai-subject"?: string | null;
+                "x-ai-tenant"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1220,6 +1485,83 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    feedback_v1_runs__run_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-ai-subject"?: string | null;
+                "x-ai-tenant"?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
                 };
             };
         };

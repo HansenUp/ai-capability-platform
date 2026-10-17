@@ -6,11 +6,12 @@ with an operator identity; every write is audited.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_contract import RiskLevel, capability_tier
 from runtime.api.auth import Principal, require_admin
@@ -70,6 +71,16 @@ class PublishIn(BaseModel):
 
     eval_run_ref: str | None = None  # 评测运行引用
     eval_passed: bool | None = None  # 评测是否通过
+    # 灰度（S3.2）：100 为全量发布；小于 100 时作为灰度版，只有白名单与哈希桶落入比例内的主体使用它
+    rollout_percent: int = Field(default=100, ge=0, le=100)
+    rollout_allowlist: list[Annotated[str, Field(max_length=128)]] = Field(default_factory=list, max_length=1000)
+
+
+class RolloutIn(BaseModel):
+    """调整已发布版本的灰度：放量比例与白名单。"""
+
+    percent: int = Field(ge=0, le=100)
+    allowlist: list[Annotated[str, Field(max_length=128)]] = Field(default_factory=list, max_length=1000)
 
 
 @router.post("/agents/{agent_id}/versions/{version}/publish", responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
@@ -103,6 +114,7 @@ async def publish(agent_id: str, version: str, body: PublishIn, principal: Princ
                 f"涉及的高风险写工具：{', '.join(high_risk)}",
             )
         av.status, av.eval_run_ref, av.eval_passed = "published", body.eval_run_ref, body.eval_passed
+        av.rollout_percent, av.rollout_allowlist = body.rollout_percent, list(body.rollout_allowlist)
         # 冻结发布快照：技能内容摘要与 harness 版本，供事后核对"同一版本是否仍是同一套行为"。
         av.skills_digest = skills_digest(load_skills(cfg.get("skills", [])))
         av.harness_version = caps.version
@@ -117,12 +129,70 @@ async def publish(agent_id: str, version: str, body: PublishIn, principal: Princ
                 "skills_digest": av.skills_digest,
                 "harness_version": av.harness_version,
                 "capability_tier": tier,
+                "rollout_percent": body.rollout_percent,
+                "rollout_allowlist_size": len(body.rollout_allowlist),
             },
         )
         s.add(row)
         await s.commit()
     audit.mirror(row)
-    return {"agent_id": agent_id, "version": version, "status": "published"}
+    return {"agent_id": agent_id, "version": version, "status": "published", "rollout_percent": body.rollout_percent}
+
+
+async def _get_version(s: AsyncSession, agent_id: str, version: str) -> AgentVersion:
+    av = (await s.execute(select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.version == version))).scalars().first()
+    if av is None:
+        raise HTTPException(404)
+    return av
+
+
+@router.put("/agents/{agent_id}/versions/{version}/rollout", responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
+async def set_rollout(agent_id: str, version: str, body: RolloutIn, principal: Principal = Depends(require_admin)) -> dict[str, Any]:
+    """调整已发布版本的放量比例与白名单（放量到 100 即转为稳定版）。"""
+    async with SessionLocal() as s:
+        av = await _get_version(s, agent_id, version)
+        if av.status != "published":
+            raise HTTPException(409, f"version status is {av.status}; only published versions can be rolled out")
+        before = av.rollout_percent
+        av.rollout_percent, av.rollout_allowlist = body.percent, list(body.allowlist)
+        row = audit.entry(
+            principal,
+            "agent.rollout",
+            f"agent:{agent_id}@{version}",
+            "ok",
+            tenant_id=av.tenant_id,
+            detail={"from_percent": before, "to_percent": body.percent, "allowlist_size": len(body.allowlist)},
+        )
+        s.add(row)
+        await s.commit()
+    audit.mirror(row)
+    return {"agent_id": agent_id, "version": version, "rollout_percent": body.percent}
+
+
+@router.post("/agents/{agent_id}/versions/{version}/rollback", responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
+async def rollback(agent_id: str, version: str, principal: Principal = Depends(require_admin)) -> dict[str, Any]:
+    """一键回滚：目标版本（曾发布过）置为全量稳定版，该 Agent 其他已发布版本一律 retired，灰度随之结束。"""
+    async with SessionLocal() as s:
+        target = await _get_version(s, agent_id, version)
+        if target.status == "draft":
+            raise HTTPException(409, "cannot roll back to a draft version")
+        others = (
+            (await s.execute(select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.status == "published")))
+            .scalars()
+            .all()
+        )
+        retired = [v.version for v in others if v.id != target.id]
+        for v in others:
+            if v.id != target.id:
+                v.status = "retired"
+        target.status, target.rollout_percent, target.rollout_allowlist = "published", 100, []
+        row = audit.entry(
+            principal, "agent.rollback", f"agent:{agent_id}@{version}", "ok", tenant_id=target.tenant_id, detail={"retired": retired}
+        )
+        s.add(row)
+        await s.commit()
+    audit.mirror(row)
+    return {"agent_id": agent_id, "active_version": version, "retired": retired}
 
 
 @router.get("/agents")
@@ -131,7 +201,14 @@ async def list_agents() -> list[dict[str, Any]]:
     async with SessionLocal() as s:
         rows = (await s.execute(select(AgentVersion).order_by(AgentVersion.id))).scalars()
         return [
-            {"agent_id": r.agent_id, "version": r.version, "status": r.status, "model_alias": r.model_alias, "harness": r.harness}
+            {
+                "agent_id": r.agent_id,
+                "version": r.version,
+                "status": r.status,
+                "model_alias": r.model_alias,
+                "harness": r.harness,
+                "rollout_percent": r.rollout_percent,
+            }
             for r in rows
         ]
 

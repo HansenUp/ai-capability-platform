@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -18,8 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from ai_contract import Event, RunEventType, RunState, TextEvent, ThinkingEvent
+from runtime.api import rollout
 from runtime.api.auth import Principal, check_approver, current_principal
 from runtime.api.views import ApprovalView, ErrorDetail, RunEventsView, RunStateView, RunView
+from runtime.config import settings
 from runtime.loop import active, runner
 from runtime.state.db import AgentVersion, Run, SessionLocal
 from runtime.state.eventlog import EventLog
@@ -39,16 +42,23 @@ class MessagesRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)  # 附加元数据
 
 
-async def _load_agent(agent_id: str, version: str | None, tenant_id: str) -> AgentVersion:
-    """按 agent_id（可选指定 version）加载调用方租户内的 Agent 版本快照；未指定版本时取已发布的最新版本。
+async def _load_agent(agent_id: str, version: str | None, tenant_id: str, subject: str | None = None) -> tuple[AgentVersion, str]:
+    """加载调用方租户内的 Agent 版本快照，返回（版本，选版原因）。
+
+    - 指定 version：直接取该版本（pinned，续跑与调试用）；
+    - 未指定：在已发布版本中按主体做哈希灰度选版（stable / canary / allowlist / only，见 runtime.api.rollout）。
     其他租户的 Agent 与不存在同样返回 404，不泄露存在性。"""
     async with SessionLocal() as s:
         q = select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.tenant_id == tenant_id)
-        q = q.where(AgentVersion.version == version) if version else q.where(AgentVersion.status == "published")
-        agent = (await s.execute(q.order_by(AgentVersion.id.desc()))).scalars().first()
+        if version:
+            agent = (await s.execute(q.where(AgentVersion.version == version))).scalars().first()
+            reason = "pinned"
+        else:
+            published = (await s.execute(q.where(AgentVersion.status == "published"))).scalars().all()
+            agent, reason = rollout.choose(published, subject or "")
     if agent is None:
         raise HTTPException(404, f"agent '{agent_id}' has no published version")
-    return agent
+    return agent, reason
 
 
 async def run_in_tenant(run_id: str, request: Request, principal: Principal = Depends(current_principal)) -> None:
@@ -74,8 +84,8 @@ def _client_visible(ev: Event) -> bool:
 @router.post("/v1/messages")
 async def messages(req: MessagesRequest, request: Request, principal: Principal = Depends(current_principal)) -> Any:
     """对话式入口：创建 Run 并驱动一次执行；支持流式（SSE）与非流式（聚合后一次性返回）两种模式。"""
-    agent = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id)
-    run_id = await runner.create_run(agent, principal.subject, req.session_id, actor=principal.actor)
+    agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
+    run_id = await runner.create_run(agent, principal.subject, req.session_id, actor=principal.actor, rollout=reason)
     request.state.audit_object = f"run:{run_id}"
     gen = runner.drive(run_id, agent, principal.subject, req.messages)
     if req.stream:
@@ -89,6 +99,24 @@ async def messages(req: MessagesRequest, request: Request, principal: Principal 
     events = [ev async for ev in gen if _client_visible(ev)]  # 非流式：先消费完整个生成器，再聚合返回
     text = "".join(e.delta for e in events if isinstance(e, TextEvent))
     return {"run_id": run_id, "content": text, "events": [e.model_dump() for e in events]}
+
+
+@router.get("/v1/agents")
+async def list_my_agents(principal: Principal = Depends(current_principal)) -> list[dict[str, Any]]:
+    """门户用：调用方租户内有已发布版本的 Agent，以及按灰度规则该调用方会用到的版本。
+    （门户可见范围按 Console 的 visibility 过滤在 S4 接入。）"""
+    async with SessionLocal() as s:
+        q = select(AgentVersion).where(AgentVersion.tenant_id == principal.tenant_id, AgentVersion.status == "published")
+        published = (await s.execute(q)).scalars().all()
+    by_agent: dict[str, list[AgentVersion]] = {}
+    for v in published:
+        by_agent.setdefault(v.agent_id, []).append(v)
+    out = []
+    for agent_id in sorted(by_agent):
+        chosen, reason = rollout.choose(by_agent[agent_id], principal.subject)
+        if chosen is not None:
+            out.append({"agent_id": agent_id, "version": chosen.version, "rollout": reason})
+    return out
 
 
 # ---------------- Run API ----------------
@@ -106,8 +134,8 @@ class RunCreate(BaseModel):
 @router.post("/v1/runs", status_code=202, response_model=RunStateView, responses={404: {"model": ErrorDetail}})
 async def create_run(req: RunCreate, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """创建一个 Run 并立即返回 202（已接受）；实际驱动在后台任务中异步执行。"""
-    agent = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id)
-    run_id = await runner.create_run(agent, principal.subject, None, actor=principal.actor)
+    agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
+    run_id = await runner.create_run(agent, principal.subject, None, actor=principal.actor, rollout=reason)
     request.state.audit_object = f"run:{run_id}"
     # In production a worker picks this up from Redis Streams; here we execute eagerly in background.
     # （生产环境应由 worker 从 Redis Streams 消费任务；此处为简化实现，直接在后台任务中即时执行。
@@ -259,7 +287,7 @@ async def resume(run_id: str, body: ResumeBody, principal: Principal = Depends(c
             raise HTTPException(404)
         if run.state != RunState.WORKING:
             raise HTTPException(409, f"run state is {run.state}")
-    agent = await _load_agent(run.agent_id, run.agent_version, principal.tenant_id)
+    agent, _ = await _load_agent(run.agent_id, run.agent_version, principal.tenant_id)  # 续跑固定原版本
 
     async def stream() -> AsyncIterator[dict[str, str]]:
         # 续跑仍以 Run 发起人的身份执行（闸口判定、Trace 归属不随续跑者变化）；续跑者本人记在请求审计里
@@ -293,6 +321,49 @@ async def cancel(run_id: str) -> dict[str, Any]:
         harness, session = running
         await active.interrupt_quietly(harness, session, run_id)
     return {"run_id": run_id, "state": RunState.CANCELED}
+
+
+_observe_transport: httpx.AsyncBaseTransport | None = None  # 测试注入：观测适配器请求经该 transport 处理
+
+
+def set_observe_transport_for_tests(transport: httpx.AsyncBaseTransport | None) -> None:
+    global _observe_transport
+    _observe_transport = transport
+
+
+class FeedbackBody(BaseModel):
+    """对一次 Run 的用户反馈：点赞 +1 / 点踩 -1，可附说明或修正后的正确答案（可沉淀为评测样本）。"""
+
+    score: float = Field(ge=-1, le=1)
+    comment: str = Field(default="", max_length=2000)
+    correction: str | None = Field(default=None, max_length=8000)
+
+
+@router.post(
+    "/v1/runs/{run_id}/feedback",
+    responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}, 502: {"model": ErrorDetail}},
+    dependencies=[Depends(run_in_tenant)],
+)
+async def feedback(run_id: str, body: FeedbackBody, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    """反馈（S3.5）：只有 Run 发起人能反馈；trace_id 由 Runtime 从 t_run 取，调用方无法把评分挂到任意 Trace 上。
+    经观测适配器写成 Langfuse score（user_feedback），挂在该 Run 最近一次执行的 Trace 上。"""
+    async with SessionLocal() as s:
+        run = await s.get(Run, run_id)
+    assert run is not None  # run_in_tenant 已保证存在
+    if run.subject != principal.subject:
+        raise HTTPException(403, "only the run initiator can give feedback")
+    if not run.trace_id:
+        raise HTTPException(409, "run has no trace yet")
+    payload = {"trace_id": run.trace_id, "run_id": run_id, "subject": principal.subject} | body.model_dump()
+    try:
+        async with httpx.AsyncClient(timeout=10.0, transport=_observe_transport) as c:
+            r = await c.post(f"{settings.observe_adapter_url.rstrip('/')}/feedback", json=payload)
+        forwarded = r.status_code < 300 and bool(r.json().get("forwarded"))
+    except (httpx.HTTPError, ValueError) as e:
+        raise HTTPException(502, f"observe adapter unavailable: {type(e).__name__}") from e
+    if not forwarded:
+        raise HTTPException(502, "feedback was not forwarded to Langfuse")
+    return {"run_id": run_id, "trace_id": run.trace_id, "forwarded": True}
 
 
 def _dumps(o: Any) -> str:

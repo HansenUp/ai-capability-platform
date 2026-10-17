@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 from fastapi import Depends, Header, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from console_api.db import UserAgent
 
 
 class Role(IntEnum):
@@ -28,9 +32,6 @@ class Operator:
     user: str
     tenant: str
     role: Role
-
-
-ASSIGNMENTS: dict[str, set[str]] = {}  # 用户 -> 其被分配的 Agent id 集合（对应 user_agents 表）
 
 
 async def operator(
@@ -56,9 +57,10 @@ def require(min_role: Role):
     return dep
 
 
-def assert_assigned(op: Operator, agent_id: str) -> None:
-    """归属校验：租户管理员及以上放行；ADMIN 只能操作分配给自己的 Agent。"""
+async def assert_assigned(s: AsyncSession, op: Operator, agent_id: str) -> None:
+    """归属校验：租户管理员及以上放行；ADMIN 只能操作本租户内分配给自己的 Agent（t_console_user_agent）。"""
     if op.role >= Role.TENANT_ADMIN:
         return
-    if agent_id not in ASSIGNMENTS.get(op.user, set()):
+    q = select(UserAgent.id).where(UserAgent.tenant_id == op.tenant, UserAgent.user == op.user, UserAgent.agent_id == agent_id)
+    if (await s.execute(q)).first() is None:
         raise HTTPException(403, "agent not assigned to operator")

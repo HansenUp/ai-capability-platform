@@ -6,7 +6,7 @@ PYTHON := $(VENV)/bin/python
 # 需要以可编辑模式安装的全部 Python 包（顺序无关，contract 会作为依赖被自动安装）
 PKGS := packages/contract packages/sdk-python services/runtime services/console-api services/capability-gateway services/policy services/observe-adapter harness-adapters/claude-sdk harness-adapters/stdio mcp-servers/template
 
-.PHONY: setup test test-mysql migrate migrate-new verify-s1 verify-s2 lint openapi openapi-check sdk-types run-runtime run-console run-gateway compose-up compose-down compose-ps precommit-install precommit images
+.PHONY: setup test test-mysql migrate migrate-new verify-s1 verify-s2 verify-s3 lint openapi openapi-check sdk-types run-runtime run-console run-gateway run-observe compose-up compose-down compose-ps precommit-install precommit images
 
 # 创建虚拟环境并安装所有包；优先带 [dev] 额外依赖，包未声明 dev 时退回普通安装
 setup:
@@ -20,8 +20,10 @@ test:
 
 # 用 compose 的 MySQL 跑 Runtime 测试：测试库 ai_platform_test 由 conftest 自动创建并在会话开始前清空重建
 TEST_MYSQL_URL ?= mysql+asyncmy://root:root@localhost:3316/ai_platform_test
+TEST_MYSQL_CONSOLE_URL ?= mysql+asyncmy://root:root@localhost:3316/ai_platform_console_test
 test-mysql:
 	RUNTIME_TEST_DATABASE_URL=$(TEST_MYSQL_URL) $(PYTHON) -m pytest services/runtime -q
+	CONSOLE_TEST_DATABASE_URL=$(TEST_MYSQL_CONSOLE_URL) $(PYTHON) -m pytest services/console-api -q
 
 # 把 DATABASE_URL 指向的 Runtime 引擎库升级到最新迁移（Runtime 启动时也会自动执行）
 migrate:
@@ -62,6 +64,9 @@ run-console:
 	$(VENV)/bin/uvicorn console_api.main:app --port 8081 --reload --app-dir services/console-api/src
 
 # 启动能力网关（:8082）
+run-observe:
+	$(VENV)/bin/uvicorn observe_adapter.main:app --port 8084 --reload --app-dir services/observe-adapter/src
+
 run-gateway:
 	$(VENV)/bin/uvicorn capability_gateway.main:app --port 8082 --reload --app-dir services/capability-gateway/src
 
@@ -96,6 +101,9 @@ images:
 
 verify-s1:  ## S1 本机出口验证：两种 Harness 真实对话 + Langfuse 查 Trace（需 compose observe profile 与模型 Key）
 	$(PYTHON) scripts/verify_s1_e2e.py
+
+verify-s3:  ## S3 本机出口验证：Console 灰度放量与回滚、门户 PKCE 登录后对话、反馈进 Langfuse（需 keycloak、litellm、observe profile）
+	$(PYTHON) scripts/verify_s3_e2e.py
 
 verify-s2:  ## S2 本机出口验证：Keycloak JWT、统一审计、Vault 密钥注入、Prompt Cache 命中统计（需 keycloak、vault、observe profile）
 	$(PYTHON) scripts/verify_s2_e2e.py

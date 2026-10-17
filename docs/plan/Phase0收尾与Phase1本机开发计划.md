@@ -154,3 +154,24 @@ S1 遗留（进入后续 Sprint）：见决策纪要 `docs/decisions/2026-10-17-
 独立代码评审 12 项，9 项已修复（含高风险的"应用自批高风险调用"），其余转入遗留。
 
 S2 遗留（进入后续 Sprint）：见决策纪要 `docs/decisions/2026-10-17-S2架构决策.md` 第 4 节。
+
+## 9. S3 执行结果（2026-10-17）
+
+| 任务 | 结果 | 说明 |
+|---|---|---|
+| S3.2 | 完成 | Runtime 哈希灰度选版（白名单优先、按主体分桶）、放量与一键回滚接口；Alembic 0003 |
+| S3.3 | 完成 | Console 改为 Alembic 管理的数据库（五张表、按租户隔离）；发布 / 放量 / 回滚先同步 Runtime，失败 502 |
+| S3.4 | 完成 | 门户 Keycloak 授权码 + PKCE 登录、`/v1/agents` 列表、对话页令牌接入 `<ai-assistant>` |
+| S3.5 | 完成 | `<ai-assistant>` 反馈控件（点赞 / 点踩 / 修正）→ Runtime `/v1/runs/{id}/feedback` → 观测适配器 → Langfuse score |
+
+本机出口标准核对：
+
+| 标准 | 结果 | 证据 |
+|---|---|---|
+| 演示 10% 灰度放量与一键回滚 | 通过 | `make verify-s3`：10% 时 200 个主体中 15 个进入 v2，放量 50% 后 88 个，回滚后全部回到 v1 |
+| 门户登录后可对话 | 通过 | `make verify-s3` 脚本化 PKCE 登录 + 真实模型对话；浏览器实测登录、列表、对话 |
+| 反馈在 Langfuse 对应 Trace 上可见 | 通过 | 脚本与浏览器两条路径的 user_feedback 评分均出现在对应 Trace 上 |
+
+验证基线：`make test` 254 通过 / 5 跳过；`make test-mysql` Runtime 162 通过 / 2 跳过、Console 6 通过；`make lint`、`make openapi-check`、`pnpm -r build`、`pnpm -r lint` 通过。
+
+S3 遗留：见决策纪要 `docs/decisions/2026-10-17-S3架构决策.md` 第 4 节（本阶段未做独立代码评审）。

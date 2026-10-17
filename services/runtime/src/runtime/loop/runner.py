@@ -72,9 +72,11 @@ def thinking_visibility(agent: AgentVersion) -> ThinkingVisibility:
     return value if value in ("internal", "summary", "full") else "internal"
 
 
-async def create_run(agent: AgentVersion, subject: str, session_id: str | None, actor: str | None = None) -> str:
+async def create_run(
+    agent: AgentVersion, subject: str, session_id: str | None, actor: str | None = None, rollout: str | None = None
+) -> str:
     """创建一个新 Run：写入 t_run 行并追加 RUN_CREATED 事件（seq=1），返回新生成的 run_id。
-    actor 为代为执行的 Agent / 应用（来自令牌的 act 声明或签发客户端），随 RUN_CREATED 进事件日志。"""
+    actor 为代为执行的 Agent / 应用（来自令牌的 act 声明或签发客户端），rollout 为选版原因（灰度），均随 RUN_CREATED 进事件日志。"""
     run_id = "run_" + uuid.uuid4().hex[:20]
     async with SessionLocal() as s:
         s.add(
@@ -98,6 +100,7 @@ async def create_run(agent: AgentVersion, subject: str, session_id: str | None, 
                 "model_alias": agent.model_alias,
                 "subject": subject,
                 "actor": actor,
+                "rollout": rollout,
             },
         )
         await s.commit()
