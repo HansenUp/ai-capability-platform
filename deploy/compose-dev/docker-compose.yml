@@ -46,6 +46,10 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}         # embed-default 别名使用
       COHERE_API_KEY: ${COHERE_API_KEY:-}         # rerank-default 别名使用
+      # Langfuse 回调固定发往本机 langfuse-web（config.yaml 中 LANGFUSE_HOST），缺省密钥时 LiteLLM 会回落到 cloud.langfuse.com 造成数据出境
+      LANGFUSE_HOST: http://langfuse-web:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-dev}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-dev}
       # 容器出网代理：部分开发机（Docker Desktop）容器无法直连外网，可设 CONTAINER_PROXY=http://http.docker.internal:3128；
       # 留空则不使用代理（CI / 直连环境）。NO_PROXY 覆盖 compose 内部服务名，避免内网流量绕代理。
       HTTP_PROXY: ${CONTAINER_PROXY:-}

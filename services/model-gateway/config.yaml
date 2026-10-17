@@ -38,6 +38,16 @@ litellm_settings:
   cache: false
   cache_params: { type: redis, host: os.environ/REDIS_HOST, port: 6379 }
   success_callback: ["langfuse"]        # 调用成功后把 Trace 回调到 Langfuse（ADR-0002）
+  # 回调只记元数据（模型、用量、耗时、metadata 中的 run_id 等），不记消息正文与回答（S6）：网关看不到 Run 的机密污点
+  # （D65④，平台侧 Trace 按污点脱敏，网关侧无从判断），且图片附件以 base64 data URL 发给模型，记正文会把整张图写进
+  # Langfuse。正文的权威记录是平台事件日志与平台侧 Trace。
+  turn_off_message_logging: true
+
+# 进程环境变量（LiteLLM 启动时写入 os.environ）。LANGFUSE_HOST 未设置时 Langfuse 回调默认发往 https://cloud.langfuse.com
+# ——数据出境（S6 排查发现：本机此前一直在向该地址导出并被 401 拒绝）。这里固定为 compose 内的 Langfuse；
+# 其他部署以各自的配置文件覆盖。回调密钥只经环境变量（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY）注入，不写在这里。
+environment_variables:
+  LANGFUSE_HOST: http://langfuse-web:3000
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY        # 管理密钥；业务侧使用虚拟 Key

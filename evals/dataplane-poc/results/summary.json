@@ -1,0 +1,682 @@
+{
+  "generated_at": "2026-10-18T01:44:10+0800",
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "python": "3.12.0",
+    "machine": "arm64",
+    "cpu": "Apple M1 Max",
+    "ncpu": "10",
+    "memsize": "68719476736",
+    "docker": "28.3.2 cpus=10 mem=8218034176",
+    "images": {
+      "agentgateway": "ghcr.io/agentgateway/agentgateway:v1.6.0",
+      "contextforge": "ghcr.io/ibm/mcp-context-forge:v1.0.11",
+      "python_runtime": "ai-platform/dataplane-poc-py:local (FROM ghcr.io/ibm/mcp-context-forge:v1.0.11)"
+    }
+  },
+  "targets": {
+    "agentgateway": {
+      "rounds": 3,
+      "params": {
+        "concurrency": 50,
+        "procs": 10,
+        "warmup_s": 60.0,
+        "duration_s": 300.0,
+        "stream_ratio": 0.2,
+        "tool": "ticket.search",
+        "stream_tool": "ticket.get",
+        "traceparent": true
+      },
+      "search_p50": 39.63274999841815,
+      "search_p95": 75.31313500112446,
+      "search_p99": 84.22138129935772,
+      "stream_p95": 126.1696125002345,
+      "ttfb_p50": 34.969542000908405,
+      "ttfb_p95": 70.73372890081374,
+      "all_p50": 41.68635400128551,
+      "all_p95": 96.69678175305307,
+      "all_p99": 126.27784371929009,
+      "error_rate": 0.0,
+      "rps": 973.22,
+      "gateway_cpu_pct_mean": 63.315533333333335,
+      "gateway_mem_mib_max": 50.09,
+      "authz_adapter_cpu_pct_mean": 82.2406,
+      "policy_cpu_pct_mean": 24.290466666666667,
+      "upstream_cpu_pct_mean": 98.60812080536913,
+      "per_round_all_p95": [
+        180.3642716979084,
+        96.09625410230365,
+        96.69678175305307
+      ],
+      "extra_all_p95": -0.39743765191812486,
+      "extra_search_p95": -6.325989999822923,
+      "extra_ttfb_p95": -3.753795900411191,
+      "extra_all_p50": 2.438896000967361
+    },
+    "baseline": {
+      "rounds": 3,
+      "params": {
+        "concurrency": 50,
+        "procs": 10,
+        "warmup_s": 60.0,
+        "duration_s": 300.0,
+        "stream_ratio": 0.2,
+        "tool": "ticket.search",
+        "stream_tool": "ticket.get",
+        "traceparent": true
+      },
+      "search_p50": 38.23768699658103,
+      "search_p95": 81.63912500094739,
+      "search_p99": 94.83260769993649,
+      "stream_p95": 133.4340005982085,
+      "ttfb_p50": 32.4116249976214,
+      "ttfb_p95": 74.48752480122494,
+      "all_p50": 39.24745800031815,
+      "all_p95": 97.0942194049712,
+      "all_p99": 134.6164363198477,
+      "error_rate": 0.0,
+      "rps": 953.6,
+      "gateway_cpu_pct_mean": null,
+      "gateway_mem_mib_max": null,
+      "authz_adapter_cpu_pct_mean": null,
+      "policy_cpu_pct_mean": 0.2295302013422819,
+      "upstream_cpu_pct_mean": 98.57846666666667,
+      "per_round_all_p95": [
+        175.50889169433498,
+        97.0942194049712,
+        92.87332560343205
+      ],
+      "extra_all_p95": 0.0,
+      "extra_search_p95": 0.0,
+      "extra_ttfb_p95": 0.0,
+      "extra_all_p50": 0.0
+    },
+    "contextforge-notrace": {
+      "rounds": 1,
+      "params": {
+        "concurrency": 50,
+        "procs": 10,
+        "warmup_s": 60.0,
+        "duration_s": 300.0,
+        "stream_ratio": 0.2,
+        "tool": "poc-upstream-ticket-search",
+        "stream_tool": "poc-upstream-ticket-get",
+        "traceparent": false
+      },
+      "search_p50": 1511.2191879998136,
+      "search_p95": 1679.4071616532165,
+      "search_p99": 1817.0931745620328,
+      "stream_p95": 1703.037927751211,
+      "ttfb_p50": 1547.4264175027201,
+      "ttfb_p95": 1702.996678001,
+      "all_p50": 1517.7095424987783,
+      "all_p95": 1686.9849756487383,
+      "all_p99": 1822.1271947702185,
+      "error_rate": 0.0005037783375314861,
+      "rps": 33.083333333333336,
+      "gateway_cpu_pct_mean": 102.37380952380953,
+      "gateway_mem_mib_max": 479.6,
+      "authz_adapter_cpu_pct_mean": 4.293401360544218,
+      "policy_cpu_pct_mean": 1.5357142857142858,
+      "upstream_cpu_pct_mean": 24.390544217687072,
+      "per_round_all_p95": [
+        1686.9849756487383
+      ],
+      "extra_all_p95": 1589.890756243767,
+      "extra_search_p95": 1597.768036652269,
+      "extra_ttfb_p95": 1628.509153199775,
+      "extra_all_p50": 1478.4620844984602
+    },
+    "contextforge": {
+      "rounds": 3,
+      "params": {
+        "concurrency": 50,
+        "procs": 10,
+        "warmup_s": 60.0,
+        "duration_s": 300.0,
+        "stream_ratio": 0.2,
+        "tool": "poc-upstream-ticket-search",
+        "stream_tool": "poc-upstream-ticket-get",
+        "traceparent": true
+      },
+      "search_p50": 1456.0065839978051,
+      "search_p95": 1623.4371843995177,
+      "search_p99": 1719.2028523547924,
+      "stream_p95": 1676.1556673998716,
+      "ttfb_p50": 1497.122084001603,
+      "ttfb_p95": 1676.114458602388,
+      "all_p50": 1464.0920214988,
+      "all_p95": 1636.4256795484837,
+      "all_p99": 1739.2925844690035,
+      "error_rate": 0.0005690871841566128,
+      "rps": 34.163333333333334,
+      "gateway_cpu_pct_mean": 101.36442953020133,
+      "gateway_mem_mib_max": 477.7,
+      "authz_adapter_cpu_pct_mean": 4.156308724832215,
+      "policy_cpu_pct_mean": 1.4723489932885905,
+      "upstream_cpu_pct_mean": 25.239798657718122,
+      "per_round_all_p95": [
+        2771.801918002893,
+        1636.4256795484837,
+        1536.8100867541216
+      ],
+      "extra_all_p95": 1539.3314601435125,
+      "extra_search_p95": 1541.7980593985703,
+      "extra_ttfb_p95": 1601.626933801163,
+      "extra_all_p50": 1424.8445634984819
+    },
+    "selfbuilt-4cpu": {
+      "rounds": 1,
+      "params": {
+        "concurrency": 50,
+        "procs": 10,
+        "warmup_s": 60.0,
+        "duration_s": 300.0,
+        "stream_ratio": 0.2,
+        "tool": "ticket.search",
+        "stream_tool": "ticket.get",
+        "traceparent": true
+      },
+      "search_p50": 39.00258299836423,
+      "search_p95": 70.29248309772811,
+      "search_p99": 93.41620591818338,
+      "stream_p95": 114.96397559676554,
+      "ttfb_p50": 33.79420800047228,
+      "ttfb_p95": 64.33184199413517,
+      "all_p50": 43.12239649880212,
+      "all_p95": 95.77810565242542,
+      "all_p99": 120.53386925057579,
+      "error_rate": 0.0,
+      "rps": 961.6,
+      "gateway_cpu_pct_mean": 221.76712328767124,
+      "gateway_mem_mib_max": 268.1,
+      "authz_adapter_cpu_pct_mean": null,
+      "policy_cpu_pct_mean": 27.557328767123288,
+      "upstream_cpu_pct_mean": 96.46075342465754,
+      "per_round_all_p95": [
+        95.77810565242542
+      ],
+      "extra_all_p95": -1.3161137525457747,
+      "extra_search_p95": -11.346641903219279,
+      "extra_ttfb_p95": -10.155682807089761,
+      "extra_all_p50": 3.8749384984839708
+    },
+    "selfbuilt": {
+      "rounds": 3,
+      "params": {
+        "concurrency": 50,
+        "procs": 10,
+        "warmup_s": 60.0,
+        "duration_s": 300.0,
+        "stream_ratio": 0.2,
+        "tool": "ticket.search",
+        "stream_tool": "ticket.get",
+        "traceparent": true
+      },
+      "search_p50": 66.41470799877425,
+      "search_p95": 164.91216695030752,
+      "search_p99": 229.1513425196168,
+      "stream_p95": 194.6185000015248,
+      "ttfb_p50": 63.15083400113508,
+      "ttfb_p95": 160.35739599828958,
+      "all_p50": 73.1322089995956,
+      "all_p95": 172.73934550175903,
+      "all_p99": 237.49621497598125,
+      "error_rate": 0.0,
+      "rps": 594.2,
+      "gateway_cpu_pct_mean": 191.1166,
+      "gateway_mem_mib_max": 148.1,
+      "authz_adapter_cpu_pct_mean": null,
+      "policy_cpu_pct_mean": 16.9414,
+      "upstream_cpu_pct_mean": 66.3226,
+      "per_round_all_p95": [
+        198.33427509656758,
+        158.2252134532609,
+        172.73934550175903
+      ],
+      "extra_all_p95": 75.64512609678783,
+      "extra_search_p95": 83.27304194936013,
+      "extra_ttfb_p95": 85.86987119706464,
+      "extra_all_p50": 33.88475099927746
+    }
+  },
+  "cases": {
+    "generated_at": "2026-10-18T01:42:49+0800",
+    "targets": {
+      "selfbuilt": {
+        "A1_obo_passthrough": {
+          "pass": true,
+          "call": {
+            "ok": true,
+            "status": 200,
+            "error": null,
+            "progress_ms": [],
+            "final_ms": 20.2
+          },
+          "upstream_claims": {
+            "sub": "00000000-0000-4000-8000-0000000a11ce",
+            "azp": "capability-gateway",
+            "aud": "mcp-ticket",
+            "tenant": "default",
+            "iss": "http://localhost:8180/realms/ai-platform",
+            "exp": 1792259870,
+            "act": null
+          },
+          "presented_equals_upstream": false
+        },
+        "A2_client_identity_headers_stripped": {
+          "pass": true,
+          "upstream_x_ai_headers": {
+            "x-ai-act": "agent:poc-agent@1",
+            "x-ai-run-id": "run-4bea433f"
+          }
+        },
+        "A3_act_preserved": {
+          "pass": true,
+          "upstream_act_trusted": "agent:poc-agent@1",
+          "upstream_act_header": "agent:poc-agent@1"
+        },
+        "A4_expired_token_rejected": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 401,
+            "error": "initialize rejected"
+          },
+          "init_status": 401,
+          "upstream_rejections": []
+        },
+        "A5_audience_mismatch_rejected": {
+          "pass": true,
+          "upstream_aud_from_gateway": [
+            "mcp-ticket"
+          ],
+          "direct_wrong_aud_status": 401,
+          "upstream_rejections": [
+            "audience mismatch"
+          ]
+        },
+        "P1_deny_not_forwarded": {
+          "pass": true,
+          "unregistered_tool": {
+            "ok": false,
+            "status": 200,
+            "error": "{\"code\": -32001, \"message\": \"tool call denied by policy\", \"data\": {\"decision\": \"deny\"}}",
+            "progress_ms": [],
+            "final_ms": 3.8
+          },
+          "cross_tenant": {
+            "ok": false,
+            "status": 200,
+            "error": "{\"code\": -32001, \"message\": \"tool call denied by policy\", \"data\": {\"decision\": \"deny\"}}",
+            "progress_ms": [],
+            "final_ms": 2.8
+          }
+        },
+        "P2_policy_down_fail_closed": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 200,
+            "error": "{\"code\": -32002, \"message\": \"policy service unavailable; request rejected\", \"data\": {\"decision\": \"error\"}}",
+            "progress_ms": [],
+            "final_ms": 2004.3
+          }
+        },
+        "P4_no_fork": {
+          "pass": true,
+          "how": "平台自有代码（capability_gateway/mcp_proxy.py）"
+        },
+        "S_stream_progress": {
+          "ok": true,
+          "progress_ms": [
+            6.3,
+            17.5,
+            29.2
+          ],
+          "final_ms": 40.6
+        },
+        "T1_traceparent_propagation": {
+          "pass": true,
+          "rate": 1.0,
+          "sent": 100
+        },
+        "T2_langfuse_span": {
+          "trace_found": true,
+          "observations": [
+            "ticket.search"
+          ],
+          "run_id": true,
+          "call_id": true,
+          "tool_name": true,
+          "decision": true,
+          "pass": true
+        },
+        "A6_no_plaintext_token_in_logs": {
+          "pass": true,
+          "leaked_segments": 0,
+          "segments_checked": 20,
+          "log_bytes": 0
+        },
+        "summary": {
+          "dim2_identity": true,
+          "dim3_policy_hook": true,
+          "dim4_observability": true
+        }
+      },
+      "agentgateway": {
+        "A1_obo_passthrough": {
+          "pass": true,
+          "call": {
+            "ok": true,
+            "status": 200,
+            "error": null,
+            "progress_ms": [],
+            "final_ms": 25.7
+          },
+          "upstream_claims": {
+            "sub": "00000000-0000-4000-8000-0000000a11ce",
+            "azp": "capability-gateway",
+            "aud": "mcp-ticket",
+            "tenant": "default",
+            "iss": "http://localhost:8180/realms/ai-platform",
+            "exp": 1792259888,
+            "act": null
+          },
+          "presented_equals_upstream": true
+        },
+        "A2_client_identity_headers_stripped": {
+          "pass": true,
+          "upstream_x_ai_headers": {
+            "x-ai-run-id": "run-3f84c65e",
+            "x-ai-act": "agent:poc-agent@1"
+          }
+        },
+        "A3_act_preserved": {
+          "pass": true,
+          "upstream_act_trusted": "agent:poc-agent@1",
+          "upstream_act_header": "agent:poc-agent@1"
+        },
+        "A4_expired_token_rejected": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 401,
+            "error": "initialize rejected"
+          },
+          "init_status": 401,
+          "upstream_rejections": []
+        },
+        "A5_audience_mismatch_rejected": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 401,
+            "error": "initialize rejected"
+          },
+          "init_status": 401,
+          "upstream_rejections": []
+        },
+        "P1_deny_not_forwarded": {
+          "pass": true,
+          "unregistered_tool": {
+            "ok": false,
+            "status": 403,
+            "error": "\"{\\\"decision\\\":\\\"deny\\\"}\"",
+            "progress_ms": [],
+            "final_ms": null
+          },
+          "cross_tenant": {
+            "ok": false,
+            "status": 403,
+            "error": "\"{\\\"decision\\\":\\\"deny\\\"}\"",
+            "progress_ms": [],
+            "final_ms": null
+          }
+        },
+        "P2_policy_down_fail_closed": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 403,
+            "error": "\"external authorization failed\"",
+            "progress_ms": [],
+            "final_ms": null
+          }
+        },
+        "P3_hook_endpoint_down_fail_closed": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 403,
+            "error": "\"external authorization failed\"",
+            "progress_ms": [],
+            "final_ms": null
+          }
+        },
+        "P4_no_fork": {
+          "pass": true,
+          "how": "声明式配置 extAuthz(HTTP) + jwtAuth + transformations（agentgateway.yaml），无源码改动"
+        },
+        "S_stream_progress": {
+          "ok": true,
+          "progress_ms": [
+            139.4,
+            149.0,
+            161.6
+          ],
+          "final_ms": 172.8
+        },
+        "T1_traceparent_propagation": {
+          "pass": true,
+          "rate": 1.0,
+          "sent": 100
+        },
+        "T2_langfuse_span": {
+          "trace_found": true,
+          "observations": [
+            "ticket.search",
+            "ticket.search",
+            "ExtAuthz"
+          ],
+          "run_id": true,
+          "call_id": true,
+          "tool_name": true,
+          "decision": true,
+          "pass": true
+        },
+        "A6_no_plaintext_token_in_logs": {
+          "pass": true,
+          "leaked_segments": 0,
+          "segments_checked": 20,
+          "log_bytes": 575138262
+        },
+        "summary": {
+          "dim2_identity": true,
+          "dim3_policy_hook": true,
+          "dim4_observability": true
+        }
+      },
+      "contextforge": {
+        "A1_obo_passthrough": {
+          "pass": true,
+          "call": {
+            "ok": true,
+            "status": 200,
+            "error": null,
+            "progress_ms": [],
+            "final_ms": 77.8
+          },
+          "upstream_claims": {
+            "sub": "00000000-0000-4000-8000-0000000a11ce",
+            "azp": "capability-gateway",
+            "aud": "mcp-ticket",
+            "tenant": "default",
+            "iss": "http://localhost:8180/realms/ai-platform",
+            "exp": 1792259911,
+            "act": null
+          },
+          "presented_equals_upstream": true
+        },
+        "A2_client_identity_headers_stripped": {
+          "pass": true,
+          "upstream_x_ai_headers": {
+            "x-ai-act": "agent:poc-agent@1",
+            "x-ai-run-id": "run-1dd26486"
+          }
+        },
+        "A3_act_preserved": {
+          "pass": true,
+          "upstream_act_trusted": "agent:poc-agent@1",
+          "upstream_act_header": "agent:poc-agent@1"
+        },
+        "A4_expired_token_rejected": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 200,
+            "error": "{\"content\": [{\"text\": \"MCP server error: 401 Unauthorized for url 'http://upstream:9100/mcp'\", \"type\": \"text\"}], \"isError\": true}",
+            "progress_ms": [],
+            "final_ms": 23.4
+          },
+          "init_status": 200,
+          "upstream_rejections": [
+            "token expired"
+          ]
+        },
+        "A5_audience_mismatch_rejected": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 200,
+            "error": "{\"content\": [{\"text\": \"MCP server error: 401 Unauthorized for url 'http://upstream:9100/mcp'\", \"type\": \"text\"}], \"isError\": true}",
+            "progress_ms": [],
+            "final_ms": 19.9
+          },
+          "init_status": 200,
+          "upstream_rejections": [
+            "audience mismatch"
+          ]
+        },
+        "P1_deny_not_forwarded": {
+          "pass": true,
+          "unregistered_tool": {
+            "ok": false,
+            "status": 200,
+            "error": "{\"content\": [{\"text\": \"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_DENY - denied by platform policy (tool ticket.purge rejected before forwarding (decision=deny))\", \"type\": \"text\"}], \"isError\": true}",
+            "progress_ms": [],
+            "final_ms": 17.7
+          },
+          "cross_tenant": {
+            "ok": false,
+            "status": 200,
+            "error": "{\"content\": [{\"text\": \"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_DENY - denied by platform policy (tool ticket.search rejected before forwarding (decision=deny))\", \"type\": \"text\"}], \"isError\": true}",
+            "progress_ms": [],
+            "final_ms": 12.4
+          }
+        },
+        "P2_policy_down_fail_closed": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 200,
+            "error": "{\"content\": [{\"text\": \"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding (decision=error))\", \"type\": \"text\"}], \"isError\": true}",
+            "progress_ms": [],
+            "final_ms": 2022.9
+          }
+        },
+        "P3_hook_endpoint_down_fail_closed": {
+          "pass": true,
+          "call": {
+            "ok": false,
+            "status": 200,
+            "error": "{\"content\": [{\"text\": \"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding (decision=error))\", \"type\": \"text\"}], \"isError\": true}",
+            "progress_ms": [],
+            "final_ms": 2030.8
+          }
+        },
+        "P4_no_fork": {
+          "pass": true,
+          "how": "原生插件 TOOL_PRE_INVOKE（contextforge/platform_authz.py，经 plugins.yaml 加载），无源码改动"
+        },
+        "S_stream_progress": {
+          "ok": true,
+          "progress_ms": [],
+          "final_ms": 213.5
+        },
+        "T1_traceparent_propagation": {
+          "pass": true,
+          "rate": 1.0,
+          "sent": 100
+        },
+        "T2_langfuse_span": {
+          "trace_found": true,
+          "observations": [
+            "MCP send tools/call ticket.search",
+            "poc-upstream-ticket-search",
+            "MCP send tools/list",
+            "MCP send initialize",
+            "POST /servers/4baec8f7e0ae46e99138208fde1989c9/mcp",
+            "tool.invoke",
+            "tool.gateway_call",
+            "mcp.client.response",
+            "mcp.client.request",
+            "tool.lookup",
+            "mcp.client.call",
+            "mcp.client.initialize",
+            "tool.post_process",
+            "mcp.transport.enter"
+          ],
+          "run_id": false,
+          "call_id": false,
+          "tool_name": true,
+          "decision": false,
+          "pass": false
+        },
+        "A6_no_plaintext_token_in_logs": {
+          "pass": true,
+          "leaked_segments": 0,
+          "segments_checked": 20,
+          "log_bytes": 62596
+        },
+        "summary": {
+          "dim2_identity": true,
+          "dim3_policy_hook": true,
+          "dim4_observability": false
+        }
+      }
+    }
+  },
+  "ops_scores": {
+    "selfbuilt": {
+      "scores": {
+        "部署组件数": 5,
+        "声明式配置/GitOps": 3,
+        "升级与回滚成本": 5,
+        "许可证与社区": 3,
+        "Python 栈维护成本": 4
+      },
+      "rationale": "不新增组件（随 capability-gateway 发布）；MCP Server 登记走网关 API/种子配置，尚未声明式；升级回滚即网关版本；自有代码无许可证风险但无社区；约 270 行 Python（mcp_proxy.py），MCP 协议演进需自己跟进。"
+    },
+    "agentgateway": {
+      "scores": {
+        "部署组件数": 4,
+        "声明式配置/GitOps": 5,
+        "升级与回滚成本": 3,
+        "许可证与社区": 5,
+        "Python 栈维护成本": 3
+      },
+      "rationale": "新增 1 个 Rust 二进制（~45 MiB 内存）+ 网关内判定端点；YAML 声明式且热加载、K8s 有 CRD；1.x 每月发版、配置项仍在演进（本 POC 即踩到 CEL transformations 与 extAuthz.metadata 组合导致 SSE 缓冲）；Apache-2.0、LF 项目、活跃；团队不写 Rust，只能配置不能改源码。"
+    },
+    "contextforge": {
+      "scores": {
+        "部署组件数": 2,
+        "声明式配置/GitOps": 2,
+        "升级与回滚成本": 2,
+        "许可证与社区": 5,
+        "Python 栈维护成本": 3
+      },
+      "rationale": "网关 + 数据库（生产需 Postgres）+ 多实例需 Redis；上游与虚拟服务器通过 Admin API 登记、存库，非声明式；每版带数据库迁移、默认值变化大（本 POC 需关闭账号限流/锁定、放开 SSRF 私网）；Apache-2.0、IBM 主导、活跃；Python 栈可写插件，但代码库庞大（工具调用路径上有会话池、RBAC、指标落库等），定位/调优成本高。"
+    }
+  }
+}

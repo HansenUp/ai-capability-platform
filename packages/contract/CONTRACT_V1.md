@@ -1,6 +1,6 @@
 # Runtime Contract V1（冻结说明）
 
-- 版本：`ai_contract.CONTRACT_VERSION = "1.1.0"`（1.0.0 冻结；1.1.0 为非破坏性变更，见第 3 节）
+- 版本：`ai_contract.CONTRACT_VERSION = "1.2.0"`（1.0.0 冻结；1.1.0、1.2.0 为非破坏性变更，见第 3 节）
 - 对应计划项：实施计划 P0-2.2 / Phase0 收尾 A5
 - 权威来源：`packages/contract/src/ai_contract/`（本文只是摘要，字段以代码为准）
 
@@ -68,6 +68,8 @@
 
 `TurnInput`：`messages`、`attachments=[]`、`tool_statuses={}`（**V1.1 新增**，`call_id -> ok / error / denied / pending_approval`）。Runtime 按事件日志中的 TOOL_RESULT 为本轮历史里的每个工具结果填写状态，适配器可据此把错误 / 拒绝标记给模型（例如 Anthropic `tool_result.is_error`），不需要的适配器忽略即可。
 
+图片引用（**V1.2 新增**，`images.py`）：`TurnInput.messages` 中用户消息的 `content` 可以是内容块列表，图片块为 `{"type": "image_ref", "ref": "artifact://<32 位十六进制>", "media_type": "image/png|image/jpeg|image/webp|image/gif", "size": int, "sha256": hex}`，只是引用。图片文件位于本 Run 工作区（`SessionSpec.workspace_dir`）的 `<id>.<png|jpg|webp|gif>`。声明 `supports_vision=True` 的适配器在发送给模型时用 `load_image_ref(workspace_dir, part)` 读取（校验 sha256 与文件头类型，失败抛 `ImageRefError`），转成各家格式（OpenAI 兼容 `image_url` data URL、Anthropic `image` 块），不得把图片内容写进任何统一事件；读取失败时产出 `ErrorEvent(code="ATTACHMENT_UNAVAILABLE")` → Usage → Done(error)。`supports_vision=False` 的适配器不会收到 `image_ref`（Runtime 在受理请求时以 422 `ATTACHMENT_MODALITY_UNSUPPORTED` 拒绝）。`TurnInput.attachments` 语义不变（Runtime 不填写）。
+
 `HookSet`：`pre_model`、`post_model`（**V1.1 新增**）、`pre_tool`、`post_tool`、`on_subagent`，均为可选的异步函数；返回 dict 可覆盖 payload（只认 `HOOK_OVERRIDABLE` 白名单内的键），返回 `{"deny": reason}` 表示阻断。
 
 `HookPoint`（**V1.1 新增**，StrEnum）：`pre_model`、`post_model`、`pre_tool`、`post_tool`，即平台统一执行 hook 的四个拦截点。
@@ -105,3 +107,15 @@
 - 不变：`Event` 判别联合、`EventType`、`RunEventType`、`RunState` 与迁移表、`capability_tier()` 判定规则均不变；hook 结果等新增内容只放在 `RunEvent.payload`。
 - 兼容性：所有新增字段均有默认值，现有适配器（mock / litellm / claude-sdk / stdio）与调用方无需修改即可构造；`extra="forbid"` 不变，旧版本消费方不会收到新字段以外的结构变化。
 - 契约测试：`packages/contract/tests/test_contract.py` 新增 V1.1 用例（导出、拦截点取值与白名单、`post_model` 可选、`internal_hook_points` 默认值与校验、`TurnInput.tool_statuses` 默认值与取值校验）。
+
+### CR-1.2（Contract 1.1.0 → 1.2.0，S6 图片附件按引用传递）
+
+- 关联：S6 实施方案 §6 WP-D 多模态，决策 D102（图片附件按引用、不支持 vision 返回 422）；延续 D63（附件隔离）、D88 / D89（附件分级继承）。
+- 性质：非破坏性（按第 2 节规则 2 递增次版本号，可在阶段内合并）。
+- 变更内容：
+  1. 新增模块 `images.py`，从包入口导出 `IMAGE_REF_TYPE`（`"image_ref"`）、`IMAGE_MEDIA_TYPES`（允许的类型 → 工作区规范扩展名）、`ImageRefError`、`image_ref_path`、`is_image_ref`、`load_image_ref`、`sniff_media_type`。
+  2. 约定 `TurnInput.messages` 中用户消息内容块 `image_ref` 的形状与解析规则（见 §1.7）：平台历史、事件日志、初始消息指纹与重建历史中只出现引用与元数据（类型、字节数、sha256），图片内容只在适配器发送时读取。
+  3. `CONTRACT_VERSION` 由 `1.1.0` 改为 `1.2.0`。
+- 不变：`TurnInput` / `SessionSpec` / `HarnessCapabilities` 字段不变（`supports_vision` 早已存在，现由 litellm 与 claude-sdk 声明为 true）；`Event` 判别联合、`RunEventType`、`RunState` 与 `capability_tier()` 不变；`TurnInput.attachments` 语义不变。
+- 兼容性：不含图片附件的请求，历史形状与 1.1.0 完全一致（只有文本附件时附件说明消息仍为字符串）；`supports_vision=False` 的适配器（mock / stdio）不会收到 `image_ref`。
+- 契约测试：`packages/contract/tests/test_contract.py` 新增 `test_image_ref_load_and_validation`（导出、读取与 base64、文件头识别、格式 / 路径穿越 / 缺失 / 指纹 / 类型不符失败关闭）。

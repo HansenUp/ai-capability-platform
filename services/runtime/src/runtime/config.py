@@ -28,7 +28,17 @@ class Settings:
         default_factory=lambda: secret_store.get("DATABASE_URL", "sqlite+aiosqlite:///./runtime.db") or "", repr=False
     )
     workspace_dir: str = field(default_factory=lambda: _env("WORKSPACE_DIR", "./runtime-workspace"))  # Run 工作区根目录
-    harness: str = field(default_factory=lambda: _env("HARNESS", "mock"))  # mock | claude-sdk | stdio（默认 harness）
+    # 默认 harness：mock | litellm | claude-sdk | stdio | goose | dsh
+    harness: str = field(default_factory=lambda: _env("HARNESS", "mock"))
+    # goose / dsh（经 ACP 桥接入的 stdio harness，S6 D91）的可执行文件：goose 默认按 PATH 查找，dsh 默认为平台约定的 npm 安装位置
+    goose_bin: str = field(default_factory=lambda: _env("GOOSE_BIN", "goose"))
+    dsh_bin: str = field(default_factory=lambda: os.path.expanduser(_env("DSH_BIN", DEFAULT_DSH_BIN)))
+    # goose / dsh 的进程池（S6 §3，D99/D100；每个 harness 一个池，参数相同）：预热空闲 worker 数、worker 总数上限、
+    # 池满时等待 worker 的最长秒数（超时即 POOL_EXHAUSTED，可重试）、单个 worker 进程组的 RSS 上限（MiB）
+    harness_pool_min_idle: int = field(default_factory=lambda: int(_env("HARNESS_POOL_MIN_IDLE", "1")))
+    harness_pool_max_workers: int = field(default_factory=lambda: int(_env("HARNESS_POOL_MAX_WORKERS", "8")))
+    harness_pool_acquire_timeout_s: float = field(default_factory=lambda: float(_env("HARNESS_POOL_ACQUIRE_TIMEOUT_S", "10")))
+    harness_pool_rss_limit_mb: int = field(default_factory=lambda: int(_env("HARNESS_POOL_RSS_LIMIT_MB", "2048")))
     model_gateway_url: str = field(default_factory=lambda: _env("MODEL_GATEWAY_URL", "http://localhost:4000"))  # 模型网关地址
     # 调用模型网关的 Key：本机为 LiteLLM 开发主密钥，生产环境使用按 Agent 签发的虚拟 Key
     model_gateway_api_key: str = field(default_factory=lambda: secret_store.get("MODEL_GATEWAY_API_KEY", DEV_GATEWAY_KEY) or "", repr=False)
@@ -45,6 +55,16 @@ class Settings:
     confidential_model_aliases: tuple[str, ...] = field(
         default_factory=lambda: tuple(x for x in _env("CONFIDENTIAL_MODEL_ALIASES", "").split(",") if x)
     )
+    # 支持图片输入的模型别名（S6 多模态，D102）：带图片附件的请求只允许发给这里列出的别名，且 Agent 的 harness 须声明
+    # supports_vision，否则 422 ATTACHMENT_MODALITY_UNSUPPORTED。空表示一律拒绝（失败关闭）。逗号分隔。
+    # 不按网关 /model/info 的 supports_vision 自动判定：那是 LiteLLM 价目表的推断值，且请求期多一次网关依赖；
+    # 也不放进 default-chat 这类带回退链的别名——回退目标（如 deepseek）不支持图片。
+    vision_model_aliases: tuple[str, ...] = field(
+        default_factory=lambda: tuple(x for x in _env("VISION_MODEL_ALIASES", "").split(",") if x)
+    )
+    # 图片附件限制：单张字节上限（超限 413，默认 5 MiB，与 Anthropic 单图上限一致）与单次请求张数上限（超限 422）
+    attachment_image_max_bytes: int = field(default_factory=lambda: int(_env("ATTACHMENT_IMAGE_MAX_BYTES", str(5 * 1024 * 1024))))
+    attachment_image_max_count: int = field(default_factory=lambda: int(_env("ATTACHMENT_IMAGE_MAX_COUNT", "5")))
     # harness 持有循环（loop_owner=harness）的适配器上，允许声明高风险写工具的 Agent 白名单（S5 §4-1，逗号分隔 agent_id）；
     # 默认空 = 一律拒绝发布，业务评测后再按 Agent 放开。
     harness_loop_high_risk_allowlist: tuple[str, ...] = field(
@@ -78,6 +98,7 @@ class Settings:
     jwks_cache_ttl_s: float = field(default_factory=lambda: float(_env("JWKS_CACHE_TTL_S", "300")))  # JWKS 缓存有效期（秒）
 
 
+DEFAULT_DSH_BIN = "~/.local/share/ai-platform/dsh/node_modules/.bin/dsh"  # dsh 的平台约定安装位置（npm 锁定版本）
 DEV_GATEWAY_KEY = "sk-dev-master"  # noqa: S105 —— 本机 compose LiteLLM 的公开开发主密钥，生产禁止使用
 DEV_HOOK_DIGEST_KEY = "dev-hook-digest-key"  # noqa: S105 —— 开发用公开默认值，生产禁止使用
 

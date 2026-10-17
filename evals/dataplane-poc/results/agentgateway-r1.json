@@ -1,0 +1,107 @@
+{
+  "label": "agentgateway-r1",
+  "url": "http://agentgateway:3000/mcp",
+  "params": {
+    "concurrency": 50,
+    "procs": 10,
+    "warmup_s": 60.0,
+    "duration_s": 300.0,
+    "stream_ratio": 0.2,
+    "tool": "ticket.search",
+    "stream_tool": "ticket.get",
+    "traceparent": true
+  },
+  "started_at": "2026-10-17T16:29:47+0000",
+  "measure_window": [
+    1792254647.7649887,
+    1792254947.7649887
+  ],
+  "latency_ms": {
+    "search": {
+      "p50": 42.885021000984125,
+      "p95": 167.5393647456076,
+      "p99": 182.41548740443255,
+      "mean": 53.42217353329393,
+      "n": 183966
+    },
+    "stream": {
+      "p50": 90.32408399798442,
+      "p95": 221.24794220144395,
+      "p99": 236.2911183189135,
+      "mean": 112.23040468898,
+      "n": 46053
+    },
+    "all": {
+      "p50": 45.11099999945145,
+      "p95": 180.3642716979084,
+      "p99": 221.49021262055615,
+      "mean": 65.19639857302026,
+      "n": 230019
+    }
+  },
+  "ttfb_ms": {
+    "p50": 37.91662499861559,
+    "p95": 161.8265997996787,
+    "p99": 176.36561115941734,
+    "mean": 47.77881541877867,
+    "n": 46053
+  },
+  "requests": 230019,
+  "errors": 0,
+  "errors_by_kind": {
+    "search": 0,
+    "stream": 0
+  },
+  "error_rate": 0.0,
+  "rps": 766.73,
+  "session_errors": 0,
+  "error_samples": [],
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "python": "3.12.0",
+    "machine": "arm64",
+    "cpu": "Apple M1 Max",
+    "ncpu": "10",
+    "memsize": "68719476736",
+    "docker": "28.3.2 cpus=10 mem=8218034176",
+    "images": {
+      "agentgateway": "ghcr.io/agentgateway/agentgateway:v1.6.0",
+      "contextforge": "ghcr.io/ibm/mcp-context-forge:v1.0.11",
+      "python_runtime": "ai-platform/dataplane-poc-py:local (FROM ghcr.io/ibm/mcp-context-forge:v1.0.11)"
+    }
+  },
+  "resources": {
+    "upstream": {
+      "cpu_pct_mean": 98.60812080536913,
+      "cpu_pct_max": 102.65,
+      "mem_mib_max": 129.4,
+      "samples": 149
+    },
+    "policy": {
+      "cpu_pct_mean": 21.084161073825502,
+      "cpu_pct_max": 24.59,
+      "mem_mib_max": 85.23,
+      "samples": 149
+    },
+    "agentgateway": {
+      "cpu_pct_mean": 52.7038255033557,
+      "cpu_pct_max": 67.96,
+      "mem_mib_max": 60.45,
+      "samples": 149
+    },
+    "selfbuilt": {
+      "cpu_pct_mean": 67.96389261744967,
+      "cpu_pct_max": 84.2,
+      "mem_mib_max": 150.6,
+      "samples": 149
+    }
+  },
+  "gateway_container": "agentgateway",
+  "target": "agentgateway",
+  "round": 1,
+  "loadgen_runtime": {
+    "where": "docker container on network dataplane-poc_default",
+    "cpus": "6",
+    "image": "ai-platform/dataplane-poc-py:local"
+  }
+}

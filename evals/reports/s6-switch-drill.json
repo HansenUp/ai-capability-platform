@@ -1,0 +1,732 @@
+{
+  "started_at": "2026-10-17T18:46:50+00:00",
+  "alias": "deepseek-v4-pro-2026-08",
+  "pinned": {
+    "goose": "1.54.0",
+    "dsh": "0.2.0-rc.2"
+  },
+  "preflight": {
+    "versions": {
+      "goose": "1.54.0",
+      "dsh": "0.2.0-rc.2"
+    },
+    "goose_bin": "/opt/homebrew/bin/goose",
+    "dsh_bin": "/Users/mahansen/.local/share/ai-platform/dsh/node_modules/.bin/dsh",
+    "litellm_version": "1.107.0",
+    "litellm_langfuse_keys": true
+  },
+  "steps": [
+    {
+      "label": "v1 claude-sdk",
+      "version": "1",
+      "harness": "claude-sdk",
+      "run_id": "run_a096045ac86543c78219",
+      "trace_id": "5f5e9e2691b4240bfe68b42851b21cc0",
+      "state": "completed",
+      "seconds": 4.7,
+      "attempts": [
+        {
+          "run_id": "run_a096045ac86543c78219",
+          "state": "completed",
+          "precondition": true
+        }
+      ],
+      "search_requested": 1,
+      "search_executed": 1,
+      "answer_excerpt": "查询关键字“固件”的工单结果如下：\n\n- **工单号**：T-1002\n- **当前状态**：open（待处理）",
+      "usage": {
+        "input_tokens": 2792,
+        "output_tokens": 125,
+        "model_responses": 2
+      }
+    },
+    {
+      "label": "v2 goose",
+      "version": "2",
+      "harness": "goose",
+      "run_id": "run_2e051656dde4493eb918",
+      "trace_id": "4692c7ccdc01a7c2a020cad2b59b43d3",
+      "state": "completed",
+      "seconds": 3.9,
+      "attempts": [
+        {
+          "run_id": "run_2e051656dde4493eb918",
+          "state": "completed",
+          "precondition": true
+        }
+      ],
+      "search_requested": 1,
+      "search_executed": 1,
+      "answer_excerpt": "查询到 1 个包含“固件”的工单：\n\n- **工单号**：T-1002\n- **当前状态**：open（待处理）\n\n（标题：工业路由器 IR-500 固件升级后频繁掉线，优先级：高）",
+      "usage": {
+        "input_tokens": 2185,
+        "output_tokens": 139,
+        "model_responses": 2
+      }
+    },
+    {
+      "label": "v3 dsh",
+      "version": "3",
+      "harness": "dsh",
+      "run_id": "run_a348ee786d854c55a89d",
+      "trace_id": "b8f451009546873cc252e4631f2938fa",
+      "state": "completed",
+      "seconds": 5.1,
+      "attempts": [
+        {
+          "run_id": "run_a348ee786d854c55a89d",
+          "state": "completed",
+          "precondition": true
+        }
+      ],
+      "search_requested": 1,
+      "search_executed": 1,
+      "answer_excerpt": "查询关键字“固件”的工单，结果如下：\n\n- 工单号：**T-1002**\n- 当前状态：**open**（未处理）",
+      "usage": {
+        "input_tokens": 2210,
+        "output_tokens": 118,
+        "model_responses": 2
+      }
+    },
+    {
+      "label": "回切 claude-sdk",
+      "version": "1",
+      "harness": "claude-sdk",
+      "run_id": "run_1a03700b7abf4c9b9fe2",
+      "trace_id": "e8df0573d432839461d66f3cad5c75a4",
+      "state": "completed",
+      "seconds": 2.7,
+      "attempts": [
+        {
+          "run_id": "run_1a03700b7abf4c9b9fe2",
+          "state": "completed",
+          "precondition": true
+        }
+      ],
+      "search_requested": 1,
+      "search_executed": 1,
+      "answer_excerpt": "查询关键字“固件”的工单结果如下：\n\n- 工单号：T-1002\n- 当前状态：open（待处理）\n\n共 1 条记录。",
+      "usage": {
+        "input_tokens": 2805,
+        "output_tokens": 129,
+        "model_responses": 2
+      }
+    }
+  ],
+  "goose": {
+    "second_message": {
+      "run_id": "run_9a3780e649d54f09af33",
+      "attempts": [
+        {
+          "run_id": "run_9a3780e649d54f09af33",
+          "state": "completed",
+          "precondition": true
+        }
+      ],
+      "answer_excerpt": "查询结果如下：\n\n- 工单号：T-1002\n- 当前状态：open（未处理）\n\n口令：口令1BE56F",
+      "word": "口令1BE56F"
+    },
+    "approval": {
+      "run_id": "run_42ca66278a3e4a7fa013",
+      "attempts": [
+        {
+          "run_id": "run_42ca66278a3e4a7fa013",
+          "state": "auth-required",
+          "precondition": true
+        }
+      ],
+      "call_id": "call_00_mZtuC4forIluKVSVo6cT8624",
+      "tool_executed": 1,
+      "answer_excerpt": "已为您关闭工单 T-1003。"
+    },
+    "cancel": {
+      "before": {
+        "bridges": [
+          {
+            "pid": 70507,
+            "pgid": 70507
+          }
+        ],
+        "group_procs": [
+          {
+            "pid": 70507,
+            "pgid": 70507,
+            "cmd": "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m ai_harness_stdio.acp.bridge --profile goose"
+          },
+          {
+            "pid": 70508,
+            "pgid": 70507,
+            "cmd": "/opt/homebrew/bin/goose acp"
+          }
+        ],
+        "agents": [
+          {
+            "pid": 70508,
+            "pgid": 70507
+          }
+        ],
+        "stray_agents": []
+      },
+      "run_id": "run_78382954aed142ec8251",
+      "during": {
+        "bridges": [
+          {
+            "pid": 70516,
+            "pgid": 70516
+          },
+          {
+            "pid": 70507,
+            "pgid": 70507
+          }
+        ],
+        "group_procs": [
+          {
+            "pid": 70516,
+            "pgid": 70516,
+            "cmd": "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m ai_harness_stdio.acp.bridge --profile goose"
+          },
+          {
+            "pid": 70518,
+            "pgid": 70516,
+            "cmd": "/opt/homebrew/bin/goose acp"
+          },
+          {
+            "pid": 70507,
+            "pgid": 70507,
+            "cmd": "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m ai_harness_stdio.acp.bridge --profile goose"
+          },
+          {
+            "pid": 70508,
+            "pgid": 70507,
+            "cmd": "/opt/homebrew/bin/goose acp"
+          }
+        ],
+        "agents": [
+          {
+            "pid": 70518,
+            "pgid": 70516
+          },
+          {
+            "pid": 70508,
+            "pgid": 70507
+          }
+        ],
+        "stray_agents": []
+      },
+      "after": {
+        "bridges": [
+          {
+            "pid": 70516,
+            "pgid": 70516
+          }
+        ],
+        "group_procs": [
+          {
+            "pid": 70516,
+            "pgid": 70516,
+            "cmd": "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m ai_harness_stdio.acp.bridge --profile goose"
+          },
+          {
+            "pid": 70518,
+            "pgid": 70516,
+            "cmd": "/opt/homebrew/bin/goose acp"
+          }
+        ],
+        "agents": [
+          {
+            "pid": 70518,
+            "pgid": 70516
+          }
+        ],
+        "stray_agents": []
+      },
+      "leftover": [],
+      "state": "canceled"
+    }
+  },
+  "notes": [],
+  "snapshots": [
+    {
+      "version": "1",
+      "harness": "claude-sdk",
+      "harness_version": "0.3",
+      "status": "published"
+    },
+    {
+      "version": "2",
+      "harness": "goose",
+      "harness_version": "1.54.0",
+      "status": "retired"
+    },
+    {
+      "version": "3",
+      "harness": "dsh",
+      "harness_version": "0.2.0-rc.2",
+      "status": "retired"
+    }
+  ],
+  "langfuse": {
+    "runs": {
+      "run_a096045ac86543c78219": {
+        "traces": [
+          "5f5e9e2691b4240bfe68b42851b21cc0"
+        ],
+        "chat_spans": 2,
+        "harness": [
+          "claude-sdk"
+        ]
+      },
+      "run_2e051656dde4493eb918": {
+        "traces": [
+          "4692c7ccdc01a7c2a020cad2b59b43d3"
+        ],
+        "chat_spans": 2,
+        "harness": [
+          "goose"
+        ],
+        "litellm_generations": 2
+      },
+      "run_a348ee786d854c55a89d": {
+        "traces": [
+          "b8f451009546873cc252e4631f2938fa"
+        ],
+        "chat_spans": 2,
+        "harness": [
+          "dsh"
+        ],
+        "litellm_generations": 2
+      },
+      "run_1a03700b7abf4c9b9fe2": {
+        "traces": [
+          "e8df0573d432839461d66f3cad5c75a4"
+        ],
+        "chat_spans": 2,
+        "harness": [
+          "claude-sdk"
+        ]
+      }
+    },
+    "litellm_callback": "checked"
+  },
+  "finished_at": "2026-10-17T18:47:28+00:00",
+  "checks": [
+    {
+      "section": "preflight",
+      "check": "goose 版本 '1.54.0' 等于钉定版本 1.54.0",
+      "passed": true
+    },
+    {
+      "section": "preflight",
+      "check": "dsh 版本 '0.2.0-rc.2' 等于钉定版本 0.2.0-rc.2",
+      "passed": true
+    },
+    {
+      "section": "preflight",
+      "check": "goose 1.54.0 的真实探针存档 evals/reports/probe-real/goose-1.54.0.json 存在且通过（make probe-real，D98）",
+      "passed": true
+    },
+    {
+      "section": "preflight",
+      "check": "dsh 0.2.0-rc.2 的真实探针存档 evals/reports/probe-real/dsh-0.2.0-rc.2.json 存在且通过（make probe-real，D98）",
+      "passed": true
+    },
+    {
+      "section": "preflight",
+      "check": "LiteLLM 存活且登记了别名 deepseek-v4-pro-2026-08",
+      "passed": true
+    },
+    {
+      "section": "发布",
+      "check": "发布 ticket-summary v1（claude-sdk）",
+      "passed": true
+    },
+    {
+      "section": "v1 claude-sdk",
+      "check": "v1 claude-sdk：Run completed",
+      "passed": true
+    },
+    {
+      "section": "v1 claude-sdk",
+      "check": "v1 claude-sdk：选版落到 v1（RUN_CREATED.agent_version=1）",
+      "passed": true
+    },
+    {
+      "section": "v1 claude-sdk",
+      "check": "v1 claude-sdk：ticket.search 的 TOOL_EXECUTED 恰好一次（请求 1、执行 1）",
+      "passed": true
+    },
+    {
+      "section": "v1 claude-sdk",
+      "check": "v1 claude-sdk：ticket.search 结果 ok",
+      "passed": true
+    },
+    {
+      "section": "v1 claude-sdk",
+      "check": "v1 claude-sdk：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\\n\\n- **工单号**：T-1002\\n- **当前状态**：open（待处理）'…）",
+      "passed": true
+    },
+    {
+      "section": "v1 claude-sdk",
+      "check": "v1 claude-sdk：用量 > 0（{'input_tokens': 2792, 'output_tokens': 125, 'model_responses': 2}）",
+      "passed": true
+    },
+    {
+      "section": "发布",
+      "check": "v2 由 v1 深拷贝，只改 harness（diff ['harness', 'version']）",
+      "passed": true
+    },
+    {
+      "section": "发布",
+      "check": "发布 ticket-summary v2（goose）",
+      "passed": true
+    },
+    {
+      "section": "v2 goose",
+      "check": "v2 goose：Run completed",
+      "passed": true
+    },
+    {
+      "section": "v2 goose",
+      "check": "v2 goose：选版落到 v2（RUN_CREATED.agent_version=2）",
+      "passed": true
+    },
+    {
+      "section": "v2 goose",
+      "check": "v2 goose：ticket.search 的 TOOL_EXECUTED 恰好一次（请求 1、执行 1）",
+      "passed": true
+    },
+    {
+      "section": "v2 goose",
+      "check": "v2 goose：ticket.search 结果 ok",
+      "passed": true
+    },
+    {
+      "section": "v2 goose",
+      "check": "v2 goose：回答含工单号 T-1002（'查询到 1 个包含“固件”的工单：\\n\\n- **工单号**：T-1002\\n- **当前状态**：open（待处理）\\n\\n（标'…）",
+      "passed": true
+    },
+    {
+      "section": "v2 goose",
+      "check": "v2 goose：用量 > 0（{'input_tokens': 2185, 'output_tokens': 139, 'model_responses': 2}）",
+      "passed": true
+    },
+    {
+      "section": "goose 第二条消息",
+      "check": "第二条消息：Run completed（completed）",
+      "passed": true
+    },
+    {
+      "section": "goose 第二条消息",
+      "check": "第二条消息：由 v2（goose）执行",
+      "passed": true
+    },
+    {
+      "section": "goose 第二条消息",
+      "check": "第二条消息：回答含工单号 T-1002",
+      "passed": true
+    },
+    {
+      "section": "goose 第二条消息",
+      "check": "第二条消息：回答复述了只在第一条用户消息里的口令 口令1BE56F（历史经 shim 重放到模型）",
+      "passed": true
+    },
+    {
+      "section": "goose 第二条消息",
+      "check": "第二条消息：每个工具调用恰好执行一次",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "未在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中的 goose Agent 声明高风险写，发布被拒（HTTP 409）",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "白名单内的 s6-goose-approve（goose + ticket.close_batch）发布成功",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "挂起：影响预览卡片 + done(awaiting)",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "Run 状态 auth-required",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "carol 审批通过",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "第三人 bob 续跑 403（HTTP 403）",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "审批人 carol 续跑 403（续跑只允许发起人，HTTP 403）",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "发起人篡改初始消息续跑 409（HTTP 409）",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "alice 续跑：done(end_turn)",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "续跑后 Run completed",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "TOOL_EXECUTED 只出现一次（1），TOOL_EXECUTING 一次（1）",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "续跑后模型没有重新请求 close_batch（不重新决策）",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "close_batch 结果 ok",
+      "passed": true
+    },
+    {
+      "section": "goose 审批续跑",
+      "check": "续跑经新 goose 会话（resume 重放）发起了后续模型调用",
+      "passed": true
+    },
+    {
+      "section": "goose 取消",
+      "check": "发布 s6-goose-writer（goose）",
+      "passed": true
+    },
+    {
+      "section": "goose 取消",
+      "check": "取消前池处于 min_idle（桥 1 个）",
+      "passed": true
+    },
+    {
+      "section": "goose 取消",
+      "check": "第三人 bob 取消 403",
+      "passed": true
+    },
+    {
+      "section": "goose 取消",
+      "check": "发起人 alice 取消 200",
+      "passed": true
+    },
+    {
+      "section": "goose 取消",
+      "check": "Run 状态 canceled（canceled）",
+      "passed": true
+    },
+    {
+      "section": "goose 取消",
+      "check": "取消后 0.3s 内被租用 worker 的进程组全部回收（取消时组内 4 个进程，残留 []）",
+      "passed": true
+    },
+    {
+      "section": "goose 取消",
+      "check": "池回到 min_idle=1（桥 1 个，每个一个 goose agent，无游离 agent）",
+      "passed": true
+    },
+    {
+      "section": "goose 取消",
+      "check": "goose 加测结束后池处于 min_idle（桥 1 个）",
+      "passed": true
+    },
+    {
+      "section": "发布",
+      "check": "v3 由 v1 深拷贝，只改 harness（diff ['harness', 'version']）",
+      "passed": true
+    },
+    {
+      "section": "发布",
+      "check": "发布 ticket-summary v3（dsh）",
+      "passed": true
+    },
+    {
+      "section": "v3 dsh",
+      "check": "v3 dsh：Run completed",
+      "passed": true
+    },
+    {
+      "section": "v3 dsh",
+      "check": "v3 dsh：选版落到 v3（RUN_CREATED.agent_version=3）",
+      "passed": true
+    },
+    {
+      "section": "v3 dsh",
+      "check": "v3 dsh：ticket.search 的 TOOL_EXECUTED 恰好一次（请求 1、执行 1）",
+      "passed": true
+    },
+    {
+      "section": "v3 dsh",
+      "check": "v3 dsh：ticket.search 结果 ok",
+      "passed": true
+    },
+    {
+      "section": "v3 dsh",
+      "check": "v3 dsh：回答含工单号 T-1002（'查询关键字“固件”的工单，结果如下：\\n\\n- 工单号：**T-1002**\\n- 当前状态：**open**（未处理）'…）",
+      "passed": true
+    },
+    {
+      "section": "v3 dsh",
+      "check": "v3 dsh：用量 > 0（{'input_tokens': 2210, 'output_tokens': 118, 'model_responses': 2}）",
+      "passed": true
+    },
+    {
+      "section": "v3 dsh",
+      "check": "dsh 步骤结束后池处于 min_idle（桥 1 个）",
+      "passed": true
+    },
+    {
+      "section": "回切",
+      "check": "一键回滚到 v1，v2 / v3 retired（{\"agent_id\":\"ticket-summary\",\"active_version\":\"1\",\"retired\":[\"2\",\"3\"]}）",
+      "passed": true
+    },
+    {
+      "section": "回切 claude-sdk",
+      "check": "回切 claude-sdk：Run completed",
+      "passed": true
+    },
+    {
+      "section": "回切 claude-sdk",
+      "check": "回切 claude-sdk：选版落到 v1（RUN_CREATED.agent_version=1）",
+      "passed": true
+    },
+    {
+      "section": "回切 claude-sdk",
+      "check": "回切 claude-sdk：ticket.search 的 TOOL_EXECUTED 恰好一次（请求 1、执行 1）",
+      "passed": true
+    },
+    {
+      "section": "回切 claude-sdk",
+      "check": "回切 claude-sdk：ticket.search 结果 ok",
+      "passed": true
+    },
+    {
+      "section": "回切 claude-sdk",
+      "check": "回切 claude-sdk：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\\n\\n- 工单号：T-1002\\n- 当前状态：open（待处理）\\n\\n共 1 条记录。'…）",
+      "passed": true
+    },
+    {
+      "section": "回切 claude-sdk",
+      "check": "回切 claude-sdk：用量 > 0（{'input_tokens': 2805, 'output_tokens': 129, 'model_responses': 2}）",
+      "passed": true
+    },
+    {
+      "section": "发布",
+      "check": "Runtime 库中 v1/v2/v3 快照除 harness（及随之冻结的 harness_version）外一致（比较 ['agent_id', 'config', 'eval_passed', 'eval_run_ref', 'model_alias', 'model_resolved', 'retrieval_config', 'rollout_allowlist', 'skills_digest', 'system_prompt', 'tenant_id', 'tools_schema_version']）",
+      "passed": true
+    },
+    {
+      "section": "发布",
+      "check": "版本快照的 harness_version 对 goose / dsh 冻结为二进制版本 {'goose': '1.54.0', 'dsh': '0.2.0-rc.2'}（钉定 {'goose': '1.54.0', 'dsh': '0.2.0-rc.2'}；开会话时据此核对）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v1 claude-sdk：Langfuse 有该 Run 的 Trace（1 条，ai.run_id 一致）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v1 claude-sdk：Trace 的 ai.harness = claude-sdk（{'claude-sdk'}）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v1 claude-sdk：模型 span 2 个，均带用量",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v2 goose：Langfuse 有该 Run 的 Trace（1 条，ai.run_id 一致）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v2 goose：Trace 的 ai.harness = goose（{'goose'}）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v2 goose：模型 span 2 个，均带用量",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v3 dsh：Langfuse 有该 Run 的 Trace（1 条，ai.run_id 一致）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v3 dsh：Trace 的 ai.harness = dsh（{'dsh'}）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v3 dsh：模型 span 2 个，均带用量",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "回切 claude-sdk：Langfuse 有该 Run 的 Trace（1 条，ai.run_id 一致）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "回切 claude-sdk：Trace 的 ai.harness = claude-sdk（{'claude-sdk'}）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "回切 claude-sdk：模型 span 2 个，均带用量",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "goose 加测的 Run 在 Langfuse 中均有 Trace（缺 []）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v2 goose：LiteLLM 侧 generation 2 条带 run_id（Run 内模型调用 2 次）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v2 goose：LiteLLM 侧只有元数据（输入 / 输出均为 redacted-by-litellm，无工单内容）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v3 dsh：LiteLLM 侧 generation 2 条带 run_id（Run 内模型调用 2 次）",
+      "passed": true
+    },
+    {
+      "section": "Langfuse",
+      "check": "v3 dsh：LiteLLM 侧只有元数据（输入 / 输出均为 redacted-by-litellm，无工单内容）",
+      "passed": true
+    },
+    {
+      "section": "进程",
+      "check": "Runtime 退出后 15s 内演练中出现过的 8 个 ACP 桥 / agent 进程全部结束（残留 []）",
+      "passed": true
+    }
+  ],
+  "failures": [],
+  "passed": true,
+  "logs_dir": "/var/folders/57/4jrkpsv12rx3jvcbgj30b34h0000gn/T/s6-e2e-cvdlznfx"
+}

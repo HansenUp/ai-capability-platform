@@ -15,6 +15,9 @@ tool_result 块内。
   随后到达的 tool_result 被当作重复结果丢弃；
 - ``--no-session-persistence`` 与 ``--resume`` 可以共存：CLI 读入转录，但不再写回。
 
+图片（S6，D102）：平台历史里的图片只是 ``image_ref`` 引用（Contract V1.2）；合成转录时才从本 Run 工作区读取、校验
+sha256，写成 Anthropic ``image`` 块（base64 source）。转录只存在于本次查询的临时配置目录，查询结束即删除。
+
 转录格式是 CLI 的内部格式，因此 SDK 版本精确钉死（pyproject），并由 tests/test_transcript.py 用 SDK 公开的
 ``get_session_messages`` 解析合成文件、校验结构一致。
 """
@@ -29,6 +32,8 @@ import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
+
+from ai_contract import is_image_ref, load_image_ref
 
 PLATFORM_SERVER = "platform"  # 进程内 MCP server 名，决定模型看到的工具名前缀
 TOOL_PREFIX = f"mcp__{PLATFORM_SERVER}__"  # Claude Code 对 MCP 工具的命名规则：mcp__<server>__<tool>
@@ -87,10 +92,30 @@ def _text(content: Any) -> str:
     return json.dumps(content, ensure_ascii=False, default=str)
 
 
-def to_api_messages(messages: list[dict[str, Any]], statuses: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
+def _user_blocks(content: Any, workspace_dir: str | None) -> list[dict[str, Any]]:
+    """user 消息内容 → Anthropic 内容块。含 image_ref 的内容块列表逐块转换（image_ref → base64 image 块，text 原样，
+    其余转 JSON 文本）；其他内容整体作为一个文本块（与 S6 之前一致）。图片读不到或指纹不符时抛 ImageRefError。"""
+    if not (isinstance(content, list) and any(is_image_ref(p) for p in content)):
+        return [{"type": "text", "text": _text(content)}]
+    blocks: list[dict[str, Any]] = []
+    for p in content:
+        if is_image_ref(p):
+            media_type, data = load_image_ref(workspace_dir, p)
+            blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+        elif isinstance(p, Mapping) and p.get("type") == "text":
+            blocks.append({"type": "text", "text": str(p.get("text", ""))})
+        else:
+            blocks.append({"type": "text", "text": _text(p)})
+    return blocks
+
+
+def to_api_messages(
+    messages: list[dict[str, Any]], statuses: Mapping[str, str] | None = None, workspace_dir: str | None = None
+) -> list[dict[str, Any]]:
     """把平台历史转换成 Anthropic Messages 格式（user / assistant 严格交替）。
 
-    - user → user 文本；system（压缩摘要）→ user 文本块（内容原样，含 ``[compacted summary]`` 前缀）；
+    - user → user 文本；内容块列表中的 image_ref 读 ``workspace_dir`` 下的图片转成 base64 image 块（失败抛 ImageRefError）；
+      system（压缩摘要）→ user 文本块（内容原样，含 ``[compacted summary]`` 前缀）；
     - assistant 文本 → text 块；assistant tool_use → tool_use 块（工具名为 ``mcp__platform__`` + ``wire_tool_name``），
       带 reasoning 时在该助手消息开头放一个 thinking 块；
     - tool → user 消息里的 tool_result 块，内容为文本；``statuses[call_id]`` 为 denied / error 时 ``is_error=True``；
@@ -153,7 +178,7 @@ def to_api_messages(messages: list[dict[str, Any]], statuses: Mapping[str, str] 
         elif role in ("user", "system"):
             if open_calls:
                 raise TranscriptError(f"message #{i}: missing tool result for call(s) {', '.join(open_calls)}")
-            push("user", [{"type": "text", "text": _text(m.get("content"))}])
+            push("user", _user_blocks(m.get("content"), workspace_dir))
         else:
             raise TranscriptError(f"message #{i}: unsupported role {role!r}")
     if open_calls:
@@ -189,7 +214,7 @@ def from_api_messages(api_messages: list[Mapping[str, Any]], names: Mapping[str,
 
     规则见 ``ai_harness_probe.target``：助手文本在前、tool_use 在后；产生 tool_use 的那条助手消息的思维链记在
     第一个 tool_use 的 ``reasoning`` 上；CLI 注入的元文本（``CONTINUE_PROMPT``、system-reminder）剔除；
-    ``[compacted summary]`` 开头的用户文本还原为 system 消息。
+    ``[compacted summary]`` 开头的用户文本还原为 system 消息。图片块不还原（base64 无法反推平台引用），直接略过。
     """
     out: list[dict[str, Any]] = []
     for msg in api_messages:
@@ -296,9 +321,11 @@ def write_transcript(
     *,
     model: str,
     statuses: Mapping[str, str] | None = None,
+    workspace_dir: str | None = None,
 ) -> Path:
-    """把平台历史合成为 CLI 会话转录并写盘，返回文件路径。历史不合法时抛 TranscriptError（不写文件）。"""
-    api = to_api_messages(messages, statuses)
+    """把平台历史合成为 CLI 会话转录并写盘，返回文件路径。历史不合法时抛 TranscriptError、图片附件不可用时抛
+    ImageRefError（均不写文件）。``workspace_dir`` 为本 Run 工作区，image_ref 从中读取。"""
+    api = to_api_messages(messages, statuses, workspace_dir)
     path = transcript_path(config_dir, cwd, session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = (json.dumps(e, ensure_ascii=False) + "\n" for e in transcript_entries(api, session_id=session_id, cwd=cwd, model=model))

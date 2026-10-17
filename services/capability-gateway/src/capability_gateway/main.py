@@ -6,7 +6,8 @@
 - Token Exchange：`POST /token/exchange` 按 RFC 8693 向 Keycloak 换取带 `act` 声明的 OBO 令牌；
 - MCP 连接器登记：`/mcp/servers`；
 - Skill 商店：`/skills`，入库前执行供应链硬规则（签名、静态扫描、评测集）；
-- 工具分发（S4.3）：`POST /invoke` 以终端用户令牌换取面向目标 MCP Server 的 OBO 令牌后转发调用。
+- 工具分发（S4.3）：`POST /invoke` 以终端用户令牌换取面向目标 MCP Server 的 OBO 令牌后转发调用；
+- MCP 数据面（S6.6，见 mcp_proxy）：`/mcp/{server}` 以 streamable-http 流式透传，换 OBO、转发前同步判定、失败关闭。
 内存存储为开发态实现，S8 工作包迁移到 MySQL。
 
 安全约束：执行者身份必须可验证，不接受客户端自称——`act` 声明由服务端依据经过认证的调用方身份组装，
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections import OrderedDict
 from typing import Annotated, Any
 
 import httpx
@@ -33,9 +35,12 @@ GATEWAY_CLIENT_ID = os.environ.get("GATEWAY_CLIENT_ID", "capability-gateway")  #
 GATEWAY_CLIENT_SECRET = os.environ.get("GATEWAY_CLIENT_SECRET", "")
 GATEWAY_ENV = os.environ.get("GATEWAY_ENV", "dev")  # dev | prod
 GATEWAY_ADMIN_TOKEN = os.environ.get("GATEWAY_ADMIN_TOKEN", "")  # 登记 MCP Server / 能力所需的管理令牌（X-Gateway-Admin-Token）
-if GATEWAY_ENV == "prod" and (not KEYCLOAK_TOKEN_URL or not GATEWAY_ADMIN_TOKEN):
-    # 生产必须走 OBO 令牌（开发态会以请求体里的主体身份调用 MCP Server），且登记接口必须受管理令牌保护
-    raise RuntimeError("GATEWAY_ENV=prod requires KEYCLOAK_TOKEN_URL and GATEWAY_ADMIN_TOKEN")
+# 第三方数据面（agentgateway ext_authz / ContextForge 插件）回调 /authz/mcp-check 的服务间共享密钥（X-Gateway-Authz-Token）
+GATEWAY_AUTHZ_TOKEN = os.environ.get("GATEWAY_AUTHZ_TOKEN", "")
+if GATEWAY_ENV == "prod" and (not KEYCLOAK_TOKEN_URL or not GATEWAY_ADMIN_TOKEN or not GATEWAY_AUTHZ_TOKEN):
+    # 生产必须走 OBO 令牌（开发态会以请求体里的主体身份调用 MCP Server），登记接口必须受管理令牌保护，
+    # 判定端点必须受共享密钥保护（否则任何人都能探测策略结果）
+    raise RuntimeError("GATEWAY_ENV=prod requires KEYCLOAK_TOKEN_URL, GATEWAY_ADMIN_TOKEN and GATEWAY_AUTHZ_TOKEN")
 TRUSTED_GATEWAY_CLIENTS = {GATEWAY_CLIENT_ID}  # 允许签发 OBO 令牌的受信任网关客户端白名单
 CORE_LIMIT = int(os.environ.get("CORE_TOOL_LIMIT", "20"))  # 核心工具预载上限，超出部分靠第二级发现
 
@@ -216,7 +221,9 @@ async def token_exchange(body: ExchangeIn, caller: Annotated[str, Depends(resolv
 
 
 # ---- 工具分发（S4.3）----
-MCP_TOKEN_CACHE: dict[tuple[str, str], tuple[str, float]] = {}  # (用户令牌摘要, audience) → (OBO 令牌, 过期时间)
+# (用户令牌摘要, audience) → (OBO 令牌, 过期时间)。LRU：命中移到末尾，超过上限从头部淘汰；读到过期项即剔除（D103）
+MCP_TOKEN_CACHE: OrderedDict[tuple[str, str], tuple[str, float]] = OrderedDict()
+MCP_TOKEN_CACHE_MAX = max(1, int(os.environ.get("MCP_TOKEN_CACHE_MAX", "10000")))
 INVOKE_TIMEOUT_S = float(os.environ.get("INVOKE_TIMEOUT_S", "30"))
 _invoke_transport: httpx.AsyncBaseTransport | None = None  # 测试注入：Keycloak 与 MCP Server 的请求经该 transport
 
@@ -247,14 +254,17 @@ _seed_mcp_servers()
 
 async def _obo_token(client: httpx.AsyncClient, subject_token: str, audience: str) -> tuple[str, float]:
     """RFC 8693 标准 Token Exchange（Keycloak 26.2+）：以终端用户令牌换取受众为目标 MCP Server 的短期令牌。
-    sub 仍是终端用户，azp 为本网关；结果按（用户令牌摘要, 受众）缓存到过期前 30 秒。"""
+    sub 仍是终端用户，azp 为本网关；结果按（用户令牌摘要, 受众）缓存到过期前 30 秒（LRU，上限 MCP_TOKEN_CACHE_MAX）。"""
     import hashlib
     import time
 
     key = (hashlib.sha256(subject_token.encode()).hexdigest(), audience)
     cached = MCP_TOKEN_CACHE.get(key)
-    if cached and time.monotonic() < cached[1]:
-        return cached
+    if cached is not None:
+        if time.monotonic() < cached[1]:
+            MCP_TOKEN_CACHE.move_to_end(key)
+            return cached
+        del MCP_TOKEN_CACHE[key]  # 过期项读时剔除，不等淘汰
     data = {
         "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
         "client_id": GATEWAY_CLIENT_ID,
@@ -272,6 +282,9 @@ async def _obo_token(client: httpx.AsyncClient, subject_token: str, audience: st
     body = r.json()
     entry = (str(body["access_token"]), time.monotonic() + float(body.get("expires_in", 60)) - 30)
     MCP_TOKEN_CACHE[key] = entry
+    MCP_TOKEN_CACHE.move_to_end(key)
+    while len(MCP_TOKEN_CACHE) > MCP_TOKEN_CACHE_MAX:
+        MCP_TOKEN_CACHE.popitem(last=False)  # 淘汰最久未使用的条目
     return entry
 
 
@@ -400,3 +413,10 @@ async def list_skills() -> list[dict[str, Any]]:
 async def healthz() -> dict[str, str]:
     """健康检查。"""
     return {"status": "ok"}
+
+
+# ---- MCP 数据面（ADR-0005 自研候选）：/mcp/{server} 流式透传 + 第三方数据面的判定回调 /authz/mcp-check ----
+# 放在末尾挂载：/mcp/servers 的登记与列表路由先注册、优先匹配；mcp_proxy 在调用时才回取本模块，避免循环导入。
+from capability_gateway import mcp_proxy  # noqa: E402
+
+app.include_router(mcp_proxy.router)

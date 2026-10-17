@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -21,11 +22,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from ai_contract import Event, RunEvent, RunEventType, RunState, TextEvent, ThinkingEvent
+from ai_contract import (
+    IMAGE_MEDIA_TYPES,
+    IMAGE_REF_TYPE,
+    ErrorEvent,
+    Event,
+    RunEvent,
+    RunEventType,
+    RunState,
+    TextEvent,
+    ThinkingEvent,
+    sniff_media_type,
+)
 from runtime.api import rollout
 from runtime.api.auth import Principal, approver_denial, check_approver, current_principal, is_admin
 from runtime.api.views import ApprovalView, ErrorDetail, RunEventsView, RunStateView, RunView
 from runtime.config import settings
+from runtime.harness import registry
 from runtime.loop import active, runner
 from runtime.loop.toolbroker import ARTIFACT_REF
 from runtime.run import invariant
@@ -42,7 +55,8 @@ class MessagesRequest(BaseModel):
     agent_version: str | None = None  # 指定版本，缺省取该 agent 已发布的最新版本
     session_id: str | None = None  # 会话标识（用于多轮关联，当前实现未强制使用）
     messages: list[dict[str, Any]]  # 本轮输入消息
-    # 附件：调用方自己此前 Run 产生的外置工件引用（artifact://<id>）；他人的工件一律 403（S4.8 附件隔离）
+    # 附件：调用方自己此前 Run 产生的外置工件引用（artifact://<id>）；他人的工件一律 403（S4.8 附件隔离）。
+    # 工件为图片（png / jpeg / webp / gif）时作为图片输入交给模型（S6，D102），见 messages 接口说明。
     attachments: list[str] = Field(default_factory=list, max_length=10)
     stream: bool = True  # 是否以 SSE 流式返回
     metadata: dict[str, Any] = Field(default_factory=dict)  # 附加元数据
@@ -172,12 +186,23 @@ async def _attachment_sources(refs: list[str], principal: Principal) -> list[tup
     return await asyncio.to_thread(_find_sources, refs, own_runs)
 
 
+# 附件工件的文件扩展名：.txt 为外置的工具结果；其余为图片工件（S6，D102），扩展名 → 声称的类型（实际类型按文件头判定）
+IMAGE_EXTS = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+ATTACHMENT_EXTS = (".txt", *IMAGE_EXTS)
+# 客户端消息内容块的白名单：列表形式的 content 只允许纯文本块 {"type": "text", "text": str}。图片、文件、音频、文档、
+# image_ref 等其他块一律 422——非文本内容只能经 attachments 引用传入（否则绕过归属、大小、类型与 vision 校验），
+# image_ref 只由服务端生成（_with_attachment_note）。
+TEXT_PART_KEYS = frozenset({"type", "text"})
+
+
 def _find_sources(refs: list[str], own_runs: list[str]) -> list[tuple[str, str]]:
     """在调用方自己的 Run 工作区中查找每个附件的源文件（文件系统操作，放在线程里执行）。"""
     out: list[tuple[str, str]] = []
     for ref in refs:
         m = ARTIFACT_REF.match(ref)
-        candidates = (os.path.join(settings.workspace_dir, r, f"{m.group(1)}.txt") for r in own_runs) if m else iter(())
+        candidates = (
+            (os.path.join(settings.workspace_dir, r, m.group(1) + ext) for r in own_runs for ext in ATTACHMENT_EXTS) if m else iter(())
+        )
         src = next((p for p in candidates if os.path.isfile(p)), None)
         if src is None:
             raise HTTPException(403, f"attachment not accessible: {ref[:80]}")
@@ -223,22 +248,103 @@ async def _attachment_meta(sources: list[tuple[str, str]]) -> list[dict[str, str
     return out
 
 
-def _with_attachment_note(sources: list[tuple[str, str]], messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """首次驱动的初始消息：有附件时在最后一条用户消息后追加一条注明附件引用的用户消息（其指纹随 RUN_CREATED 记录）。"""
+def _is_image(src: str) -> bool:
+    return os.path.splitext(src)[1] in IMAGE_EXTS
+
+
+def _is_text_part(p: Any) -> bool:
+    return isinstance(p, dict) and set(p) == TEXT_PART_KEYS and p["type"] == "text" and isinstance(p["text"], str)
+
+
+def _reject_inline_content(messages: list[dict[str, Any]]) -> None:
+    """客户端消息的 content 只能是字符串或纯文本块列表（白名单）；其他形态（图片 / 文件 / 音频 / 文档 / 伪造的
+    image_ref / 未知类型的块，或非字符串非列表的 content）一律 422 INLINE_CONTENT_UNSUPPORTED。"""
+    for m in messages:
+        if "content" not in m or isinstance(m["content"], str):
+            continue
+        content = m["content"]
+        if not isinstance(content, list) or not all(_is_text_part(p) for p in content):
+            raise HTTPException(
+                422,
+                "INLINE_CONTENT_UNSUPPORTED: message content must be a string or a list of text parts "
+                '({"type": "text", "text": ...}); images and files must be passed as attachments (artifact:// references)',
+            )
+
+
+def _check_vision(agent: AgentVersion) -> None:
+    """带图片附件时：Agent 的 harness 须声明 supports_vision，且模型别名在 VISION_MODEL_ALIASES 内，否则 422。"""
+    try:
+        vision = registry.get(agent.harness).capabilities().supports_vision
+    except Exception:  # harness 不可用：按不支持处理（失败关闭），驱动时还会以 harness 错误收尾
+        vision = False
+    if not vision or agent.model_alias not in settings.vision_model_aliases:
+        raise HTTPException(
+            422,
+            f"ATTACHMENT_MODALITY_UNSUPPORTED: model alias '{agent.model_alias}' on harness "
+            f"'{agent.harness or settings.harness}' does not accept image attachments",
+        )
+
+
+def _image_parts(sources: list[tuple[str, str]]) -> dict[str, dict[str, Any]]:
+    """校验图片附件并生成平台历史里的引用块（文件系统操作，放在线程里执行）：源文件路径 → image_ref 块。
+
+    张数超过 ATTACHMENT_IMAGE_MAX_COUNT → 422 ATTACHMENT_TOO_MANY；单张超过 ATTACHMENT_IMAGE_MAX_BYTES → 413
+    ATTACHMENT_TOO_LARGE；文件头不是 png / jpeg / webp / gif → 422 ATTACHMENT_TYPE_UNSUPPORTED（不信任扩展名）。
+    引用块只含引用与元数据（类型、字节数、sha256），图片内容由适配器发送时再从本 Run 工作区读取。"""
+    images = [(ref, src) for ref, src in sources if _is_image(src)]
+    if len(images) > settings.attachment_image_max_count:
+        raise HTTPException(422, f"ATTACHMENT_TOO_MANY: {len(images)} image attachments (limit {settings.attachment_image_max_count})")
+    out: dict[str, dict[str, Any]] = {}
+    for ref, src in images:
+        size = os.path.getsize(src)
+        if size > settings.attachment_image_max_bytes:
+            raise HTTPException(413, f"ATTACHMENT_TOO_LARGE: {ref[:80]} is {size} bytes (limit {settings.attachment_image_max_bytes})")
+        with open(src, "rb") as f:
+            data = f.read()
+        media_type = sniff_media_type(data[:16])
+        if media_type is None:
+            raise HTTPException(422, f"ATTACHMENT_TYPE_UNSUPPORTED: {ref[:80]} is not a png / jpeg / webp / gif image")
+        artifact_id = os.path.splitext(os.path.basename(src))[0]
+        out[src] = {
+            "type": IMAGE_REF_TYPE,
+            "ref": f"artifact://{artifact_id}",
+            "media_type": media_type,
+            "size": size,
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    return out
+
+
+def _with_attachment_note(
+    sources: list[tuple[str, str]], messages: list[dict[str, Any]], images: dict[str, dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """首次驱动的初始消息：有附件时在最后一条用户消息后追加一条注明附件引用的用户消息（其指纹随 RUN_CREATED 记录）。
+
+    只有文本工件时内容为字符串（与 S6 之前一致）；含图片时内容为内容块列表：一个文本块注明各附件，随后每张图片
+    一个 image_ref 引用块（Contract V1.2）——历史与事件日志里只有引用，重建出的历史同样只含引用。"""
     if not sources:
         return messages
-    note = "附件（可用 read_artifact 读取）：" + "、".join(ref for ref, _ in sources)
-    return [*messages, {"role": "user", "content": note}]
+    images = images or {}
+    texts = [ref for ref, src in sources if src not in images]
+    if not images:
+        return [*messages, {"role": "user", "content": "附件（可用 read_artifact 读取）：" + "、".join(texts)}]
+    lines = ["附件（可用 read_artifact 读取）：" + "、".join(texts)] if texts else []
+    lines.append("图片附件：" + "、".join(p["ref"] for p in images.values()))
+    return [*messages, {"role": "user", "content": [{"type": "text", "text": "\n".join(lines)}, *images.values()]}]
 
 
-def _attach(run_id: str, sources: list[tuple[str, str]]) -> None:
-    """把附件复制进新 Run 的工作区（read_artifact 只能读本 Run 的工作区）。"""
+def _attach(run_id: str, sources: list[tuple[str, str]], images: dict[str, dict[str, Any]] | None = None) -> None:
+    """把附件复制进新 Run 的工作区（read_artifact 与适配器读图都只能读本 Run 的工作区）；
+    图片按实际类型落为规范扩展名（``<id>.png`` / ``.jpg`` / ``.webp`` / ``.gif``，见 ai_contract.image_ref_path）。"""
     if not sources:
         return
+    images = images or {}
     dest = os.path.join(settings.workspace_dir, run_id)
     os.makedirs(dest, exist_ok=True)
     for _ref, src in sources:
-        shutil.copyfile(src, os.path.join(dest, os.path.basename(src)))
+        part = images.get(src)
+        name = f"{part['ref'].removeprefix('artifact://')}.{IMAGE_MEDIA_TYPES[part['media_type']]}" if part else os.path.basename(src)
+        shutil.copyfile(src, os.path.join(dest, name))
 
 
 def _sse(ev: Event) -> dict[str, str]:
@@ -252,13 +358,31 @@ def _client_visible(ev: Event) -> bool:
     return not (isinstance(ev, ThinkingEvent) and ev.visibility == "internal")
 
 
-@router.post("/v1/messages")
+@router.post(
+    "/v1/messages",
+    responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 413: {"model": ErrorDetail}, 503: {"model": ErrorDetail}},
+)
 async def messages(req: MessagesRequest, request: Request, principal: Principal = Depends(current_principal)) -> Any:
-    """对话式入口：创建 Run 并驱动一次执行；支持流式（SSE）与非流式（聚合后一次性返回）两种模式。"""
+    """对话式入口：创建 Run 并驱动一次执行；支持流式（SSE）与非流式（聚合后一次性返回）两种模式。
+
+    图片附件（S6，D102）：attachments 中的工件是 png / jpeg / webp / gif 图片时作为图片输入交给模型——历史里只记引用
+    （image_ref），适配器发送时再从本 Run 工作区读取。归属与分级继承规则与其他附件相同（他人工件 403）。错误：
+    Agent 的 harness 或模型别名不支持图片 → 422 `ATTACHMENT_MODALITY_UNSUPPORTED`；图片张数超限 → 422
+    `ATTACHMENT_TOO_MANY`；文件头不是允许的类型 → 422 `ATTACHMENT_TYPE_UNSUPPORTED`；单张超限 → 413
+    `ATTACHMENT_TOO_LARGE`；messages 的 content 只能是字符串或纯文本块列表，其他内容块（图片、文件、音频等）→ 422
+    `INLINE_CONTENT_UNSUPPORTED`（detail 以错误码开头）。
+
+    harness 进程池已满（goose / dsh，S6）：可重试——非流式返回 503 `POOL_EXHAUSTED`；流式（响应头已发出）下发
+    error（code=POOL_EXHAUSTED，retryable=true）后 done(error)。两种情况本 Run 均为 failed，重发请求即可。"""
     agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
+    _reject_inline_content(req.messages)
     sources = await _attachment_sources(req.attachments, principal) if req.attachments else []
+    images: dict[str, dict[str, Any]] = {}
+    if any(_is_image(src) for _, src in sources):
+        _check_vision(agent)
+        images = await asyncio.to_thread(_image_parts, sources)
     attachments = await _attachment_meta(sources) if sources else None
-    messages = _with_attachment_note(sources, req.messages)
+    messages = _with_attachment_note(sources, req.messages, images)
     run_id = await runner.create_run(
         agent,
         principal.subject,
@@ -269,7 +393,7 @@ async def messages(req: MessagesRequest, request: Request, principal: Principal 
         initial_messages=messages,
     )
     request.state.audit_object = f"run:{run_id}"
-    _attach(run_id, sources)
+    _attach(run_id, sources, images)
     gen = runner.drive(run_id, agent, principal.subject, messages, credential=principal.token)
     if req.stream:
 
@@ -280,6 +404,9 @@ async def messages(req: MessagesRequest, request: Request, principal: Principal 
 
         return EventSourceResponse(stream(), headers={"X-Run-Id": run_id})
     events = [ev async for ev in gen if _client_visible(ev)]  # 非流式：先消费完整个生成器，再聚合返回
+    exhausted = next((e for e in events if isinstance(e, ErrorEvent) and e.code == runner.POOL_EXHAUSTED), None)
+    if exhausted is not None:
+        raise HTTPException(503, f"{runner.POOL_EXHAUSTED}: {exhausted.message}", headers={"Retry-After": "1"})
     text = "".join(e.delta for e in events if isinstance(e, TextEvent))
     return {"run_id": run_id, "content": text, "events": [e.model_dump() for e in events]}
 
@@ -316,8 +443,10 @@ class RunCreate(BaseModel):
 
 @router.post("/v1/runs", status_code=202, response_model=RunStateView, responses={404: {"model": ErrorDetail}})
 async def create_run(req: RunCreate, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
-    """创建一个 Run 并立即返回 202（已接受）；实际驱动在后台任务中异步执行。"""
+    """创建一个 Run 并立即返回 202（已接受）；实际驱动在后台任务中异步执行。
+    input 的 content 规则同 /v1/messages：只能是字符串或纯文本块列表，否则 422 `INLINE_CONTENT_UNSUPPORTED`。"""
     agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
+    _reject_inline_content(req.input)
     run_id = await runner.create_run(agent, principal.subject, None, actor=principal.actor, rollout=reason, initial_messages=req.input)
     request.state.audit_object = f"run:{run_id}"
     # In production a worker picks this up from Redis Streams; here we execute eagerly in background.

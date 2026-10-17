@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+# 数据面 POC 候选 2：agentgateway v1.6.0（声明式配置，无 fork）。
+# - 身份：jwtAuth 校验 Keycloak 签发的 OBO 令牌（iss / aud=mcp-ticket / exp），backendAuth.passthrough 把原令牌原样交给上游；
+# - 客户端身份头：上游请求删除 X-AI-Dev-* 与 X-AI-Act，X-AI-Act 由网关按 X-AI-Agent 重新写入；
+# - 策略：tools/call 前经 HTTP ext_authz 同步回调平台判定端点（selfbuilt 的 /authz/mcp-check，再转策略服务），
+#   非 2xx 即拒绝，判定端点不可达时 failureMode: deny（失败关闭）；判定请求带目标 Server 名 server = mcp.tool.target
+#   （处理该 tools/call 的 target 名，CEL 请求期变量；target 因此以平台登记名 mcp-ticket 命名），判定端点据此校验工具
+#   属于该 Server 的业务系统，防止跨 Server 同名工具按别的系统判 allow；并带服务间共享密钥 X-Gateway-Authz-Token
+#   （与判定端点的 GATEWAY_AUTHZ_TOKEN 一致；此处为 POC 开发值，生产由密钥管理注入配置）；
+# - 可观测：OTLP/gRPC 导出到 POC 的 otel 服务（功能用例时转发到 compose-dev Collector → Langfuse），Span 属性带 run_id、call_id、工具名、判定结果。
+frontendPolicies:
+  tracing:
+    host: otel:4317
+    protocol: grpc
+    randomSampling: true
+    attributes:
+      ai.run_id: 'default(request.headers["x-ai-run-id"], "")'
+      ai.call_id: 'default(request.headers["x-ai-call-id"], "")'
+      gen_ai.tool.name: 'default(mcp.tool.name, "")'
+      # 判定结果：tools/call 被 ext_authz 拒绝时网关直接回 403（不到达上游）。不用 extAuthz.metadata 取响应体里的
+      # decision：v1.6.0 下 metadata 与后端 CEL transformations 同时启用时，上游 SSE 响应会被整段缓冲（首字节退化为整段时延）
+      ai.authz.decision: 'has(mcp.tool) ? (response.code == 403 ? "deny" : "allow") : ""'
+mcp:
+  port: 3000
+  statefulMode: stateful
+  policies:
+    jwtAuth:
+      mode: strict
+      issuer: http://localhost:8180/realms/ai-platform
+      audiences: [mcp-ticket]
+      jwks:
+        url: http://host.docker.internal:8180/realms/ai-platform/protocol/openid-connect/certs
+    extAuthz:
+      conditional:
+      # mcp.tool 只在 tools/call 时存在：initialize、tools/list 等不回调判定端点
+      - condition: has(mcp.tool)
+        host: selfbuilt:8082
+        failureMode: deny
+        protocol:
+          http:
+            path: '"/authz/mcp-check"'
+            addRequestHeaders:
+              content-type: '"application/json"'
+              ":method": '"POST"'
+              x-gateway-authz-token: '"poc-authz-token-dev"'
+            body: |
+              {"server": mcp.tool.target, "tool": mcp.tool.name, "subject": jwt.sub, "tenant": default(jwt.tenant, ""), "agent": default(request.headers["x-ai-agent"], "")}
+  targets:
+  - name: mcp-ticket                    # 与平台 MCP_SERVERS 登记名一致：ext_authz 以 mcp.tool.target 作为 server 回传
+    mcp:
+      host: http://upstream:9100/mcp
+    policies:
+      backendAuth:
+        passthrough: {}
+      transformations:
+        request:
+          set:
+            x-ai-act: '"agent:" + default(request.headers["x-ai-agent"], "unknown")'
+          remove: [x-ai-dev-sub, x-ai-dev-tenant, x-ai-dev-roles, x-ai-agent, x-ai-call-id]

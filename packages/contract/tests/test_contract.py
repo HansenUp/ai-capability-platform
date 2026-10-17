@@ -113,7 +113,7 @@ def test_contract_version_exported():
     """CONTRACT_VERSION 存在、是语义化版本号，并在 __all__ 中导出。"""
     import ai_contract
 
-    assert ai_contract.CONTRACT_VERSION == "1.1.0"
+    assert ai_contract.CONTRACT_VERSION == "1.2.0"
     assert "CONTRACT_VERSION" in ai_contract.__all__
     for name in ("InputRequiredEvent", "CardType", "ThinkingVisibility"):
         assert name in ai_contract.__all__
@@ -251,3 +251,48 @@ def test_turn_input_tool_statuses_optional_and_validated():
         TurnInput(messages=[], tool_statuses={"c1": "rejected"})
     with pytest.raises(ValidationError):
         TurnInput(messages=[], bogus=True)
+
+
+def test_image_ref_load_and_validation(tmp_path: Path) -> None:
+    """image_ref（V1.2 新增）：按引用从工作区读取图片并返回 base64；格式、路径穿越、缺失、指纹或类型不符一律 ImageRefError。"""
+    import base64
+    import hashlib
+
+    import ai_contract
+    from ai_contract import IMAGE_REF_TYPE, ImageRefError, image_ref_path, is_image_ref, load_image_ref, sniff_media_type
+
+    for name in ("IMAGE_REF_TYPE", "IMAGE_MEDIA_TYPES", "ImageRefError", "load_image_ref", "sniff_media_type"):
+        assert name in ai_contract.__all__
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    aid = "ab" * 16
+    (tmp_path / f"{aid}.png").write_bytes(png)
+    part = {
+        "type": IMAGE_REF_TYPE,
+        "ref": f"artifact://{aid}",
+        "media_type": "image/png",
+        "size": len(png),
+        "sha256": hashlib.sha256(png).hexdigest(),
+    }
+    assert is_image_ref(part) and not is_image_ref({"type": "text"})
+    assert image_ref_path(str(tmp_path), part) == str(tmp_path / f"{aid}.png")
+    assert load_image_ref(str(tmp_path), part) == ("image/png", base64.b64encode(png).decode())
+    assert sniff_media_type(b"\xff\xd8\xff\xe0") == "image/jpeg"
+    assert sniff_media_type(b"GIF89a") == "image/gif"
+    assert sniff_media_type(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == "image/webp"
+    assert sniff_media_type(b"%PDF-1.7") is None
+    bad = [
+        part | {"ref": "artifact://../../etc/passwd"},
+        part | {"media_type": "image/svg+xml"},
+        part | {"sha256": "x"},
+        part | {"sha256": "0" * 64},  # 内容与记录的指纹不符
+        part | {"ref": "artifact://" + "cd" * 16},  # 工件不存在
+        part | {"media_type": "image/jpeg"},  # 文件不存在（扩展名随类型）
+    ]
+    for p in bad:
+        with pytest.raises(ImageRefError):
+            load_image_ref(str(tmp_path), p)
+    with pytest.raises(ImageRefError):
+        load_image_ref(None, part)
+    (tmp_path / f"{aid}.png").write_bytes(b"not an image")
+    with pytest.raises(ImageRefError):  # 指纹与内容一致但不是 png
+        load_image_ref(str(tmp_path), part | {"sha256": hashlib.sha256(b"not an image").hexdigest()})

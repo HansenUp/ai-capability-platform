@@ -19,10 +19,12 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: make setup CLAUDE_SDK_EXTRAS=dev,sdk   # 进程内探针：真实 SDK + 脚本化 Transport，不需要 CLI 与模型 Key
+      # 不下载 goose / dsh 等第三方二进制（S6）：门禁对它们记 unavailable；ACP 桥由 fake ACP agent 过五项探针。
+      # 真实二进制的门禁在本机执行（make probe-real），报告按二进制版本存档。
       - run: make probe
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: probe-report, path: probe-report.json, if-no-files-found: warn }
+        with: { name: probe-report, path: "probe-report*.json", if-no-files-found: warn }
   web:                                    # 前端：pnpm 工作区安装 → 构建 sdk-web / portal-web / console-web
     runs-on: ubuntu-latest
     steps:

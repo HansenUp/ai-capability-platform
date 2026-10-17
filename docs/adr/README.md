@@ -8,7 +8,7 @@
 0002 | Langfuse 自托管作为 Trace 与评测事实源 | 已采纳 | [0002-langfuse-as-source-of-truth.md](0002-langfuse-as-source-of-truth.md)
 0003 | APISIX 自定义插件承担身份注入与节点路由 | 已采纳 | [0003-apisix-routing-plugin.md](0003-apisix-routing-plugin.md)
 0004 | stdio Harness 首选 Goose，DeepSeek Harness 为第二实现 | 已采纳 | [0004-stdio-harness-first-choice.md](0004-stdio-harness-first-choice.md)
-0005 | 能力网关数据面 POC 范围（agentgateway / ContextForge vs 自研） | 已采纳（范围评审通过，结论待 S6 回填） | [0005-capability-gateway-dataplane-poc.md](0005-capability-gateway-dataplane-poc.md)
+0005 | 能力网关数据面 POC 范围（agentgateway / ContextForge vs 自研） | 已采纳（S6 POC 结论：agentgateway v1.6.0） | [0005-capability-gateway-dataplane-poc.md](0005-capability-gateway-dataplane-poc.md)
 0006 | 模型别名规范：`<family>-<yyyy-mm>`，Agent 快照锁定别名 | 已采纳 | [0006-model-alias-convention.md](0006-model-alias-convention.md)
 0007 | 平台定位：治理与供给优先，执行能力集成不自研 | 已采纳 | [0007-platform-positioning.md](0007-platform-positioning.md)
 0008 | 执行循环归属与适配器能力分级（L0/L1/L2） | 已采纳 | [0008-execution-loop-ownership.md](0008-execution-loop-ownership.md)

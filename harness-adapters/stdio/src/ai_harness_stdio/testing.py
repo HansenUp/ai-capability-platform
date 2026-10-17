@@ -10,23 +10,24 @@ import json
 import sys
 import tempfile
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from ai_contract import HarnessAdapter
 from ai_harness_probe import ModelScript, ProbeTarget
 
-from . import StdioHarness
+from . import PoolConfig, StdioHarness, WorkerPool
 
 
 class StdioProbeTarget:
     """ProbeTarget：当前 StdioHarness 实例 + calls.ndjson 中的模型调用记录 + 全部实例的残留子进程。"""
 
-    def __init__(self, cmd: list[str], calls: Path) -> None:
+    def __init__(self, cmd: list[str], calls: Path, pool: WorkerPool | None = None) -> None:
         self.cmd = cmd
         self.calls = calls
-        self.instances: list[StdioHarness] = [StdioHarness(cmd, name="stdio")]
+        self.pool = pool  # 池模式：各实例共享同一个池（热 worker 不计入泄漏）
+        self.instances: list[StdioHarness] = [StdioHarness(cmd, name="stdio", pool=pool)]
 
     @property
     def adapter(self) -> HarnessAdapter:
@@ -41,24 +42,33 @@ class StdioProbeTarget:
 
     async def restart(self) -> HarnessAdapter:
         await self.instances[-1].close_all()  # 模拟平台进程退出：旧实例的子进程随之结束
-        self.instances.append(StdioHarness(self.cmd, name="stdio"))
+        self.instances.append(StdioHarness(self.cmd, name="stdio", pool=self.pool))
         return self.instances[-1]
 
     async def aclose(self) -> None:
         for h in self.instances:
             await h.close_all()
+        if self.pool is not None:
+            await self.pool.aclose()
 
 
 @asynccontextmanager
-async def probe_factory(script: ModelScript) -> AsyncIterator[ProbeTarget]:
-    """stdio 的探针工厂：echo harness 脚本模式子进程，退出时关闭全部子进程并删除临时目录。"""
+async def probe_factory(script: ModelScript, pool_config: PoolConfig | None = None) -> AsyncIterator[ProbeTarget]:
+    """stdio 的探针工厂：echo harness 脚本模式子进程，退出时关闭全部子进程并删除临时目录。
+    给出 pool_config 时经 WorkerPool 运行（进程组预热 / 回收）。"""
     with tempfile.TemporaryDirectory(prefix="stdio-probe-") as tmp:
         script_path, calls = Path(tmp) / "script.json", Path(tmp) / "calls.ndjson"
         script_path.write_text(script.model_dump_json(), encoding="utf-8")
         calls.touch()
         cmd = [sys.executable, "-m", "ai_harness_stdio.echo_harness", "--script", str(script_path), "--calls", str(calls)]
-        target = StdioProbeTarget(cmd, calls)
+        pool = WorkerPool(cmd, pool_config) if pool_config is not None else None
+        target = StdioProbeTarget(cmd, calls, pool=pool)
         try:
             yield target
         finally:
             await target.aclose()
+
+
+def pooled_probe_factory(script: ModelScript) -> AbstractAsyncContextManager[ProbeTarget]:
+    """池模式的 stdio 探针工厂（min_idle=1、max_workers=4，其余默认）。"""
+    return probe_factory(script, PoolConfig(min_idle=1, max_workers=4))

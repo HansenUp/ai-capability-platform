@@ -48,7 +48,9 @@ export interface paths {
          *     3) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，
          *        否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障；
          *     4) harness 持有循环的高风险写白名单（S5 §4-1，D79）——loop_owner=harness 的适配器即便达到 L2，
-         *        声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）。
+         *        声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）；
+         *     5) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
+         *        harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值。
          *
          *     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
          */
@@ -172,6 +174,16 @@ export interface paths {
         /**
          * Messages
          * @description 对话式入口：创建 Run 并驱动一次执行；支持流式（SSE）与非流式（聚合后一次性返回）两种模式。
+         *
+         *     图片附件（S6，D102）：attachments 中的工件是 png / jpeg / webp / gif 图片时作为图片输入交给模型——历史里只记引用
+         *     （image_ref），适配器发送时再从本 Run 工作区读取。归属与分级继承规则与其他附件相同（他人工件 403）。错误：
+         *     Agent 的 harness 或模型别名不支持图片 → 422 `ATTACHMENT_MODALITY_UNSUPPORTED`；图片张数超限 → 422
+         *     `ATTACHMENT_TOO_MANY`；文件头不是允许的类型 → 422 `ATTACHMENT_TYPE_UNSUPPORTED`；单张超限 → 413
+         *     `ATTACHMENT_TOO_LARGE`；messages 的 content 只能是字符串或纯文本块列表，其他内容块（图片、文件、音频等）→ 422
+         *     `INLINE_CONTENT_UNSUPPORTED`（detail 以错误码开头）。
+         *
+         *     harness 进程池已满（goose / dsh，S6）：可重试——非流式返回 503 `POOL_EXHAUSTED`；流式（响应头已发出）下发
+         *     error（code=POOL_EXHAUSTED，retryable=true）后 done(error)。两种情况本 Run 均为 failed，重发请求即可。
          */
         post: operations["messages_v1_messages_post"];
         delete?: never;
@@ -192,6 +204,7 @@ export interface paths {
         /**
          * Create Run
          * @description 创建一个 Run 并立即返回 202（已接受）；实际驱动在后台任务中异步执行。
+         *     input 的 content 规则同 /v1/messages：只能是字符串或纯文本块列表，否则 422 `INLINE_CONTENT_UNSUPPORTED`。
          */
         post: operations["create_run_v1_runs_post"];
         delete?: never;
@@ -1264,6 +1277,33 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -1271,6 +1311,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
                 };
             };
         };

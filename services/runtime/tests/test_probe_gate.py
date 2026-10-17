@@ -12,7 +12,7 @@ from runtime.harness import registry
 
 
 def test_known_covers_every_loadable_harness():
-    assert set(registry.KNOWN) == {"mock", "litellm", "claude-sdk", "stdio"}
+    assert set(registry.KNOWN) == {"mock", "litellm", "claude-sdk", "stdio", "goose", "dsh"}
     assert load_entry(DEFAULT_KNOWN) is registry.KNOWN  # 门禁 CLI 默认遍历的就是 registry.KNOWN
     with pytest.raises(KeyError):
         registry.get("not-a-registered-harness")

@@ -1,0 +1,11 @@
+# POC 专用 OTel Collector：三个候选的 Span 都先到这里。
+# 压测时（POC_TRACE_EXPORTER=debug）只计数丢弃，避免每秒上千条 Span 灌进本机 Langfuse；
+# 功能用例时（POC_TRACE_EXPORTER=otlphttp/forward）转发到 compose-dev 的 Collector（→ Langfuse）。由 poc.py 切换。
+receivers: { otlp: { protocols: { grpc: { endpoint: 0.0.0.0:4317 }, http: { endpoint: 0.0.0.0:4318 } } } }
+processors: { batch: {} }
+exporters:
+  debug: { verbosity: basic }
+  otlphttp/forward: { endpoint: http://host.docker.internal:4318 }
+service:
+  pipelines:
+    traces: { receivers: [otlp], processors: [batch], exporters: ["${env:POC_TRACE_EXPORTER}"] }

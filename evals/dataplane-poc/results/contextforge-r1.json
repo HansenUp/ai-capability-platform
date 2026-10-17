@@ -1,0 +1,114 @@
+{
+  "label": "contextforge-r1",
+  "url": "http://contextforge:4444/servers/4baec8f7e0ae46e99138208fde1989c9/mcp",
+  "params": {
+    "concurrency": 50,
+    "procs": 10,
+    "warmup_s": 60.0,
+    "duration_s": 300.0,
+    "stream_ratio": 0.2,
+    "tool": "poc-upstream-ticket-search",
+    "stream_tool": "poc-upstream-ticket-get",
+    "traceparent": true
+  },
+  "started_at": "2026-10-17T16:35:50+0000",
+  "measure_window": [
+    1792255010.5686772,
+    1792255310.5686772
+  ],
+  "latency_ms": {
+    "search": {
+      "p50": 1519.5157089983695,
+      "p95": 2562.687150999411,
+      "p99": 4721.464229502163,
+      "mean": 1693.30533791072,
+      "n": 7055
+    },
+    "stream": {
+      "p50": 1552.1782094983791,
+      "p95": 3225.3777412515774,
+      "p99": 4907.365866498367,
+      "mean": 1759.6909568859182,
+      "n": 1726
+    },
+    "all": {
+      "p50": 1527.2125839983346,
+      "p95": 2771.801918002893,
+      "p99": 4791.933285603596,
+      "mean": 1706.354145375837,
+      "n": 8781
+    }
+  },
+  "ttfb_ms": {
+    "p50": 1552.1351259994844,
+    "p95": 3225.317522754267,
+    "p99": 4907.322304250556,
+    "mean": 1759.6479120771558,
+    "n": 1726
+  },
+  "requests": 8786,
+  "errors": 5,
+  "errors_by_kind": {
+    "search": 5,
+    "stream": 0
+  },
+  "error_rate": 0.0005690871841566128,
+  "rps": 29.286666666666665,
+  "session_errors": 0,
+  "error_samples": [
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":109,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding",
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":143,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding",
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":124,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding",
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":63,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding ",
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":22,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding ",
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":202,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding"
+  ],
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "python": "3.12.0",
+    "machine": "arm64",
+    "cpu": "Apple M1 Max",
+    "ncpu": "10",
+    "memsize": "68719476736",
+    "docker": "28.3.2 cpus=10 mem=8218034176",
+    "images": {
+      "agentgateway": "ghcr.io/agentgateway/agentgateway:v1.6.0",
+      "contextforge": "ghcr.io/ibm/mcp-context-forge:v1.0.11",
+      "python_runtime": "ai-platform/dataplane-poc-py:local (FROM ghcr.io/ibm/mcp-context-forge:v1.0.11)"
+    }
+  },
+  "resources": {
+    "upstream": {
+      "cpu_pct_mean": 25.21068493150685,
+      "cpu_pct_max": 41.55,
+      "mem_mib_max": 129.3,
+      "samples": 146
+    },
+    "policy": {
+      "cpu_pct_mean": 1.570958904109589,
+      "cpu_pct_max": 4.69,
+      "mem_mib_max": 84.7,
+      "samples": 146
+    },
+    "contextforge": {
+      "cpu_pct_mean": 97.77363013698631,
+      "cpu_pct_max": 137.06,
+      "mem_mib_max": 482.3,
+      "samples": 146
+    },
+    "selfbuilt": {
+      "cpu_pct_mean": 4.136849315068493,
+      "cpu_pct_max": 7.53,
+      "mem_mib_max": 148.4,
+      "samples": 146
+    }
+  },
+  "gateway_container": "contextforge",
+  "target": "contextforge",
+  "round": 1,
+  "loadgen_runtime": {
+    "where": "docker container on network dataplane-poc_default",
+    "cpus": "6",
+    "image": "ai-platform/dataplane-poc-py:local"
+  }
+}

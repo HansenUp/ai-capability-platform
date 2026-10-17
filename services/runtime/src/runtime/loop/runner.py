@@ -65,6 +65,20 @@ from runtime.state.eventlog import EventLog
 MAX_TOOL_ROUNDS = 8  # 单次 drive 调用内允许的最大模型-工具往返轮数，超出则判为失败，避免死循环
 # 只允许平台产出的事件类型：harness 若产出这些事件，runner 丢弃并记 HARNESS_FORGED_PLATFORM_EVENT。
 PLATFORM_ONLY_EVENTS = (ToolResultEvent, CardEvent, InputRequiredEvent)
+# harness 进程池已满（ai_harness_stdio.PoolExhausted.code，S6 §3）：可重试的错误码。按 code 属性识别，不导入可选依赖。
+POOL_EXHAUSTED = "POOL_EXHAUSTED"
+# 开会话时实际 harness 版本与发布快照 harness_version 不一致（S6 评审）：失败关闭，不用另一版本的 harness 跑该快照。
+HARNESS_VERSION_MISMATCH = "HARNESS_VERSION_MISMATCH"
+
+
+def _harness_version_mismatch(harness: Any, session: SessionHandle, agent: AgentVersion) -> str | None:
+    """harness 持有循环的适配器（goose / dsh，经 ACP 桥）：该会话 opened 帧回报的版本须等于快照冻结的 harness_version。
+    适配器提供 session_capabilities(session)（StdioHarness）且快照有版本时才核对；其他适配器不受影响。"""
+    probe = getattr(harness, "session_capabilities", None)
+    caps = probe(session) if agent.harness_version and callable(probe) else None
+    if caps is None or caps.loop_owner != "harness" or caps.version == agent.harness_version:
+        return None
+    return f"harness '{caps.name}' version {caps.version!r} differs from the published snapshot {agent.harness_version!r}"
 
 
 def thinking_visibility(agent: AgentVersion) -> ThinkingVisibility:
@@ -376,13 +390,36 @@ async def _drive(
                     # pre_tool 改写过入参时按 effective_input 续跑（审批指纹也是按它算的）；重放不重跑 hook。
                     effective = e.payload["effective_input"] if "effective_input" in e.payload else e.payload.get("input", {})
                     pending_call = ToolUseEvent(call_id=e.payload["call_id"], tool_name=e.payload["tool"], input=effective)
-            if any(e.type in (RunEventType.TOOL_REQUESTED, RunEventType.MODEL_RESPONSE) for e in prior):
-                # 事件日志中已有过模型响应或工具请求，说明这是续跑：先按日志重建消息历史，
-                # 再让 harness 基于重放后的统一事件流重建会话（checkpoint via replay）。
-                rc.history = invariant.rebuild_messages(prior, initial_messages)
-                session = await harness.resume(spec, EventLog.project_unified_events(prior))
-            else:
-                session = await harness.open_session(spec)
+            replay = any(e.type in (RunEventType.TOOL_REQUESTED, RunEventType.MODEL_RESPONSE) for e in prior)
+            try:
+                if replay:
+                    # 事件日志中已有过模型响应或工具请求，说明这是续跑：先按日志重建消息历史，
+                    # 再让 harness 基于重放后的统一事件流重建会话（checkpoint via replay）。
+                    rc.history = invariant.rebuild_messages(prior, initial_messages)
+                    session = await harness.resume(spec, EventLog.project_unified_events(prior))
+                else:
+                    session = await harness.open_session(spec)
+            except Exception as exc:
+                if getattr(exc, "code", None) != POOL_EXHAUSTED:
+                    raise
+                # 进程池已满（S6）：可重试，未打开会话、未调用模型。新 Run 判为失败（客户端重发即新 Run）；续跑保持
+                # working，发起人稍后可再次续跑。非流式 /v1/messages 据此返回 503。
+                msg = f"harness '{agent.harness or settings.harness}' worker pool exhausted: {exc}"[:500]
+                await log.append(run_id, RunEventType.RUN_ERROR, {"code": POOL_EXHAUSTED, "message": msg, "retryable": True})
+                if not replay:
+                    await log.transition(run_id, RunState.FAILED, POOL_EXHAUSTED)
+                await s.commit()
+                yield ErrorEvent(code=POOL_EXHAUSTED, message=msg, retryable=True)
+                yield DoneEvent(run_id=run_id, stop_reason="error")
+                return
+            version_mismatch = _harness_version_mismatch(harness, session, agent)
+            if version_mismatch is not None:  # 会话由 finally 中断回收
+                await log.append(run_id, RunEventType.RUN_ERROR, {"code": HARNESS_VERSION_MISMATCH, "message": version_mismatch})
+                await log.transition(run_id, RunState.FAILED, HARNESS_VERSION_MISMATCH)
+                await s.commit()
+                yield ErrorEvent(code=HARNESS_VERSION_MISMATCH, message=version_mismatch)
+                yield DoneEvent(run_id=run_id, stop_reason="error")
+                return
             active.register(run_id, harness, session)
             await _bind_trace(s, run_id, rs)
             await log.transition(run_id, RunState.WORKING, "start")
@@ -392,7 +429,8 @@ async def _drive(
                     "skills": "\n".join(x.name for x in assembled.skills),
                     "tools": json.dumps([t.name for t in assembled.tools]),
                     "history": json.dumps(rc.history, ensure_ascii=False),
-                }
+                },
+                history_images=ctx.count_image_refs(rc.history),
             )
             await log.append(run_id, RunEventType.CONTEXT_ASSEMBLED, plan.report() | assembled.report)
             await s.commit()

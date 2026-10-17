@@ -1,0 +1,112 @@
+{
+  "label": "contextforge-r3",
+  "url": "http://contextforge:4444/servers/4baec8f7e0ae46e99138208fde1989c9/mcp",
+  "params": {
+    "concurrency": 50,
+    "procs": 10,
+    "warmup_s": 60.0,
+    "duration_s": 300.0,
+    "stream_ratio": 0.2,
+    "tool": "poc-upstream-ticket-search",
+    "stream_tool": "poc-upstream-ticket-get",
+    "traceparent": true
+  },
+  "started_at": "2026-10-17T17:24:17+0000",
+  "measure_window": [
+    1792257917.7565982,
+    1792258217.7565982
+  ],
+  "latency_ms": {
+    "search": {
+      "p50": 1410.5337090004468,
+      "p95": 1524.7543116543966,
+      "p99": 1610.1743990019895,
+      "mean": 1400.52393332618,
+      "n": 8518
+    },
+    "stream": {
+      "p50": 1448.079437497654,
+      "p95": 1566.2014697518316,
+      "p99": 1709.9231940966997,
+      "mean": 1443.4673757988273,
+      "n": 2106
+    },
+    "all": {
+      "p50": 1417.732480000268,
+      "p95": 1536.8100867541216,
+      "p99": 1631.6902172508712,
+      "mean": 1409.0366300362134,
+      "n": 10624
+    }
+  },
+  "ttfb_ms": {
+    "p50": 1448.0371879981249,
+    "p95": 1566.1596677546186,
+    "p99": 1709.8806753481763,
+    "mean": 1443.4257445605022,
+    "n": 2106
+  },
+  "requests": 10627,
+  "errors": 3,
+  "errors_by_kind": {
+    "search": 2,
+    "stream": 1
+  },
+  "error_rate": 0.00028229980239013834,
+  "rps": 35.42333333333333,
+  "session_errors": 0,
+  "error_samples": [
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":22,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding ",
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":237,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding",
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":130,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding",
+    "HTTP 200 {\"jsonrpc\":\"2.0\",\"id\":173,\"result\":{\"content\":[{\"text\":\"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.get rejected before forwarding (d"
+  ],
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "python": "3.12.0",
+    "machine": "arm64",
+    "cpu": "Apple M1 Max",
+    "ncpu": "10",
+    "memsize": "68719476736",
+    "docker": "28.3.2 cpus=10 mem=8218034176",
+    "images": {
+      "agentgateway": "ghcr.io/agentgateway/agentgateway:v1.6.0",
+      "contextforge": "ghcr.io/ibm/mcp-context-forge:v1.0.11",
+      "python_runtime": "ai-platform/dataplane-poc-py:local (FROM ghcr.io/ibm/mcp-context-forge:v1.0.11)"
+    }
+  },
+  "resources": {
+    "upstream": {
+      "cpu_pct_mean": 25.31959731543624,
+      "cpu_pct_max": 32.68,
+      "mem_mib_max": 127.6,
+      "samples": 149
+    },
+    "policy": {
+      "cpu_pct_mean": 1.4308053691275167,
+      "cpu_pct_max": 2.44,
+      "mem_mib_max": 83.08,
+      "samples": 149
+    },
+    "contextforge": {
+      "cpu_pct_mean": 102.60335570469799,
+      "cpu_pct_max": 138.68,
+      "mem_mib_max": 476.9,
+      "samples": 149
+    },
+    "selfbuilt": {
+      "cpu_pct_mean": 4.156308724832215,
+      "cpu_pct_max": 5.82,
+      "mem_mib_max": 145.6,
+      "samples": 149
+    }
+  },
+  "gateway_container": "contextforge",
+  "target": "contextforge",
+  "round": 3,
+  "loadgen_runtime": {
+    "where": "docker container on network dataplane-poc_default",
+    "cpus": "6",
+    "image": "ai-platform/dataplane-poc-py:local"
+  }
+}

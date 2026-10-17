@@ -12,6 +12,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from ai_contract import is_image_ref
+
 # Fixed block order. The first three blocks must be byte-stable across turns.
 # （固定的区块顺序；前三个区块（system/skills/tools）必须在多轮之间保持字节级稳定，
 # 这样才能让 stable_prefix_hash 保持不变，从而让 harness/模型侧的提示缓存生效。）
@@ -19,6 +21,10 @@ BLOCK_ORDER = ("system", "skills", "tools", "memory", "retrieval", "history")
 
 # 200K 上下文窗口下的默认各区块 token 预算。
 DEFAULT_BUDGET_200K = {"system": 4_000, "skills": 8_000, "tools": 12_000, "memory": 6_000, "retrieval": 16_000, "history": 150_000}
+
+# 每张图片附件（历史里的 image_ref 引用块，S6 D102）按约 1.5k token 估算：历史文本里只有几十字节的引用，
+# 模型侧却按整张图计费（Claude 约 1.1～1.6k、OpenAI 高精度约 0.8～1.1k），按引用文本估算会严重低估。
+IMAGE_REF_TOKENS = 1_500
 
 
 def estimate_tokens(text: str) -> int:
@@ -42,19 +48,26 @@ class ContextPlan:
         return {"usage": self.usage, "budget": self.budget, "stable_prefix_hash": self.stable_prefix_hash, "truncated": self.truncated}
 
 
-def assemble(blocks: dict[str, str], budget: dict[str, int] | None = None) -> ContextPlan:
+def count_image_refs(messages: list[dict[str, Any]]) -> int:
+    """消息历史中图片引用块（image_ref）的张数。"""
+    return sum(1 for m in messages if isinstance(m.get("content"), list) for part in m["content"] if is_image_ref(part))
+
+
+def assemble(blocks: dict[str, str], budget: dict[str, int] | None = None, *, history_images: int = 0) -> ContextPlan:
     """按 BLOCK_ORDER 固定顺序遍历各区块：超预算的区块按字符数近似截断，并记录截断标记；
     最后对前三个稳定区块（system/skills/tools）拼接求哈希，作为稳定前缀哈希。
+    history_images 为历史中的图片张数：history 区块的用量另加每张 IMAGE_REF_TOKENS（文本里只有引用）。
     """
     plan = ContextPlan(budget=dict(budget or DEFAULT_BUDGET_200K))
     for name in BLOCK_ORDER:
         text = blocks.get(name, "")
         limit = plan.budget.get(name, 0)
-        if estimate_tokens(text) > limit:
-            text = text[: limit * 3]  # 按 estimate_tokens 的反向近似（每 token ≈ 3 字符）裁剪到预算内
+        extra = history_images * IMAGE_REF_TOKENS if name == "history" else 0
+        if estimate_tokens(text) + extra > limit:
+            text = text[: max(0, limit - extra) * 3]  # 按 estimate_tokens 的反向近似（每 token ≈ 3 字符）裁剪到预算内
             plan.truncated.append(name)
         plan.blocks[name] = text
-        plan.usage[name] = estimate_tokens(text)
+        plan.usage[name] = estimate_tokens(text) + extra
     # 只对前三个固定区块（system/skills/tools）求哈希：这三者要求跨轮字节稳定，用于验证提示缓存前缀不变。
     prefix = "\n".join(plan.blocks[n] for n in BLOCK_ORDER[:3])
     plan.stable_prefix_hash = hashlib.sha256(prefix.encode("utf-8")).hexdigest()

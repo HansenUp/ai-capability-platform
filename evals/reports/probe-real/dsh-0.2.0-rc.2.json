@@ -1,0 +1,50 @@
+{
+  "harness": "dsh",
+  "version": "0.2.0-rc.2",
+  "passed": true,
+  "capabilities": {
+    "name": "dsh",
+    "version": "0.2.0-rc.2",
+    "transport": "stdio",
+    "models": [],
+    "supports_vision": false,
+    "supports_native_resume": false,
+    "supports_subagents": false,
+    "tool_protocols": [
+      "mcp"
+    ],
+    "loop_owner": "harness",
+    "tool_interception": "enforcing",
+    "can_resume_from_events": true,
+    "internal_hook_points": []
+  },
+  "capability_violations": [],
+  "probes": [
+    {
+      "name": "event_stream",
+      "passed": true,
+      "failures": 0
+    },
+    {
+      "name": "tool_roundtrip",
+      "passed": true,
+      "failures": 0
+    },
+    {
+      "name": "interrupt",
+      "passed": true,
+      "failures": 0
+    },
+    {
+      "name": "hooks",
+      "passed": true,
+      "failures": 0
+    },
+    {
+      "name": "replay_resume",
+      "passed": true,
+      "failures": 0
+    }
+  ],
+  "archived_at": "2026-10-17T18:16:26+00:00"
+}

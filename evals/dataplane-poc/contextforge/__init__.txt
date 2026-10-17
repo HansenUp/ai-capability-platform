@@ -1,0 +1,1 @@
+"""平台判定插件包（构建镜像时以 __init__.py 放入 /app/plugins/platform_authz/）。"""

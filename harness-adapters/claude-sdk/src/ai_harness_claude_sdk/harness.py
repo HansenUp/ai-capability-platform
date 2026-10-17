@@ -61,6 +61,7 @@ from ai_contract import (
     Event,
     HarnessCapabilities,
     HookSet,
+    ImageRefError,
     SessionHandle,
     SessionSpec,
     SkillDir,
@@ -353,13 +354,14 @@ class ClaudeSdkHarness:
         - supports_native_resume / can_resume_from_events=True：平台历史合成为 CLI 会话转录、以 CLI 原生
           resume 续接，进程重启后可由事件日志精确续跑（重放续跑探针为证），能力等级 L2；
         - internal_hook_points=[]：四个 hook 点全部由平台执行；
-        - supports_vision/subagents=False：只发送文本历史，且内置 Task 等工具全部禁用。
+        - supports_vision=True：历史中的 image_ref（Contract V1.2）在合成转录时读成 Anthropic image 块（S6，D102）；
+        - supports_subagents=False：内置 Task 等工具全部禁用。
         """
         return HarnessCapabilities(
             name="claude-sdk",
             version="0.3",
             transport="stdio",  # SDK 实际以子进程方式运行 CLI，并非真正的进程内调用
-            supports_vision=False,
+            supports_vision=True,
             supports_native_resume=True,
             supports_subagents=False,
             tool_protocols=["mcp"],
@@ -455,6 +457,13 @@ class ClaudeSdkHarness:
                     completed = True
                     yield DoneEvent(run_id=run_id, stop_reason="error")
                     return
+                except ImageRefError as e:
+                    # 图片附件读不到或与记录的 sha256 不符：不启动查询，会话保留（消息只含引用，不含图片内容）。
+                    yield ErrorEvent(code="ATTACHMENT_UNAVAILABLE", message=str(e), retryable=False)
+                    yield UsageEvent()
+                    completed = True
+                    yield DoneEvent(run_id=run_id, stop_reason="error")
+                    return
                 options = self._build_options(s, tools)
                 s.task = asyncio.create_task(self._pump(s, options))
 
@@ -513,7 +522,15 @@ class ClaudeSdkHarness:
         """把平台历史合成为本次查询的 CLI 会话转录（在线程中执行的同步文件操作）。"""
         if not s.config_dir or not Path(s.config_dir).is_dir():
             s.config_dir = tempfile.mkdtemp(prefix="claude-sdk-home-")
-        write_transcript(s.config_dir, s.cwd, s.cli_session_id, messages, model=s.spec.model_alias, statuses=s.statuses)
+        write_transcript(
+            s.config_dir,
+            s.cwd,
+            s.cli_session_id,
+            messages,
+            model=s.spec.model_alias,
+            statuses=s.statuses,
+            workspace_dir=s.spec.workspace_dir,
+        )
 
     def _build_env(self, s: _Session) -> dict[str, str]:
         """子进程环境：清空继承来的 ANTHROPIC_*/CLAUDE_CODE_*/CLAUDE_AGENT_SDK_*/AWS_*/GOOGLE_*/AZURE_* 与

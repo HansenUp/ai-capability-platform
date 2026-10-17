@@ -1,0 +1,29 @@
+# ContextForge 插件配置（POC 候选 3）：只启用平台判定插件。镜像构建时拷到 /app/plugins/poc-config.yaml。
+plugin_dirs: []
+plugin_settings:
+  parallel_execution_within_band: false
+  plugin_timeout: 5
+  fail_on_plugin_error: true            # 插件异常按拒绝处理（失败关闭）；默认 false 会放行
+  enable_plugin_api: false
+  plugin_health_check_interval: 120
+  include_user_info: false
+plugins:
+  - name: PlatformAuthz
+    kind: plugins.platform_authz.plugin.PlatformAuthzPlugin
+    description: 转发前同步回调平台判定端点并整形身份头
+    version: "0.1.0"
+    author: ai-platform
+    hooks: [tool_pre_invoke]
+    mode: enforce
+    priority: 1
+    conditions: []
+    config:
+      authz_url: http://selfbuilt:8082/authz/mcp-check
+      authz_token: poc-authz-token-dev   # 判定端点的服务间共享密钥（X-Gateway-Authz-Token，= GATEWAY_AUTHZ_TOKEN）；POC 开发值
+      timeout_s: 2.0
+      gateway_servers:                  # ContextForge 网关名（工具名前缀）→ 平台 MCP Server 登记名，判定时作为 server 回传；
+        poc-upstream: mcp-ticket        # 不匹配任何前缀的工具 server 为空，判定端点按 deny 处理（失败关闭）
+      tool_names:                       # ContextForge 工具名（网关前缀 + 规范化）→ 能力目录中的名字
+        poc-upstream-ticket-search: ticket.search
+        poc-upstream-ticket-get: ticket.get
+        poc-upstream-ticket-purge: ticket.purge

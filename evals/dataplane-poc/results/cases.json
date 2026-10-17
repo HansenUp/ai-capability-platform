@@ -1,0 +1,407 @@
+{
+  "generated_at": "2026-10-18T01:42:49+0800",
+  "targets": {
+    "selfbuilt": {
+      "A1_obo_passthrough": {
+        "pass": true,
+        "call": {
+          "ok": true,
+          "status": 200,
+          "error": null,
+          "progress_ms": [],
+          "final_ms": 20.2
+        },
+        "upstream_claims": {
+          "sub": "00000000-0000-4000-8000-0000000a11ce",
+          "azp": "capability-gateway",
+          "aud": "mcp-ticket",
+          "tenant": "default",
+          "iss": "http://localhost:8180/realms/ai-platform",
+          "exp": 1792259870,
+          "act": null
+        },
+        "presented_equals_upstream": false
+      },
+      "A2_client_identity_headers_stripped": {
+        "pass": true,
+        "upstream_x_ai_headers": {
+          "x-ai-act": "agent:poc-agent@1",
+          "x-ai-run-id": "run-4bea433f"
+        }
+      },
+      "A3_act_preserved": {
+        "pass": true,
+        "upstream_act_trusted": "agent:poc-agent@1",
+        "upstream_act_header": "agent:poc-agent@1"
+      },
+      "A4_expired_token_rejected": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 401,
+          "error": "initialize rejected"
+        },
+        "init_status": 401,
+        "upstream_rejections": []
+      },
+      "A5_audience_mismatch_rejected": {
+        "pass": true,
+        "upstream_aud_from_gateway": [
+          "mcp-ticket"
+        ],
+        "direct_wrong_aud_status": 401,
+        "upstream_rejections": [
+          "audience mismatch"
+        ]
+      },
+      "P1_deny_not_forwarded": {
+        "pass": true,
+        "unregistered_tool": {
+          "ok": false,
+          "status": 200,
+          "error": "{\"code\": -32001, \"message\": \"tool call denied by policy\", \"data\": {\"decision\": \"deny\"}}",
+          "progress_ms": [],
+          "final_ms": 3.8
+        },
+        "cross_tenant": {
+          "ok": false,
+          "status": 200,
+          "error": "{\"code\": -32001, \"message\": \"tool call denied by policy\", \"data\": {\"decision\": \"deny\"}}",
+          "progress_ms": [],
+          "final_ms": 2.8
+        }
+      },
+      "P2_policy_down_fail_closed": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 200,
+          "error": "{\"code\": -32002, \"message\": \"policy service unavailable; request rejected\", \"data\": {\"decision\": \"error\"}}",
+          "progress_ms": [],
+          "final_ms": 2004.3
+        }
+      },
+      "P4_no_fork": {
+        "pass": true,
+        "how": "平台自有代码（capability_gateway/mcp_proxy.py）"
+      },
+      "S_stream_progress": {
+        "ok": true,
+        "progress_ms": [
+          6.3,
+          17.5,
+          29.2
+        ],
+        "final_ms": 40.6
+      },
+      "T1_traceparent_propagation": {
+        "pass": true,
+        "rate": 1.0,
+        "sent": 100
+      },
+      "T2_langfuse_span": {
+        "trace_found": true,
+        "observations": [
+          "ticket.search"
+        ],
+        "run_id": true,
+        "call_id": true,
+        "tool_name": true,
+        "decision": true,
+        "pass": true
+      },
+      "A6_no_plaintext_token_in_logs": {
+        "pass": true,
+        "leaked_segments": 0,
+        "segments_checked": 20,
+        "log_bytes": 0
+      },
+      "summary": {
+        "dim2_identity": true,
+        "dim3_policy_hook": true,
+        "dim4_observability": true
+      }
+    },
+    "agentgateway": {
+      "A1_obo_passthrough": {
+        "pass": true,
+        "call": {
+          "ok": true,
+          "status": 200,
+          "error": null,
+          "progress_ms": [],
+          "final_ms": 25.7
+        },
+        "upstream_claims": {
+          "sub": "00000000-0000-4000-8000-0000000a11ce",
+          "azp": "capability-gateway",
+          "aud": "mcp-ticket",
+          "tenant": "default",
+          "iss": "http://localhost:8180/realms/ai-platform",
+          "exp": 1792259888,
+          "act": null
+        },
+        "presented_equals_upstream": true
+      },
+      "A2_client_identity_headers_stripped": {
+        "pass": true,
+        "upstream_x_ai_headers": {
+          "x-ai-run-id": "run-3f84c65e",
+          "x-ai-act": "agent:poc-agent@1"
+        }
+      },
+      "A3_act_preserved": {
+        "pass": true,
+        "upstream_act_trusted": "agent:poc-agent@1",
+        "upstream_act_header": "agent:poc-agent@1"
+      },
+      "A4_expired_token_rejected": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 401,
+          "error": "initialize rejected"
+        },
+        "init_status": 401,
+        "upstream_rejections": []
+      },
+      "A5_audience_mismatch_rejected": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 401,
+          "error": "initialize rejected"
+        },
+        "init_status": 401,
+        "upstream_rejections": []
+      },
+      "P1_deny_not_forwarded": {
+        "pass": true,
+        "unregistered_tool": {
+          "ok": false,
+          "status": 403,
+          "error": "\"{\\\"decision\\\":\\\"deny\\\"}\"",
+          "progress_ms": [],
+          "final_ms": null
+        },
+        "cross_tenant": {
+          "ok": false,
+          "status": 403,
+          "error": "\"{\\\"decision\\\":\\\"deny\\\"}\"",
+          "progress_ms": [],
+          "final_ms": null
+        }
+      },
+      "P2_policy_down_fail_closed": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 403,
+          "error": "\"external authorization failed\"",
+          "progress_ms": [],
+          "final_ms": null
+        }
+      },
+      "P3_hook_endpoint_down_fail_closed": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 403,
+          "error": "\"external authorization failed\"",
+          "progress_ms": [],
+          "final_ms": null
+        }
+      },
+      "P4_no_fork": {
+        "pass": true,
+        "how": "声明式配置 extAuthz(HTTP) + jwtAuth + transformations（agentgateway.yaml），无源码改动"
+      },
+      "S_stream_progress": {
+        "ok": true,
+        "progress_ms": [
+          139.4,
+          149.0,
+          161.6
+        ],
+        "final_ms": 172.8
+      },
+      "T1_traceparent_propagation": {
+        "pass": true,
+        "rate": 1.0,
+        "sent": 100
+      },
+      "T2_langfuse_span": {
+        "trace_found": true,
+        "observations": [
+          "ticket.search",
+          "ticket.search",
+          "ExtAuthz"
+        ],
+        "run_id": true,
+        "call_id": true,
+        "tool_name": true,
+        "decision": true,
+        "pass": true
+      },
+      "A6_no_plaintext_token_in_logs": {
+        "pass": true,
+        "leaked_segments": 0,
+        "segments_checked": 20,
+        "log_bytes": 575138262
+      },
+      "summary": {
+        "dim2_identity": true,
+        "dim3_policy_hook": true,
+        "dim4_observability": true
+      }
+    },
+    "contextforge": {
+      "A1_obo_passthrough": {
+        "pass": true,
+        "call": {
+          "ok": true,
+          "status": 200,
+          "error": null,
+          "progress_ms": [],
+          "final_ms": 77.8
+        },
+        "upstream_claims": {
+          "sub": "00000000-0000-4000-8000-0000000a11ce",
+          "azp": "capability-gateway",
+          "aud": "mcp-ticket",
+          "tenant": "default",
+          "iss": "http://localhost:8180/realms/ai-platform",
+          "exp": 1792259911,
+          "act": null
+        },
+        "presented_equals_upstream": true
+      },
+      "A2_client_identity_headers_stripped": {
+        "pass": true,
+        "upstream_x_ai_headers": {
+          "x-ai-act": "agent:poc-agent@1",
+          "x-ai-run-id": "run-1dd26486"
+        }
+      },
+      "A3_act_preserved": {
+        "pass": true,
+        "upstream_act_trusted": "agent:poc-agent@1",
+        "upstream_act_header": "agent:poc-agent@1"
+      },
+      "A4_expired_token_rejected": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 200,
+          "error": "{\"content\": [{\"text\": \"MCP server error: 401 Unauthorized for url 'http://upstream:9100/mcp'\", \"type\": \"text\"}], \"isError\": true}",
+          "progress_ms": [],
+          "final_ms": 23.4
+        },
+        "init_status": 200,
+        "upstream_rejections": [
+          "token expired"
+        ]
+      },
+      "A5_audience_mismatch_rejected": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 200,
+          "error": "{\"content\": [{\"text\": \"MCP server error: 401 Unauthorized for url 'http://upstream:9100/mcp'\", \"type\": \"text\"}], \"isError\": true}",
+          "progress_ms": [],
+          "final_ms": 19.9
+        },
+        "init_status": 200,
+        "upstream_rejections": [
+          "audience mismatch"
+        ]
+      },
+      "P1_deny_not_forwarded": {
+        "pass": true,
+        "unregistered_tool": {
+          "ok": false,
+          "status": 200,
+          "error": "{\"content\": [{\"text\": \"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_DENY - denied by platform policy (tool ticket.purge rejected before forwarding (decision=deny))\", \"type\": \"text\"}], \"isError\": true}",
+          "progress_ms": [],
+          "final_ms": 17.7
+        },
+        "cross_tenant": {
+          "ok": false,
+          "status": 200,
+          "error": "{\"content\": [{\"text\": \"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_DENY - denied by platform policy (tool ticket.search rejected before forwarding (decision=deny))\", \"type\": \"text\"}], \"isError\": true}",
+          "progress_ms": [],
+          "final_ms": 12.4
+        }
+      },
+      "P2_policy_down_fail_closed": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 200,
+          "error": "{\"content\": [{\"text\": \"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding (decision=error))\", \"type\": \"text\"}], \"isError\": true}",
+          "progress_ms": [],
+          "final_ms": 2022.9
+        }
+      },
+      "P3_hook_endpoint_down_fail_closed": {
+        "pass": true,
+        "call": {
+          "ok": false,
+          "status": 200,
+          "error": "{\"content\": [{\"text\": \"tool_pre_invoke blocked by plugin PlatformAuthz: PLATFORM_AUTHZ_ERROR - denied by platform policy (tool ticket.search rejected before forwarding (decision=error))\", \"type\": \"text\"}], \"isError\": true}",
+          "progress_ms": [],
+          "final_ms": 2030.8
+        }
+      },
+      "P4_no_fork": {
+        "pass": true,
+        "how": "原生插件 TOOL_PRE_INVOKE（contextforge/platform_authz.py，经 plugins.yaml 加载），无源码改动"
+      },
+      "S_stream_progress": {
+        "ok": true,
+        "progress_ms": [],
+        "final_ms": 213.5
+      },
+      "T1_traceparent_propagation": {
+        "pass": true,
+        "rate": 1.0,
+        "sent": 100
+      },
+      "T2_langfuse_span": {
+        "trace_found": true,
+        "observations": [
+          "MCP send tools/call ticket.search",
+          "poc-upstream-ticket-search",
+          "MCP send tools/list",
+          "MCP send initialize",
+          "POST /servers/4baec8f7e0ae46e99138208fde1989c9/mcp",
+          "tool.invoke",
+          "tool.gateway_call",
+          "mcp.client.response",
+          "mcp.client.request",
+          "tool.lookup",
+          "mcp.client.call",
+          "mcp.client.initialize",
+          "tool.post_process",
+          "mcp.transport.enter"
+        ],
+        "run_id": false,
+        "call_id": false,
+        "tool_name": true,
+        "decision": false,
+        "pass": false
+      },
+      "A6_no_plaintext_token_in_logs": {
+        "pass": true,
+        "leaked_segments": 0,
+        "segments_checked": 20,
+        "log_bytes": 62596
+      },
+      "summary": {
+        "dim2_identity": true,
+        "dim3_policy_hook": true,
+        "dim4_observability": false
+      }
+    }
+  }
+}

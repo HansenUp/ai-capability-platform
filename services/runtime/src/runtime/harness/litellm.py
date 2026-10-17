@@ -18,6 +18,10 @@ loop.runner 与工具代理完成，因此本 harness 不执行任何工具，ca
 finish_reason=length 且工具调用参数因截断无法解析时，不产出 ToolUse，改为 Error(TOOL_CALL_TRUNCATED) → Usage →
 Done(max_tokens)，避免执行一个参数残缺的工具调用。
 
+图片输入（S6，D102）：历史里的图片只是 ``image_ref`` 引用（Contract V1.2）；发送前才从本 Run 工作区读取、校验 sha256，
+转成 OpenAI 兼容的 ``image_url`` data URL 放进请求体，不进入任何事件。读取失败（工件缺失、指纹不符）产出
+Error(ATTACHMENT_UNAVAILABLE) → Usage → Done(error)。
+
 会话回收：会话规格按 session_id 缓存；interrupt 即会话结束（runner 在每次 drive 结束时调用），立即删除规格，
 若该会话正有一轮在进行则同时令其在下一个增量处停止。未被 interrupt 的会话由有界缓存按插入顺序淘汰。
 """
@@ -35,6 +39,7 @@ from ai_contract import (
     Event,
     HarnessCapabilities,
     HookSet,
+    ImageRefError,
     SessionHandle,
     SessionSpec,
     SkillDir,
@@ -44,6 +49,8 @@ from ai_contract import (
     ToolUseEvent,
     TurnInput,
     UsageEvent,
+    is_image_ref,
+    load_image_ref,
 )
 from runtime.llm import client as llm
 from runtime.llm.client import LLMChunk, LLMClient, LLMError, LLMUsage, ToolCall
@@ -63,6 +70,24 @@ def _put_bounded(cache: dict[str, Any], key: str, value: Any, limit: int) -> Non
 def _is_truncated(call: ToolCall) -> bool:
     """工具调用参数是否解析失败（客户端把非法 JSON 保留为 {"_raw": 原始字符串}）。"""
     return set(call.arguments) == {"_raw"}
+
+
+def _with_images(messages: list[dict[str, Any]], workspace_dir: str | None) -> list[dict[str, Any]]:
+    """把 OpenAI 消息里的 image_ref 块换成 image_url data URL（同步读文件，在线程中执行；不修改入参）。"""
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list) and any(is_image_ref(p) for p in content):
+            parts: list[Any] = []
+            for p in content:
+                if is_image_ref(p):
+                    media_type, data = load_image_ref(workspace_dir, p)
+                    parts.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}})
+                else:
+                    parts.append(p)
+            m = {**m, "content": parts}
+        out.append(m)
+    return out
 
 
 class LiteLLMHarness:
@@ -86,6 +111,7 @@ class LiteLLMHarness:
             version="0.1",
             transport="in-process",
             models=[],  # 模型无关，经 Model Gateway 路由
+            supports_vision=True,  # 图片以 image_url data URL 发送；别名是否支持由 Runtime 按 VISION_MODEL_ALIASES 把关
             supports_native_resume=False,
             loop_owner="platform",
             tool_interception="none",
@@ -162,6 +188,8 @@ class LiteLLMHarness:
             # 系统提示词为空时不发送空 system 消息（部分厂商拒绝空内容块）。
             system = [{"role": "system", "content": spec.system_prompt}] if spec.system_prompt else []
             messages = system + llm.to_openai_messages(turn.messages)
+            if any(isinstance(m.get("content"), list) for m in messages):
+                messages = await asyncio.to_thread(_with_images, messages, spec.workspace_dir)
             openai_tools = llm.to_openai_tools(tools)
             name_map = {llm.to_openai_tool_name(t.name): t.name for t in tools}  # OpenAI 函数名 → 平台工具名
             if len(name_map) < len({t.name for t in tools}):
@@ -246,6 +274,10 @@ class LiteLLMHarness:
             yield DoneEvent(run_id=run_id, stop_reason=stop)
         except LLMError as e:
             yield ErrorEvent(code=e.code, message=str(e), retryable=e.retryable)
+            yield self._usage_event(usage, reported_model)
+            yield DoneEvent(run_id=run_id, stop_reason="error")
+        except ImageRefError as e:  # 图片附件读不到或与记录的指纹不符：不发请求（消息里只有引用，不含图片内容）
+            yield ErrorEvent(code="ATTACHMENT_UNAVAILABLE", message=str(e), retryable=False)
             yield self._usage_event(usage, reported_model)
             yield DoneEvent(run_id=run_id, stop_reason="error")
         except Exception as e:  # 非预期异常同样收口为错误事件，保证每轮必有 Usage + Done（D5）

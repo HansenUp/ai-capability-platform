@@ -1,0 +1,61 @@
+# 平台接入 dsh（@deepseek-ai/dsh 0.2.0-rc.2，`dsh --profile acp`）的 patch 层（S6 §2，D101）。
+# 由 ACP 桥以 `--patch` 传入，叠加在 dsh-base + dsh-acp-app 之后；`!!js` 只读取桥为 agent 生成的环境变量。
+#
+# - 模型：唯一 provider 路由 `platform`（pi-ai，openai-completions）指向桥内 llm_shim；密钥引用 AI_SHIM_TOKEN 是每会话
+#   bearer，不是平台模型网关的密钥；模型名是占位符，shim 一律改写为 SessionSpec.model_alias。
+# - 工具：只留 ACP session/new 注入的平台 MCP（mcp__platform__*）；禁用 bash / pwsh / jobs / fs / web / skill /
+#   subagent / workflow / todo / goal / plan-mode / mcp-resources 等内置工具（spike 实测禁用后模型请求只剩平台工具）。
+# - 数据出口：禁用会话日志上传（session-log-deepseek）、插件清单上报、OTel 遥测与 DeepSeek 账号 / 官方 API 路由。
+- id: llm-pi-ai
+  config:
+    providers:
+      platform:
+        displayName: Platform
+        api: openai-completions
+        baseURL: !!js process.env.AI_SHIM_BASE_URL
+        apiKeyEnv: AI_SHIM_TOKEN
+        models:
+          - id: !!js process.env.AI_MODEL_ALIAS
+            name: platform-model
+            reasoningEfforts: false
+- id: acp
+  config:
+    provider: platform
+    model: !!js process.env.AI_MODEL_ALIAS
+- id: agent-default-model
+  config:
+    provider: platform
+    model: !!js process.env.AI_MODEL_ALIAS
+# 数据出口
+- { id: session-log-deepseek, disabled: true }
+- { id: plugin-package-inventory-deepseek, disabled: true }
+- { id: session-telemetry-otel, disabled: true }
+- { id: otel, disabled: true }
+- { id: deepseek-account, disabled: true }
+- { id: llm-deepseek, disabled: true }
+- { id: llm-deepseek-account, disabled: true }
+- { id: deepseek-llm-api-extensions, disabled: true }
+- { id: web-search-deepseek, disabled: true }
+- { id: web-fetch-http, disabled: true }
+- { id: web, disabled: true }
+# 内置工具
+- { id: tool-bash, disabled: true }
+- { id: tool-pwsh, disabled: true }
+- { id: tool-jobs, disabled: true }
+- { id: tool-fs, disabled: true }
+- { id: tool-fs-search, disabled: true }
+- { id: tool-skill, disabled: true }
+- { id: tool-web, disabled: true }
+- { id: tool-subagent-control, disabled: true }
+- { id: tool-subagent-list-agents, disabled: true }
+- { id: tool-subagent, disabled: true }
+- { id: tool-subagent-fork, disabled: true }
+- { id: tool-workflow, disabled: true }
+- { id: tool-todo, disabled: true }
+- { id: tool-goal, disabled: true }
+- { id: plan-mode, disabled: true }
+- { id: mcp-resources, disabled: true }
+# 会改写模型上下文 / 读取工作区说明的插件（shim 反正以平台历史替换 messages，这里一并关掉）
+- { id: agent-instructions, disabled: true }
+- { id: repeat-tool-reminder, disabled: true }
+- { id: session-title-llm, disabled: true }

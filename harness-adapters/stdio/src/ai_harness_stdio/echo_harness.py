@@ -112,7 +112,9 @@ def main(argv: list[str] | None = None) -> None:
         if f is None:
             return
         kind = f["frame"]
-        if kind == "open":
+        if kind == "hello":
+            _out({"frame": "ready"})  # 池预热握手：无需预先初始化，直接就绪
+        elif kind == "open":
             # 建会话：回报固定的 session_id 与能力声明
             run_id = f.get("session", {}).get("run_id", run_id)
             caps = SCRIPTED_CAPABILITIES if replies is not None else {"name": "echo", "version": "0.1", "transport": "stdio"}

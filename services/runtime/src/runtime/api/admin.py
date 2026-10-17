@@ -104,7 +104,9 @@ async def publish(
     3) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，
        否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障；
     4) harness 持有循环的高风险写白名单（S5 §4-1，D79）——loop_owner=harness 的适配器即便达到 L2，
-       声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）。
+       声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）；
+    5) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
+       harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值。
 
     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
     """
@@ -122,6 +124,8 @@ async def publish(
             raise HTTPException(409, "hooks 配置不合规：" + "; ".join(hook_problems))
         await _check_model_alias(av)
         caps = registry.get(av.harness).capabilities()
+        if caps.loop_owner == "harness" and not caps.version.strip():
+            raise HTTPException(409, f"无法确定所选 Harness 的版本（harness={caps.name}），不能冻结版本快照；请检查其二进制安装")
         tier = capability_tier(caps)
         # 高风险写工具从本地工具注册表查风险等级；生产环境应改为向能力网关查询。
         high_risk = [n for n in cfg.get("tools", []) if n in LOCAL_TOOLS and LOCAL_TOOLS[n].risk_level == RiskLevel.WRITE_HIGH]
@@ -163,7 +167,7 @@ async def publish(
     return {"agent_id": agent_id, "version": version, "status": "published", "rollout_percent": body.rollout_percent}
 
 
-MODEL_HARNESSES = frozenset({"litellm", "claude-sdk"})  # 经模型网关访问真实模型的 harness
+MODEL_HARNESSES = frozenset({"litellm", "claude-sdk", "goose", "dsh"})  # 经模型网关访问真实模型的 harness
 
 
 async def _check_model_alias(av: AgentVersion) -> None:

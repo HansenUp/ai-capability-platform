@@ -34,11 +34,12 @@ from .harness import (
     TurnInput,
     capability_tier,
 )
+from .images import IMAGE_MEDIA_TYPES, IMAGE_REF_TYPE, ImageRefError, image_ref_path, is_image_ref, load_image_ref, sniff_media_type
 from .run import TRANSITIONS, RunEvent, RunEventType, RunState, can_transition
 from .tools import RiskLevel, SandboxLevel, SkillDir, ToolSpec
 
 # 契约版本号：Contract V1 冻结后，任何变更须走接口变更单或 ADR，破坏性变更只在阶段边界合并（见 CONTRACT_V1.md）。
-CONTRACT_VERSION = "1.1.0"
+CONTRACT_VERSION = "1.2.0"
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -73,4 +74,11 @@ __all__ = [
     "SandboxLevel",
     "SkillDir",
     "ToolSpec",
+    "IMAGE_MEDIA_TYPES",
+    "IMAGE_REF_TYPE",
+    "ImageRefError",
+    "image_ref_path",
+    "is_image_ref",
+    "load_image_ref",
+    "sniff_media_type",
 ]
