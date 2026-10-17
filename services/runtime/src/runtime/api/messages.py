@@ -12,7 +12,7 @@ import os
 import shutil
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -21,13 +21,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from ai_contract import Event, RunEventType, RunState, TextEvent, ThinkingEvent
+from ai_contract import Event, RunEvent, RunEventType, RunState, TextEvent, ThinkingEvent
 from runtime.api import rollout
-from runtime.api.auth import Principal, check_approver, current_principal
+from runtime.api.auth import Principal, approver_denial, check_approver, current_principal, is_admin
 from runtime.api.views import ApprovalView, ErrorDetail, RunEventsView, RunStateView, RunView
 from runtime.config import settings
 from runtime.loop import active, runner
 from runtime.loop.toolbroker import ARTIFACT_REF
+from runtime.run import invariant
 from runtime.state.db import AgentVersion, Run, SessionLocal
 from runtime.state.eventlog import EventLog
 
@@ -85,6 +86,75 @@ async def run_in_tenant(run_id: str, request: Request, principal: Principal = De
     request.state.audit_object = f"run:{run_id}"
 
 
+async def _approvers(s: AsyncSession, run_id: str, types: tuple[RunEventType, ...]) -> set[str]:
+    """本 Run 事件日志中已记录的审批人主体（TOOL_APPROVED / TOOL_REJECTED 的 approver 字段）。"""
+    return {str(e.payload["approver"]) for e in await EventLog(s).list(run_id) if e.type in types and e.payload.get("approver")}
+
+
+def _forbid(request: Request, reason: str) -> HTTPException:
+    """403，并把原因留给审计。"""
+    request.state.auth_error = reason
+    return HTTPException(403, reason)
+
+
+# 待审批期间、尚未成为本 Run 审批人的有审批资格者只能看到审批所需的事件（审批视图，见 _approval_view）：
+# run.created（只留元数据）、run.state_changed、待批调用的 tool.requested（只留调用与参数，不含思维链等）与其 tool.decision。
+APPROVAL_VIEW_EVENTS = frozenset(
+    {
+        RunEventType.RUN_CREATED,
+        RunEventType.RUN_STATE_CHANGED,
+        RunEventType.TOOL_REQUESTED,
+        RunEventType.TOOL_DECISION,
+    }
+)
+# 审批视图中各事件保留的字段（白名单；其余如 tool.requested 的 reasoning / hooks、run.created 的附件与消息指纹一律去掉）
+APPROVAL_VIEW_FIELDS: dict[RunEventType, frozenset[str]] = {
+    RunEventType.RUN_CREATED: frozenset({"agent_id", "agent_version", "model_alias", "subject", "actor", "rollout"}),
+    RunEventType.TOOL_REQUESTED: frozenset({"call_id", "tool", "input", "effective_input", "risk_level"}),
+}
+RunAccess = Literal["full", "approval"]
+
+
+def _approval_view(events: list[RunEvent]) -> list[RunEvent]:
+    """审批视图：只保留待批调用（已请求、尚无结果的最近一次 tool.requested）的请求与闸口决策，加上 run.created
+    （只留元数据）与 run.state_changed；字段按 APPROVAL_VIEW_FIELDS 收窄。"""
+    resulted = {e.payload.get("call_id") for e in events if e.type == RunEventType.TOOL_RESULT}
+    pending = [
+        e.payload.get("call_id") for e in events if e.type == RunEventType.TOOL_REQUESTED and e.payload.get("call_id") not in resulted
+    ]
+    pending_call = pending[-1] if pending else None
+    out: list[RunEvent] = []
+    for e in events:
+        if e.type not in APPROVAL_VIEW_EVENTS:
+            continue
+        if e.type in (RunEventType.TOOL_REQUESTED, RunEventType.TOOL_DECISION) and (
+            pending_call is None or e.payload.get("call_id") != pending_call
+        ):
+            continue
+        keep = APPROVAL_VIEW_FIELDS.get(e.type)
+        out.append(e if keep is None else e.model_copy(update={"payload": {k: v for k, v in e.payload.items() if k in keep}}))
+    return out
+
+
+async def run_reader(run_id: str, request: Request, principal: Principal = Depends(current_principal)) -> RunAccess:
+    """Run 读取权限（D90）：其他租户与不存在一样 404；发起人、本 Run 已记录的审批人（批准或拒绝过）、
+    平台管理员（platform-admin，开发态不检查角色）可读全部（"full"）。审批人在审批前尚未记录：Run 处于
+    auth-required 时，有审批资格的同租户人员（与 approve 接口同一判定）可读审批所需部分（"approval"），
+    以便查看待审批调用与参数指纹。其他情况 403。"""
+    async with SessionLocal() as s:
+        run = await s.get(Run, run_id)
+        if run is None or run.tenant_id != principal.tenant_id:
+            raise HTTPException(404, f"run '{run_id}' not found")
+        request.state.audit_object = f"run:{run_id}"
+        if principal.subject == run.subject or is_admin(principal):
+            return "full"
+        if principal.subject in await _approvers(s, run_id, (RunEventType.TOOL_APPROVED, RunEventType.TOOL_REJECTED)):
+            return "full"
+    if run.state == RunState.AUTH_REQUIRED and approver_denial(principal, run.subject) is None:
+        return "approval"
+    raise _forbid(request, "only the run initiator, its approvers or an admin can read this run")
+
+
 ATTACHMENT_SCAN_RUNS = 200  # 查找附件来源时最多检查调用方最近的多少个 Run
 
 
@@ -115,16 +185,60 @@ def _find_sources(refs: list[str], own_runs: list[str]) -> list[tuple[str, str]]
     return out
 
 
-def _attach(run_id: str, sources: list[tuple[str, str]], messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """把附件复制进新 Run 的工作区（read_artifact 只能读本 Run 的工作区），并在最后一条用户消息后注明附件引用。"""
+DATA_CLASS_RANK = {"public": 0, "internal": 1, "confidential": 2}
+
+
+def _artifact_data_class(events: list[RunEvent], artifact_id: str) -> str:
+    """工件的数据分级（D88）：取源 Run 中产生该工件的 TOOL_RESULT（output_ref 指向它）的 data_class 与
+    artifact_data_class（外置时工具分级与 Run 已有污点两者较高者，防止机密 Run 里经 internal 工具外置的内容被"洗白"），
+    或源 Run 的 RUN_CREATED.attachments 中该工件的记录（工件本身是被附进源 Run 的）；多条记录取最高级。
+    查不到、记录缺分级或分级未知时按 confidential（失败关闭）。"""
+    found: list[Any] = []
+    for e in events:
+        if e.type == RunEventType.TOOL_RESULT:
+            m = ARTIFACT_REF.match(str(e.payload.get("output_ref") or ""))
+            if m and m.group(1) == artifact_id:
+                found.append(e.payload.get("data_class"))
+                if "artifact_data_class" in e.payload:
+                    found.append(e.payload["artifact_data_class"])
+        elif e.type == RunEventType.RUN_CREATED:
+            for a in e.payload.get("attachments") or []:
+                if isinstance(a, dict) and a.get("artifact_id") == artifact_id:
+                    found.append(a.get("data_class"))
+    if not found or any(c not in DATA_CLASS_RANK for c in found):
+        return "confidential"
+    return str(max(found, key=lambda c: DATA_CLASS_RANK[c]))
+
+
+async def _attachment_meta(sources: list[tuple[str, str]]) -> list[dict[str, str]]:
+    """附件元信息（随 RUN_CREATED 记入事件日志，新 Run 据此继承污点）：工件 id、源 Run、数据分级。"""
+    out: list[dict[str, str]] = []
+    async with SessionLocal() as s:
+        log = EventLog(s)
+        for _ref, src in sources:
+            artifact_id = os.path.splitext(os.path.basename(src))[0]
+            source_run_id = os.path.basename(os.path.dirname(src))
+            data_class = _artifact_data_class(await log.list(source_run_id), artifact_id)
+            out.append({"artifact_id": artifact_id, "source_run_id": source_run_id, "data_class": data_class})
+    return out
+
+
+def _with_attachment_note(sources: list[tuple[str, str]], messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """首次驱动的初始消息：有附件时在最后一条用户消息后追加一条注明附件引用的用户消息（其指纹随 RUN_CREATED 记录）。"""
     if not sources:
         return messages
+    note = "附件（可用 read_artifact 读取）：" + "、".join(ref for ref, _ in sources)
+    return [*messages, {"role": "user", "content": note}]
+
+
+def _attach(run_id: str, sources: list[tuple[str, str]]) -> None:
+    """把附件复制进新 Run 的工作区（read_artifact 只能读本 Run 的工作区）。"""
+    if not sources:
+        return
     dest = os.path.join(settings.workspace_dir, run_id)
     os.makedirs(dest, exist_ok=True)
     for _ref, src in sources:
         shutil.copyfile(src, os.path.join(dest, os.path.basename(src)))
-    note = "附件（可用 read_artifact 读取）：" + "、".join(ref for ref, _ in sources)
-    return [*messages, {"role": "user", "content": note}]
 
 
 def _sse(ev: Event) -> dict[str, str]:
@@ -143,9 +257,19 @@ async def messages(req: MessagesRequest, request: Request, principal: Principal 
     """对话式入口：创建 Run 并驱动一次执行；支持流式（SSE）与非流式（聚合后一次性返回）两种模式。"""
     agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
     sources = await _attachment_sources(req.attachments, principal) if req.attachments else []
-    run_id = await runner.create_run(agent, principal.subject, req.session_id, actor=principal.actor, rollout=reason)
+    attachments = await _attachment_meta(sources) if sources else None
+    messages = _with_attachment_note(sources, req.messages)
+    run_id = await runner.create_run(
+        agent,
+        principal.subject,
+        req.session_id,
+        actor=principal.actor,
+        rollout=reason,
+        attachments=attachments,
+        initial_messages=messages,
+    )
     request.state.audit_object = f"run:{run_id}"
-    messages = _attach(run_id, sources, req.messages)
+    _attach(run_id, sources)
     gen = runner.drive(run_id, agent, principal.subject, messages, credential=principal.token)
     if req.stream:
 
@@ -194,7 +318,7 @@ class RunCreate(BaseModel):
 async def create_run(req: RunCreate, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """创建一个 Run 并立即返回 202（已接受）；实际驱动在后台任务中异步执行。"""
     agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
-    run_id = await runner.create_run(agent, principal.subject, None, actor=principal.actor, rollout=reason)
+    run_id = await runner.create_run(agent, principal.subject, None, actor=principal.actor, rollout=reason, initial_messages=req.input)
     request.state.audit_object = f"run:{run_id}"
     # In production a worker picks this up from Redis Streams; here we execute eagerly in background.
     # （生产环境应由 worker 从 Redis Streams 消费任务；此处为简化实现，直接在后台任务中即时执行。
@@ -209,9 +333,14 @@ async def create_run(req: RunCreate, request: Request, principal: Principal = De
     return {"run_id": run_id, "state": RunState.SUBMITTED}
 
 
-@router.get("/v1/runs/{run_id}", response_model=RunView, responses={404: {"model": ErrorDetail}}, dependencies=[Depends(run_in_tenant)])
+@router.get(
+    "/v1/runs/{run_id}",
+    response_model=RunView,
+    responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}},
+    dependencies=[Depends(run_reader)],
+)
 async def get_run(run_id: str) -> dict[str, Any]:
-    """查询单个 Run 的当前状态与元信息。"""
+    """查询单个 Run 的当前状态与元信息（读取权限见 run_reader：发起人 / 本 Run 审批人 / 管理员，待审批时含有审批资格者）。"""
     async with SessionLocal() as s:
         run = await s.get(Run, run_id)
         if run is None:
@@ -228,13 +357,26 @@ async def get_run(run_id: str) -> dict[str, Any]:
         }
 
 
-@router.get("/v1/runs/{run_id}/events", response_model=RunEventsView, dependencies=[Depends(run_in_tenant)])
-async def run_events(run_id: str, since_seq: Annotated[int, Query(ge=0, le=2**53)] = 0) -> list[dict[str, Any]]:
-    """按 seq 增量查询 Run 的事件日志（自 since_seq 之后的所有事件）。
+@router.get(
+    "/v1/runs/{run_id}/events",
+    response_model=RunEventsView,
+    responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}},
+)
+async def run_events(
+    run_id: str, access: Annotated[RunAccess, Depends(run_reader)], since_seq: Annotated[int, Query(ge=0, le=2**53)] = 0
+) -> list[dict[str, Any]]:
+    """按 seq 增量查询 Run 的事件日志（自 since_seq 之后的所有事件）。读取权限见 run_reader；
+    待审批期间尚未成为审批人的有审批资格者只返回审批视图：待批调用的 tool.requested / tool.decision、
+    run.created（只留元数据）与 run.state_changed，字段收窄。
 
     since_seq 限定在 [0, 2^53]：既覆盖任何现实的 seq，又保证 JS 客户端可精确表示，超界由 FastAPI 返回 422。"""
     async with SessionLocal() as s:
-        return [e.model_dump() for e in await EventLog(s).list(run_id, since_seq)]
+        if access == "full":
+            events = await EventLog(s).list(run_id, since_seq)
+        else:
+            # 待批调用要从完整日志判定（其 tool.requested 可能早于 since_seq），再按 since_seq 截取
+            events = [e for e in _approval_view(await EventLog(s).list(run_id)) if e.seq > since_seq]
+    return [e.model_dump() for e in events]
 
 
 class ApprovalBody(BaseModel):
@@ -324,7 +466,8 @@ async def reject(run_id: str, body: ApprovalBody, request: Request, principal: P
 
 class ResumeBody(BaseModel):
     """续跑请求体：messages: the original initial messages (clients keep them; workers read from session store)
-    （客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。）"""
+    （客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。
+    带附件的 Run 须连同首次驱动时追加的附件说明消息一并回传；指纹须与 RUN_CREATED 记录的一致，否则 409。）"""
 
     messages: list[dict[str, Any]]
 
@@ -332,25 +475,39 @@ class ResumeBody(BaseModel):
 @router.post(
     "/v1/runs/{run_id}/resume",
     response_model=None,  # 200 为 SSE 统一事件流（data 帧 schema 见 x-sse-event-schema），不做 JSON 响应建模
-    responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
+    responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
     dependencies=[Depends(run_in_tenant)],
 )
-async def resume(run_id: str, body: ResumeBody, principal: Principal = Depends(current_principal)) -> Any:
+async def resume(run_id: str, body: ResumeBody, request: Request, principal: Principal = Depends(current_principal)) -> Any:
     """Continue a run after approval by replaying its event log (checkpoint via replay).
     （在审批通过后续跑一个 Run：通过重放该 Run 的事件日志实现 checkpoint 续跑，
     只允许对处于 working 状态的 Run 发起。）
+
+    续跑者（D87 修订）只能是 Run 发起人：审批人只能 approve / reject，审批人、管理员或其他同租户人员续跑一律 403
+    （其他租户 404，由 run_in_tenant 判定）；先判身份再判状态，不向无权者透露 Run 状态。
+    回传的初始消息须与 RUN_CREATED 记录的指纹（initial_messages_hash）一致，否则 409；S5 之前创建的 Run 没有
+    该字段，无从比对，兼容放行（与此前行为一致）。
     """
     async with SessionLocal() as s:
         run = await s.get(Run, run_id)
         if run is None:
             raise HTTPException(404)
+        if principal.subject != run.subject:
+            raise _forbid(request, "only the run initiator can resume it")
         if run.state != RunState.WORKING:
             raise HTTPException(409, f"run state is {run.state}")
+        log = await EventLog(s).list(run_id)
+    try:
+        invariant.check_initial(log, body.messages)
+    except invariant.InvariantViolation as e:
+        raise HTTPException(409, f"messages do not match the run's initial messages: {e}") from e
     agent, _ = await _load_agent(run.agent_id, run.agent_version, principal.tenant_id, allow_unpublished=True)  # 续跑固定原版本
 
     async def stream() -> AsyncIterator[dict[str, str]]:
-        # 续跑仍以 Run 发起人的身份执行（闸口判定、Trace 归属不随续跑者变化）；续跑者本人记在请求审计里
-        async for ev in runner.drive(run_id, agent, run.subject, body.messages, credential=principal.token):
+        # 续跑者即发起人：credential_subject 与发起主体相同，不写入事件（机制保留，见 RunCtx.foreign_credential_subject）
+        async for ev in runner.drive(
+            run_id, agent, run.subject, body.messages, credential=principal.token, credential_subject=principal.subject
+        ):
             if _client_visible(ev):
                 yield _sse(ev)
 
@@ -360,12 +517,16 @@ async def resume(run_id: str, body: ResumeBody, principal: Principal = Depends(c
 @router.post(
     "/v1/runs/{run_id}/cancel",
     response_model=RunStateView,
-    responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
-    dependencies=[Depends(run_in_tenant)],
+    responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
 )
-async def cancel(run_id: str) -> dict[str, Any]:
+async def cancel(run_id: str, request: Request, access: Annotated[RunAccess, Depends(run_reader)]) -> dict[str, Any]:
     """取消一个 Run；Run 不存在返回 404（RunNotFound 由应用级异常处理器映射），
-    当前状态不允许迁移到 canceled（如已是终态）返回 409。"""
+    当前状态不允许迁移到 canceled（如已是终态）返回 409。
+
+    取消权限（D90）与完整读取权限相同：发起人、本 Run 已记录的审批人、平台管理员（开发态不检查角色）；
+    待审批期间仅有审批资格者（只读审批所需部分）不能取消，其他人 403，其他租户 404。"""
+    if access != "full":
+        raise _forbid(request, "only the run initiator, its approvers or an admin can cancel this run")
     async with SessionLocal() as s:
         log = EventLog(s)
         try:

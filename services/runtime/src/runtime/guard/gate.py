@@ -4,7 +4,8 @@ Default is deny. Egress allowlist and data-classification taint are applied as p
 （工具闸口：固定判定顺序为 hooks → 红线拒绝规则 → 策略引擎（Cedar 服务）→ 风险等级 →
 审批 → 幂等键 → 沙箱级别。默认拒绝（default deny）。出站白名单与数据分类污点
 （data-classification taint）传播是判定逻辑的一部分，用于收紧对外发送类工具。
-注意：hooks 环节在 loop.runner 中通过 HookSet.pre_tool 调用，位于本模块 evaluate() 之前，
+注意：hooks 环节由平台统一执行（S5，runtime.guard.hooks）：工具代理（loop.toolbroker.handle_tool）在本模块 evaluate()
+之前执行 pre_tool 链，拒绝即不进闸口；改写后的 effective_input 才是送进 evaluate() 的入参。
 本模块实现的是 deny → policy → risk → approval → idempotency → sandbox 这几步。）
 """
 

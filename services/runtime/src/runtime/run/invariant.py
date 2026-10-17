@@ -26,6 +26,24 @@ def message_hash(messages: list[dict[str, Any]]) -> str:
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
+INITIAL_MESSAGES_HASH = "initial_messages_hash"  # RUN_CREATED 中初始消息指纹的键名
+
+
+def check_initial(log: list[RunEvent], initial_messages: list[dict[str, Any]]) -> None:
+    """初始消息与事件日志绑定：RUN_CREATED 记录了初始消息指纹（initial_messages_hash）时，传入的初始消息必须与之一致，
+    否则抛 InvariantViolation——续跑由客户端回传初始消息，若不校验，重建出的历史虽能通过 check（两边用的是同一份
+    初始消息），却已不是这个 Run 当初的上下文。
+
+    兼容：S5 之前创建的 Run 的 RUN_CREATED 没有该字段，无从比对，放行（行为与此前一致）。"""
+    created = next((e for e in log if e.type == RunEventType.RUN_CREATED), None)
+    expected = created.payload.get(INITIAL_MESSAGES_HASH) if created is not None else None
+    if expected is None:
+        return
+    actual = message_hash(initial_messages)
+    if actual != expected:
+        raise InvariantViolation(f"initial messages do not match this run ({actual[:8]} != {str(expected)[:8]})")
+
+
 def rebuild_messages(log: list[RunEvent], initial_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Deterministically rebuild the model-visible message list from the event log.
     （确定性地从事件日志重建模型可见的消息列表：从初始消息出发，按日志顺序依次应用

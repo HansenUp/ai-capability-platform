@@ -161,10 +161,28 @@ def skills_digest(skills: list[SkillDir]) -> str:
 async def assemble(agent: AgentVersion, subject: str) -> Assembled:
     """按 agent 版本快照与调用主体组装最终的系统提示词/工具集/技能集：
     先发现核心工具（agent 声明 ∪ 可用能力），截断到 core_tool_limit，再补上恒定存在的两个元工具。
+
+    技能提示词内联（S5，D84）：快照 `skills_inline=true` 时把各技能的 SKILL.md 内容内联进系统提示词（供不支持
+    原生技能目录的 harness 使用）；默认关闭，系统提示词与组装报告与此前完全一致。
     """
     cfg = agent.config or {}
     tools = await discover_core_tools(subject, agent.agent_id, cfg.get("tools", ["echo"]))
     skills = load_skills(cfg.get("skills", []))
     limit = int(cfg.get("core_tool_limit", 20))
     tools = tools[:limit] + [SEARCH_CAPABILITIES_TOOL, READ_ARTIFACT_TOOL]
-    return Assembled(agent.system_prompt, tools, skills, limit, {"tools": [t.name for t in tools], "skills": [s.name for s in skills]})
+    report: dict[str, Any] = {"tools": [t.name for t in tools], "skills": [s.name for s in skills]}
+    system_prompt = agent.system_prompt
+    if cfg.get("skills_inline") is True and skills:
+        system_prompt = inline_skills(system_prompt, skills)
+        report["skills_inline"] = True
+    return Assembled(system_prompt, tools, skills, limit, report)
+
+
+def inline_skills(system_prompt: str, skills: list[SkillDir]) -> str:
+    """把技能目录的 SKILL.md 依次以 <skill name="..." version="..."> 块追加到系统提示词之后（按快照声明顺序）。"""
+    blocks = [
+        f'<skill name="{sk.name}" version="{sk.version}">\n{(sk.path / "SKILL.md").read_text(encoding="utf-8").strip()}\n</skill>'
+        for sk in skills
+    ]
+    head = system_prompt.rstrip()
+    return (head + "\n\n" if head else "") + "\n\n".join(blocks)

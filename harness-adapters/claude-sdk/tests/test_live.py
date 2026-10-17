@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from ai_contract import (  # noqa: E402
     SessionSpec,
     TextEvent,
     ThinkingEvent,
+    ToolResultEvent,
     ToolSpec,
     ToolUseEvent,
     TurnInput,
@@ -67,6 +69,11 @@ class RecordingClient:
 
     async def disconnect(self) -> None:
         await self._c.disconnect()
+
+    def pid(self) -> int | None:
+        """CLI 子进程 pid（SDK 内部属性，仅用于检查中断后子进程已回收）。"""
+        process = getattr(getattr(self._c, "_transport", None), "_process", None)
+        return getattr(process, "pid", None)
 
 
 def recording_harness() -> tuple[ClaudeSdkHarness, list[RecordingClient]]:
@@ -151,3 +158,44 @@ async def test_live_tool_roundtrip(tmp_path: Any) -> None:
     assert second[-1].stop_reason == "end_turn"
     assert any(isinstance(e, TextEvent) and e.delta for e in second)
     assert_isolated(clients[0], {TOOL_PREFIX + "echo"})
+
+
+async def test_live_structured_resume_from_synthetic_transcript(tmp_path: Any) -> None:
+    """S5 spike 的回归用例：审批续跑场景（历史以平台补完的 tool_result 结尾）。适配器把历史合成为 CLI 会话转录，
+    真实 CLI 以 --resume + CLAUDE_CODE_RESUME_INTERRUPTED_TURN 自动续跑（与 --no-session-persistence 共存）：
+    模型据结构化 tool_result 作答（复述 nonce），不重新调用工具。"""
+    nonce = "NONCE-" + uuid.uuid4().hex[:8]
+    h, clients = recording_harness()
+    events = [
+        ToolUseEvent(call_id="toolu_live1", tool_name="echo", input={"text": "x"}),
+        ToolResultEvent(call_id="toolu_live1", output=nonce),
+    ]
+    handle = await h.resume(spec(tmp_path, "你是简洁的助手。"), events)
+    assert handle.native_ref is not None and handle.native_ref.startswith("transcript:")
+    history: list[dict[str, Any]] = [
+        {"role": "user", "content": "调用 echo 工具（text=x），然后只回复工具返回的原文，不要任何其他内容。"},
+        {"role": "assistant", "tool_use": {"call_id": "toolu_live1", "name": "echo", "input": {"text": "x"}}},
+        {"role": "tool", "call_id": "toolu_live1", "content": nonce},
+    ]
+    out = await run(h, handle, history, [ECHO])
+    text = "".join(e.delta for e in out if isinstance(e, TextEvent))
+    assert nonce in text and out[-1].stop_reason == "end_turn"
+    assert not any(isinstance(e, ToolUseEvent) for e in out)  # 不重新决策、不重复执行
+    assert_isolated(clients[0], {TOOL_PREFIX + "echo"})
+    await h.interrupt(handle, "run_live")
+
+
+async def test_live_interrupt_while_awaiting_reclaims_cli_subprocess(tmp_path: Any) -> None:
+    """等待平台结果时中断：CLI 子进程被回收、会话目录删除（S1 实现在此路径上会泄漏子进程）。"""
+    h, clients = recording_harness()
+    system = "你必须先调用 echo 工具（参数 text 为用户给出的词）。不要跳过工具调用。"
+    handle = await h.open_session(spec(tmp_path, system))
+    first = await run(h, handle, [{"role": "user", "content": "请回显这个词：苹果"}], [ECHO])
+    assert first[-1].stop_reason == "tool_use"
+    pid = clients[0].pid()
+    assert pid is not None
+    await h.interrupt(handle, "run_live")
+    assert h._sessions == {}
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    assert_isolated(clients[0], {TOOL_PREFIX + "echo"})  # 含配置目录已删除

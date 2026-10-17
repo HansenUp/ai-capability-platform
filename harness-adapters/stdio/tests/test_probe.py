@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from ai_contract import HarnessAdapter, HookSet, SessionSpec, TextEvent, TurnInput
+from ai_contract import HarnessAdapter, HookSet, SessionHandle, SessionSpec, TextEvent, TurnInput
 from ai_harness_stdio import StdioHarness
 
 CMD = [sys.executable, "-m", "ai_harness_stdio.echo_harness"]  # 以子进程方式启动内置 echo harness
@@ -53,3 +53,29 @@ async def test_resume_by_replay():
     evs = [e async for e in h.run_turn(s, TurnInput(messages=[{"role": "user", "content": "again"}]), [], [], HookSet())]
     assert evs[0].delta.startswith("echo(2 replayed)")
     await h.close(s)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_closes_subprocess_and_is_idempotent():
+    """interrupt 即会话结束：子进程退出、不残留；对已结束 / 未知会话重复中断无副作用；同一适配器多会话互不覆盖。"""
+    h = StdioHarness(CMD)
+    s1, s2 = await h.open_session(SPEC), await h.open_session(SPEC)
+    assert s1.session_id != s2.session_id and len(h.running_pids()) == 2
+    await h.interrupt(s1, "r1")
+    assert len(h.running_pids()) == 1
+    await h.interrupt(s1, "r1")
+    await h.interrupt(SessionHandle(session_id="nope", harness="stdio"), "r1")
+    evs = [e async for e in h.run_turn(s1, TurnInput(messages=[{"role": "user", "content": "x"}]), [], [], HookSet())]
+    assert [e.type for e in evs] == ["error", "usage", "done"] and evs[0].code == "SESSION_NOT_FOUND"
+    await h.close_all()
+    assert h.running_pids() == []
+
+
+@pytest.mark.asyncio
+async def test_contract_probes_pass():
+    """stdio 适配器 + echo 脚本模式通过五项契约探针。"""
+    from ai_harness_probe import run_probes
+    from ai_harness_stdio.testing import probe_factory
+
+    report = await run_probes(probe_factory)
+    assert report.passed, [(r.name, r.failures) for r in report.results]

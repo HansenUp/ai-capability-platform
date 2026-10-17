@@ -1,6 +1,6 @@
 # Runtime Contract V1（冻结说明）
 
-- 版本：`ai_contract.CONTRACT_VERSION = "1.0.0"`
+- 版本：`ai_contract.CONTRACT_VERSION = "1.1.0"`（1.0.0 冻结；1.1.0 为非破坏性变更，见第 3 节）
 - 对应计划项：实施计划 P0-2.2 / Phase0 收尾 A5
 - 权威来源：`packages/contract/src/ai_contract/`（本文只是摘要，字段以代码为准）
 
@@ -66,9 +66,22 @@
 - `async interrupt(session, run_id) -> None`
 - `async resume(spec: SessionSpec, events: list[Event]) -> SessionHandle`（checkpoint 通过重放事件日志实现）
 
-`HookSet`：`pre_model`、`pre_tool`、`post_tool`、`on_subagent`，均为可选的异步函数；返回 dict 可覆盖 payload，返回 `{"deny": reason}` 表示阻断。
+`TurnInput`：`messages`、`attachments=[]`、`tool_statuses={}`（**V1.1 新增**，`call_id -> ok / error / denied / pending_approval`）。Runtime 按事件日志中的 TOOL_RESULT 为本轮历史里的每个工具结果填写状态，适配器可据此把错误 / 拒绝标记给模型（例如 Anthropic `tool_result.is_error`），不需要的适配器忽略即可。
 
-`HarnessCapabilities` 中与治理相关的字段 `loop_owner`、`tool_interception`、`can_resume_from_events` 以及 `capability_tier()` 的 L0 / L1 / L2 判定规则同样在冻结范围内。
+`HookSet`：`pre_model`、`post_model`（**V1.1 新增**）、`pre_tool`、`post_tool`、`on_subagent`，均为可选的异步函数；返回 dict 可覆盖 payload（只认 `HOOK_OVERRIDABLE` 白名单内的键），返回 `{"deny": reason}` 表示阻断。
+
+`HookPoint`（**V1.1 新增**，StrEnum）：`pre_model`、`post_model`、`pre_tool`、`post_tool`，即平台统一执行 hook 的四个拦截点。
+
+`post_model` 语义（**V1.1 新增**）：一次模型调用产出完毕（收到该次调用的 `UsageEvent`）后由 Runtime 执行，payload 为 `text`、`thinking`、`tool_call`、`usage`。返回 `{"deny": reason}` 时，本次调用的输出（文本、思维链、工具调用）不进入模型可见历史，工具调用不执行，Run 以 RUN_ERROR `HOOK_DENIED` 进入 failed。为保证被拒绝的输出不外泄，下发方式取决于版本是否配置了 `post_model`：
+
+- 配置了 `post_model`（含可见性为 summary 时隐式挂载的 `thinking_summary`）：Runtime 缓冲本轮文本增量，`post_model` 通过后再下发给客户端；拒绝时客户端收不到这段文本；
+- 未配置 `post_model`：文本照常流式下发，不增加延迟（未配置任何 hook 时事件日志与 V1.0 逐字节一致）。
+
+适配器无需感知上述缓冲：`post_model` 不在 `internal_hook_points` 中时，适配器照常产出事件，缓冲与判定都在 Runtime。
+
+`HOOK_OVERRIDABLE`（**V1.1 新增**）：各拦截点可覆盖键白名单——`pre_model` 无；`post_model` 为 `thinking_summary`；`pre_tool` 为 `input`；`post_tool` 为 `output`、`data_class`（只升不降）。白名单外的键忽略并记日志。
+
+`HarnessCapabilities` 中与治理相关的字段 `loop_owner`、`tool_interception`、`can_resume_from_events` 以及 `capability_tier()` 的 L0 / L1 / L2 判定规则同样在冻结范围内。`internal_hook_points: list[HookPoint]`（**V1.1 新增**，默认空）声明平台看不到、须由适配器自己调用 hook 的点；runner 传给 `run_turn` 的 `HookSet` 只含这些点，其余点由平台统一执行。该字段不参与 `capability_tier()` 判定。
 
 ## 2. 变更规则
 
@@ -76,3 +89,19 @@
 2. 非破坏性变更（新增可选字段、新增事件类型或枚举值且消费方可忽略）递增次版本号，可在阶段内合并。
 3. 破坏性变更（删除或重命名字段/取值、改变必填性、默认值或语义、收紧校验）递增主版本号，只在阶段边界合并，并提前通知所有依赖方（runtime、console、gateway、adapters、SDKs）。
 4. 契约测试 `packages/contract/tests` 是冻结范围的可执行描述，变更时必须同步更新。
+
+## 3. 接口变更单
+
+### CR-1.1（Contract 1.0.0 → 1.1.0，S5 Hooks 由平台统一执行）
+
+- 关联：S5 实施方案 §1.1 / §2，决策 D71（Contract V1.1）、D72（Hooks 由平台统一执行）。
+- 性质：非破坏性（按第 2 节规则 2 递增次版本号，可在阶段内合并）。
+- 变更内容：
+  1. `HookSet` 新增可选字段 `post_model`（默认 `None`）；拒绝语义与文本缓冲/流式下发规则见 §1.7。
+  2. 新增 `HookPoint` 枚举（`pre_model` / `post_model` / `pre_tool` / `post_tool`）与 `HOOK_OVERRIDABLE` 可覆盖键白名单，从包入口导出。
+  3. `HarnessCapabilities` 新增 `internal_hook_points: list[HookPoint]`，默认空列表。
+  4. `CONTRACT_VERSION` 由 `1.0.0` 改为 `1.1.0`。
+  5. `TurnInput` 新增可选字段 `tool_statuses: dict[str, Literal["ok","error","denied","pending_approval"]]`（默认空字典）：Runtime 按事件日志 TOOL_RESULT 填写本轮历史中各工具结果的状态，使实时路径（不只重放续跑）也能把 denied / error 结果以错误形式交给模型；不读取该字段的适配器行为不变。
+- 不变：`Event` 判别联合、`EventType`、`RunEventType`、`RunState` 与迁移表、`capability_tier()` 判定规则均不变；hook 结果等新增内容只放在 `RunEvent.payload`。
+- 兼容性：所有新增字段均有默认值，现有适配器（mock / litellm / claude-sdk / stdio）与调用方无需修改即可构造；`extra="forbid"` 不变，旧版本消费方不会收到新字段以外的结构变化。
+- 契约测试：`packages/contract/tests/test_contract.py` 新增 V1.1 用例（导出、拦截点取值与白名单、`post_model` 可选、`internal_hook_points` 默认值与校验、`TurnInput.tool_statuses` 默认值与取值校验）。

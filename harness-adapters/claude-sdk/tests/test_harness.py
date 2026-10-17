@@ -44,7 +44,8 @@ from ai_contract import (  # noqa: E402
     UsageEvent,
     capability_tier,
 )
-from ai_harness_claude_sdk import ClaudeSdkConfig, ClaudeSdkHarness, HarnessInterruptedError, build_prompt  # noqa: E402
+from ai_harness_claude_sdk import ClaudeSdkConfig, ClaudeSdkHarness, HarnessInterruptedError, from_api_messages  # noqa: E402
+from ai_harness_claude_sdk.transcript import load_transcript, transcript_path  # noqa: E402
 
 MODEL = "deepseek-v4-pro-2026-08"
 GW_TOKEN = "tok"  # noqa: S105 —— 测试用假凭据
@@ -57,17 +58,19 @@ class FakeClient:
     def __init__(self, options: Any, script: Any) -> None:
         self.options = options
         self.script = script
-        self.prompt: str | None = None
+        self.raw: list[dict[str, Any]] = []  # CLI 载入的合成转录（Anthropic 格式）
+        self.history: list[dict[str, Any]] = []  # 同上，规范化为平台历史格式
         self.connected = self.interrupted = self.disconnected = False
         self.tool_results: list[dict[str, Any]] = []
         self._bridge: SdkMcpBridge | None = None
         self._rpc_id = 0
 
     async def connect(self) -> None:
+        """像 CLI 一样按 --resume 载入合成转录（适配器不再经 stdin 发送 prompt）。"""
         self.connected = True
-
-    async def query(self, prompt: str) -> None:
-        self.prompt = prompt
+        path = transcript_path(self.options.env["CLAUDE_CONFIG_DIR"], self.options.cwd, self.options.resume)
+        self.raw = load_transcript(path)
+        self.history = from_api_messages(self.raw)
 
     async def receive_response(self) -> Any:
         async for msg in self.script(self):
@@ -175,11 +178,13 @@ def kinds(events: list[Any]) -> list[str]:
     return [e.type.value if not isinstance(e, DoneEvent) else f"done:{e.stop_reason}" for e in events]
 
 
-async def test_capabilities_enforcing_but_not_replayable() -> None:
+async def test_capabilities_enforcing_and_replayable() -> None:
+    """S5：结构化续跑后声明 can_resume_from_events（重放续跑探针为证），能力等级 L2；hook 点全部由平台执行。"""
     h, _ = make_harness(None)
     caps = h.capabilities()
-    assert (caps.loop_owner, caps.tool_interception, caps.can_resume_from_events) == ("harness", "enforcing", False)
-    assert capability_tier(caps) == "L1"
+    assert (caps.loop_owner, caps.tool_interception, caps.can_resume_from_events) == ("harness", "enforcing", True)
+    assert caps.supports_native_resume and caps.internal_hook_points == []
+    assert capability_tier(caps) == "L2"
 
 
 async def test_text_turn_event_order(tmp_path: Any) -> None:
@@ -197,7 +202,7 @@ async def test_text_turn_event_order(tmp_path: Any) -> None:
     usage = events[2]
     assert (usage.input_tokens, usage.output_tokens, usage.cost, usage.model) == (10, 3, 0.02, MODEL)
     c = clients[0]
-    assert c.prompt == "回复一个字：好" and c.connected and c.disconnected
+    assert c.history == [{"role": "user", "content": "回复一个字：好"}] and c.connected and c.disconnected
     assert (tmp_path / "ws").is_dir()  # 工作区不存在时自动创建
     assert c.options.system_prompt == "你是测试助手" and c.options.model == MODEL
 
@@ -274,7 +279,9 @@ async def test_tool_bridge_roundtrip(tmp_path: Any) -> None:
     assert second[0].delta == '结果：{"echo": "hi"}'  # 非字符串结果按 JSON 文本交给 SDK
     assert (second[1].input_tokens, second[1].output_tokens, second[1].cost) == (30, 4, 0.05)  # 总量减去中途已上报
     assert clients[0].tool_results == [{"content": [{"type": "text", "text": '{"echo": "hi"}'}], "isError": False}]
-    assert h._sessions == {}  # 查询结束即释放会话
+    idle = h._sessions[handle.session_id]  # 查询结束：会话保留（可再开新查询），查询状态已重置
+    assert idle.task is None and idle.pending == {} and idle.config_dir == ""
+    assert not exists(clients[0].options.env["CLAUDE_CONFIG_DIR"])  # 本次查询的转录目录已删除
 
 
 async def test_interception_probe_platform_denial_reaches_sdk_without_execution(tmp_path: Any) -> None:
@@ -412,30 +419,45 @@ async def test_fallback_call_id_when_tool_block_not_seen(tmp_path: Any) -> None:
     assert kinds(second) == ["text", "usage", "done:end_turn"] and second[0].delta == "ok"
 
 
-async def test_resume_renders_history_into_prompt(tmp_path: Any) -> None:
+async def test_resume_continues_from_structured_transcript(tmp_path: Any) -> None:
+    """续跑：历史合成为 CLI 会话转录、以 --resume 原生续接；重放事件中 denied 的结果记 is_error；
+    不再经 stdin 发送任何 prompt，也没有纯文本前缀。"""
+
     async def script(c: FakeClient) -> Any:
         yield assistant(TextBlock(text="继续"), mid="m1")
         yield result(1, 1)
 
     h, clients = make_harness(script)
-    handle = await h.resume(make_spec(tmp_path), [])
-    assert handle.native_ref == "replayed:0"
+    events = [
+        ToolUseEvent(call_id="c1", tool_name="echo", input={"text": "a"}),
+        ToolResultEvent(call_id="c1", status="denied", output="no"),
+    ]
+    handle = await h.resume(make_spec(tmp_path), events)
+    session = h._sessions[handle.session_id]
+    assert handle.native_ref == f"transcript:{session.cli_session_id}"
     msgs = [
         {"role": "user", "content": "第一问"},
         {"role": "assistant", "content": "第一答"},
         {"role": "user", "content": "第二问"},
         {"role": "assistant", "tool_use": {"call_id": "c1", "name": "echo", "input": {"text": "a"}}},
-        {"role": "tool", "call_id": "c1", "content": "a"},
+        {"role": "tool", "call_id": "c1", "content": "no"},
     ]
     await collect(h, handle, msgs, [ECHO])
-    prompt = clients[0].prompt or ""
-    assert prompt.startswith("[对话历史]\nuser: 第一问\nassistant: 第一答")
-    assert "[当前用户消息]\n第二问" in prompt
-    assert "[本轮已发生的工具调用与结果]" in prompt and "tool[c1]: a" in prompt
+    c = clients[0]
+    assert c.history == msgs  # CLI 载入的转录逐项还原为平台历史
+    assert c.options.resume == session.cli_session_id
+    assert c.options.env["CLAUDE_CODE_RESUME_INTERRUPTED_TURN"] == "1"
+    last = c.raw[-1]["content"]
+    assert last == [{"type": "tool_result", "tool_use_id": "c1", "content": "no", "is_error": True}]
 
 
-def test_build_prompt_single_message_is_verbatim() -> None:
-    assert build_prompt([{"role": "user", "content": "你好"}]) == "你好"
+async def test_history_that_cannot_be_resumed_is_an_error_turn(tmp_path: Any) -> None:
+    """历史以助手消息结尾（没有需要模型回答的内容）：不启动查询，产出合规的错误轮次，会话保留。"""
+    h, clients = make_harness(None)
+    handle = await h.open_session(make_spec(tmp_path))
+    events = await collect(h, handle, [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "答"}])
+    assert kinds(events) == ["error", "usage", "done:error"] and "assistant" in events[0].message
+    assert clients == [] and handle.session_id in h._sessions
 
 
 def test_config_from_env_defaults_and_overrides() -> None:
@@ -506,7 +528,9 @@ async def test_interrupt_unknown_or_finished_session_is_noop(tmp_path: Any) -> N
     h, _ = make_harness(script)
     handle = await h.open_session(make_spec(tmp_path))
     await collect(h, handle, [{"role": "user", "content": "hi"}])
-    await h.interrupt(handle, "run_test")  # 查询已正常结束
+    await h.interrupt(handle, "run_test")  # 查询已正常结束：释放会话
+    assert h._sessions == {}
+    await h.interrupt(handle, "run_test")  # 已释放：幂等
     await h.interrupt(handle.model_copy(update={"session_id": "nope"}), "run_test")  # 从未存在
     assert h._sessions == {}
 
@@ -545,7 +569,7 @@ async def test_init_isolation_violation_fails_closed(tmp_path: Any, tools: list[
     events = await collect(h, handle, [{"role": "user", "content": "hi"}], [ECHO])
     assert kinds(events) == ["error", "usage", "done:error"]
     assert events[0].code == "HARNESS_ISOLATION_VIOLATION" and needle in events[0].message
-    assert clients[0].disconnected and h._sessions == {}
+    assert clients[0].disconnected and h._sessions[handle.session_id].task is None
 
 
 async def test_init_with_only_platform_tools_passes(tmp_path: Any) -> None:
@@ -579,18 +603,24 @@ async def test_config_dir_is_per_session_temp_and_removed(tmp_path: Any) -> None
     assert tmp_path / "ws" not in config_dir.parents
     assert not exists(config_dir)
     assert (tmp_path / "ws").is_dir()  # 用户给定的 workspace_dir 不删
-    # CLI 转录与输入历史不写盘
-    assert opts.extra_args == {"no-session-persistence": None}
-    assert opts.env["CLAUDE_CODE_SKIP_PROMPT_HISTORY"] == "1"
+    # 以合成转录原生续接；CLI 不写回转录、不写输入历史
+    assert opts.resume == clients[0].options.resume and opts.extra_args == {"no-session-persistence": None}
+    assert opts.env["CLAUDE_CODE_SKIP_PROMPT_HISTORY"] == "1" and opts.env["CLAUDE_CODE_RESUME_INTERRUPTED_TURN"] == "1"
+    # 兜底的 PreToolUse 回调已注册
+    assert [m.matcher for m in opts.hooks["PreToolUse"]] == [None]
 
 
-async def test_self_created_cwd_removed_on_end_and_on_interrupt(tmp_path: Any) -> None:
+async def test_self_created_cwd_removed_on_interrupt(tmp_path: Any) -> None:
+    """自建 cwd 跨查询保留，会话被中断（runner 每次 drive 结束都会调用）时删除；查询目录在查询结束时即删除。"""
+
     async def script(c: FakeClient) -> Any:
         yield result(1, 1)
 
     h, clients = make_harness(script)
     handle = await h.open_session(make_spec(tmp_path, workspace=False))
     await collect(h, handle, [{"role": "user", "content": "hi"}])
+    assert is_dir(clients[0].options.cwd) and not exists(clients[0].options.env["CLAUDE_CONFIG_DIR"])
+    await h.interrupt(handle, "run_test")
     assert not exists(clients[0].options.cwd)
 
     # 从未启动查询的会话，由 interrupt 负责删除
@@ -638,7 +668,7 @@ async def test_env_scrubs_sensitive_variables(tmp_path: Any, monkeypatch: pytest
     assert os.environ["DATABASE_URL"] == "secret-0"  # 不修改本进程环境
 
 
-# ---- 停止原因与 pre_model ----
+# ---- 停止原因与 hooks ----
 
 
 async def test_result_max_tokens_maps_to_done_max_tokens(tmp_path: Any) -> None:
@@ -663,15 +693,14 @@ async def test_result_error_max_turns_maps_to_harness_max_turns(tmp_path: Any) -
     assert events[0].code == "HARNESS_MAX_TURNS" and events[1].input_tokens == 4
 
 
-async def test_pre_model_deny_does_not_start_query(tmp_path: Any) -> None:
+async def test_adapter_does_not_call_pre_model_itself(tmp_path: Any) -> None:
+    """pre_model 由 runner 在每轮边界统一调用（S5 D72/D81）：适配器未声明 internal_hook_points，
+    即使收到带 pre_model 的 HookSet 也不调用它。"""
     seen: list[dict[str, Any]] = []
 
     async def deny(payload: dict[str, Any]) -> dict[str, Any] | None:
         seen.append(payload)
         return {"deny": "budget exceeded"}
-
-    async def allow(payload: dict[str, Any]) -> dict[str, Any] | None:
-        return None
 
     async def script(c: FakeClient) -> Any:
         yield assistant(TextBlock(text="好"), mid="m1")
@@ -679,16 +708,38 @@ async def test_pre_model_deny_does_not_start_query(tmp_path: Any) -> None:
 
     h, clients = make_harness(script)
     handle = await h.open_session(make_spec(tmp_path))
-    msgs = [{"role": "user", "content": "hi"}]
-    events = [ev async for ev in h.run_turn(handle, TurnInput(messages=msgs), [], [], HookSet(pre_model=deny))]
-    assert kinds(events) == ["error", "usage", "done:error"]
-    assert events[0].code == "PRE_MODEL_DENIED" and events[0].message == "budget exceeded"
-    assert clients == []  # 查询从未启动
-    assert seen == [{"messages": msgs, "model_alias": MODEL}]
+    events = [
+        ev async for ev in h.run_turn(handle, TurnInput(messages=[{"role": "user", "content": "hi"}]), [], [], HookSet(pre_model=deny))
+    ]
+    assert kinds(events) == ["text", "usage", "done:end_turn"] and seen == [] and len(clients) == 1
 
-    # 会话保留：放行后同一会话可正常开启查询
-    events = [ev async for ev in h.run_turn(handle, TurnInput(messages=msgs), [], [], HookSet(pre_model=allow))]
-    assert kinds(events) == ["text", "usage", "done:end_turn"]
+
+async def test_tool_turn_waits_boundedly_for_late_message_delta(tmp_path: Any) -> None:
+    """S1 #6：message_delta 迟到时有界等待；超过 delta_wait_s 仍未到则照常上报（差额在查询结束时补齐，总量不丢）。"""
+    gate = asyncio.Event()
+
+    async def script(c: FakeClient) -> Any:
+        yield StreamEvent(uuid="u", session_id="s", event={"type": "message_start", "message": {"id": "m1", "usage": {"input_tokens": 9}}})
+        yield assistant(ToolUseBlock(id="toolu_1", name="mcp__platform__echo", input={"text": "x"}), mid="m1", inp=9, out=0)
+        call = asyncio.ensure_future(c.call_tool("echo", {"text": "x"}))  # CLI 已发起工具调用
+        await gate.wait()  # message_delta 迟迟不到，直到首轮结束
+        yield StreamEvent(uuid="u", session_id="s", event={"type": "message_delta", "usage": {"output_tokens": 7}})
+        await call
+        yield result(9, 7)
+
+    h, _ = make_harness(script)
+    h.delta_wait_s = 0.05
+    handle = await h.open_session(make_spec(tmp_path))
+    first = await collect(h, handle, [{"role": "user", "content": "go"}], [ECHO])
+    assert kinds(first) == ["tool_use", "usage", "done:tool_use"] and first[-2].output_tokens == 0  # 等待超时，未阻塞本轮
+    gate.set()
+    msgs = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "tool_use": {"call_id": "toolu_1", "name": "echo", "input": {"text": "x"}}},
+        {"role": "tool", "call_id": "toolu_1", "content": "x"},
+    ]
+    second = await collect(h, handle, msgs, [ECHO])
+    assert second[-2].output_tokens == 7  # 差额补齐
 
 
 # ---- fallback call_id 之后迟到的块 ----

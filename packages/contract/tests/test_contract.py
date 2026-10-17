@@ -9,12 +9,15 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from ai_contract import (
+    HOOK_OVERRIDABLE,
     CardEvent,
     CardType,
     DoneEvent,
     Event,
     EventType,
     HarnessCapabilities,
+    HookPoint,
+    HookSet,
     InputRequiredEvent,
     RunEvent,
     RunEventType,
@@ -24,6 +27,7 @@ from ai_contract import (
     ThinkingEvent,
     ToolSpec,
     ToolUseEvent,
+    TurnInput,
     can_transition,
     capability_tier,
 )
@@ -109,7 +113,7 @@ def test_contract_version_exported():
     """CONTRACT_VERSION 存在、是语义化版本号，并在 __all__ 中导出。"""
     import ai_contract
 
-    assert ai_contract.CONTRACT_VERSION == "1.0.0"
+    assert ai_contract.CONTRACT_VERSION == "1.1.0"
     assert "CONTRACT_VERSION" in ai_contract.__all__
     for name in ("InputRequiredEvent", "CardType", "ThinkingVisibility"):
         assert name in ai_contract.__all__
@@ -184,3 +188,66 @@ def test_event_union_covers_all_event_types():
     assert set(samples) == {t.value for t in EventType}
     parsed = EVENTS.validate_python([{"type": t, **body} for t, body in samples.items()])
     assert [p.type for p in parsed] == list(samples)
+
+
+# ---------------- Contract V1.1（S5：Hooks 由平台统一执行）----------------
+
+
+def test_v11_exports():
+    """V1.1 新增的 HookPoint、HOOK_OVERRIDABLE 从包入口导出。"""
+    import ai_contract
+
+    for name in ("HookPoint", "HOOK_OVERRIDABLE"):
+        assert name in ai_contract.__all__
+
+
+def test_hook_points_and_overridable_whitelist():
+    """四个拦截点取值固定；每个点都有可覆盖键白名单，取值与方案 §1.1 一致（pre_model 不可覆盖任何键）。"""
+    assert [p.value for p in HookPoint] == ["pre_model", "post_model", "pre_tool", "post_tool"]
+    assert set(HOOK_OVERRIDABLE) == set(HookPoint)
+    assert HOOK_OVERRIDABLE[HookPoint.PRE_MODEL] == frozenset()
+    assert HOOK_OVERRIDABLE[HookPoint.POST_MODEL] == {"thinking_summary"}
+    assert HOOK_OVERRIDABLE[HookPoint.PRE_TOOL] == {"input"}
+    assert HOOK_OVERRIDABLE[HookPoint.POST_TOOL] == {"output", "data_class"}
+    assert all(isinstance(v, frozenset) for v in HOOK_OVERRIDABLE.values())
+
+
+async def test_hookset_post_model_optional():
+    """HookSet 新增可选的 post_model；未设置时为 None，原有构造方式不受影响。"""
+    assert HookSet().post_model is None
+    seen: list[dict] = []
+
+    async def post_model(p):
+        seen.append(p)
+        return {"thinking_summary": "s"}
+
+    hs = HookSet(post_model=post_model)
+    assert hs.post_model is not None
+    assert await hs.post_model({"text": "t"}) == {"thinking_summary": "s"}
+    assert seen == [{"text": "t"}]
+
+
+def test_internal_hook_points_default_and_validation():
+    """internal_hook_points 默认空（全部由平台执行），只接受 HookPoint 取值，序列化为字符串；extra=forbid 不变。"""
+    base = {"name": "h", "version": "0", "transport": "stdio"}
+    assert HarnessCapabilities(**base).internal_hook_points == []
+    caps = HarnessCapabilities(**base, internal_hook_points=["pre_model", HookPoint.PRE_TOOL])
+    assert caps.internal_hook_points == [HookPoint.PRE_MODEL, HookPoint.PRE_TOOL]
+    assert caps.model_dump(mode="json")["internal_hook_points"] == ["pre_model", "pre_tool"]
+    with pytest.raises(ValidationError):
+        HarnessCapabilities(**base, internal_hook_points=["on_subagent"])
+    with pytest.raises(ValidationError):
+        HarnessCapabilities(**base, bogus=True)
+    # 新字段不参与能力分级
+    assert capability_tier(caps) == capability_tier(HarnessCapabilities(**base))
+
+
+def test_turn_input_tool_statuses_optional_and_validated():
+    """TurnInput.tool_statuses（V1.1 新增）默认空字典，只接受工具结果状态取值；extra=forbid 不变。"""
+    assert TurnInput(messages=[]).tool_statuses == {}
+    turn = TurnInput(messages=[], tool_statuses={"c1": "denied", "c2": "error", "c3": "ok", "c4": "pending_approval"})
+    assert turn.model_dump(mode="json")["tool_statuses"]["c1"] == "denied"
+    with pytest.raises(ValidationError):
+        TurnInput(messages=[], tool_statuses={"c1": "rejected"})
+    with pytest.raises(ValidationError):
+        TurnInput(messages=[], bogus=True)

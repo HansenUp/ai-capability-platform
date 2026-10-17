@@ -227,24 +227,35 @@ async def current_principal(
     return principal
 
 
+def is_admin(principal: Principal) -> bool:
+    """是否平台管理员：强制鉴权时看 realm 角色 platform-admin；开发态不检查角色（与 require_admin 一致）。"""
+    return not settings.auth_required or ADMIN_ROLE in principal.roles
+
+
 async def require_admin(request: Request, principal: Principal = Depends(current_principal)) -> Principal:
     """管理 API 的依赖：强制鉴权时要求 realm 角色 platform-admin（开发态不检查）。"""
-    if settings.auth_required and ADMIN_ROLE not in principal.roles:
+    if not is_admin(principal):
         request.state.auth_error = f"missing role {ADMIN_ROLE}"
         raise HTTPException(403, f"role '{ADMIN_ROLE}' required")
     return principal
 
 
+def approver_denial(principal: Principal, run_subject: str) -> str | None:
+    """审批资格（强制鉴权时）：只有人员能审批，且不能审批自己发起的 Run；有资格返回 None，否则返回拒绝原因。
+    开发态不检查。"""
+    if not settings.auth_required:
+        return None
+    if principal.auth_method != "user":
+        return "approval requires a human user token"
+    if principal.subject == run_subject:
+        return "the run initiator cannot approve or reject their own run"
+    return None
+
+
 def check_approver(request: Request, principal: Principal, run_subject: str) -> None:
     """审批人校验（强制鉴权时）：只有人员能审批，且不能审批自己发起的 Run——
     否则持 Client Credentials 令牌的应用可以自己批准自己挂起的高风险操作，人工审批形同虚设。"""
-    if not settings.auth_required:
-        return
-    reason = None
-    if principal.auth_method != "user":
-        reason = "approval requires a human user token"
-    elif principal.subject == run_subject:
-        reason = "the run initiator cannot approve or reject their own run"
+    reason = approver_denial(principal, run_subject)
     if reason:
         request.state.auth_error = reason
         raise HTTPException(403, reason)

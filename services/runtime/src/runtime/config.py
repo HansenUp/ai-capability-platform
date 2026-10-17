@@ -34,6 +34,8 @@ class Settings:
     model_gateway_api_key: str = field(default_factory=lambda: secret_store.get("MODEL_GATEWAY_API_KEY", DEV_GATEWAY_KEY) or "", repr=False)
     # claude-sdk Harness 调网关的凭据；未单独配置时与 model_gateway_api_key 相同
     claude_sdk_auth_token: str | None = field(default_factory=lambda: secret_store.get("CLAUDE_SDK_AUTH_TOKEN"), repr=False)
+    # post_tool hook 改写输出时原文指纹（TOOL_RESULT.raw_output_hmac）的 HMAC 密钥；开发默认值公开，生产必须另配
+    hook_digest_key: str = field(default_factory=lambda: secret_store.get("HOOK_DIGEST_KEY", DEV_HOOK_DIGEST_KEY) or "", repr=False)
     llm_timeout_s: float = field(default_factory=lambda: float(_env("LLM_TIMEOUT_S", "120")))  # 单次模型请求超时（秒）
     llm_max_retries: int = field(default_factory=lambda: int(_env("LLM_MAX_RETRIES", "2")))  # 可重试错误（429/5xx/网络）的最大重试次数
     # OTLP/HTTP 端点（基址），未设置则只装 TracerProvider、不导出 Trace
@@ -42,6 +44,11 @@ class Settings:
     # 空表示一律阻断。逗号分隔。
     confidential_model_aliases: tuple[str, ...] = field(
         default_factory=lambda: tuple(x for x in _env("CONFIDENTIAL_MODEL_ALIASES", "").split(",") if x)
+    )
+    # harness 持有循环（loop_owner=harness）的适配器上，允许声明高风险写工具的 Agent 白名单（S5 §4-1，逗号分隔 agent_id）；
+    # 默认空 = 一律拒绝发布，业务评测后再按 Agent 放开。
+    harness_loop_high_risk_allowlist: tuple[str, ...] = field(
+        default_factory=lambda: tuple(x for x in _env("HARNESS_LOOP_HIGH_RISK_ALLOWLIST", "").split(",") if x)
     )
     # confidential 污点下一律拒绝的检索 / 外部查询类工具（按名称前缀）：查询语句本身会把机密上下文带出去
     confidential_blocked_tool_prefixes: tuple[str, ...] = field(
@@ -72,13 +79,14 @@ class Settings:
 
 
 DEV_GATEWAY_KEY = "sk-dev-master"  # noqa: S105 —— 本机 compose LiteLLM 的公开开发主密钥，生产禁止使用
+DEV_HOOK_DIGEST_KEY = "dev-hook-digest-key"  # noqa: S105 —— 开发用公开默认值，生产禁止使用
 
 
 def production_problems(s: Settings) -> list[str]:
     """RUNTIME_ENV=prod 时的安全基线：返回不满足的条目（空列表表示通过）。
 
     - 必须强制 JWT 验签，且 JWKS 地址、签发者、受众齐全；
-    - 不得使用开发网关主密钥；数据库连接必须经 Vault / 挂载文件注入且不是 SQLite；
+    - 不得使用开发网关主密钥与开发 hook 指纹密钥；数据库连接必须经 Vault / 挂载文件注入且不是 SQLite；
     - 密钥项不得来自明文环境变量（只能经 Vault 或挂载文件注入）。
     """
     problems: list[str] = []
@@ -89,6 +97,8 @@ def production_problems(s: Settings) -> list[str]:
             problems.append(f"缺少 {name}")
     if not s.model_gateway_api_key or s.model_gateway_api_key == DEV_GATEWAY_KEY:
         problems.append("MODEL_GATEWAY_API_KEY 未配置或仍为开发主密钥")
+    if not s.hook_digest_key or s.hook_digest_key == DEV_HOOK_DIGEST_KEY:
+        problems.append("HOOK_DIGEST_KEY 未配置或仍为开发默认值")
     if secret_store.source("DATABASE_URL") not in ("vault", "file") or s.database_url.startswith("sqlite"):
         problems.append("DATABASE_URL 未经 Vault / DATABASE_URL_FILE 注入，或仍指向 SQLite")
     if s.tool_dispatch != "gateway":

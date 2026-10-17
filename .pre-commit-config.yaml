@@ -27,7 +27,7 @@ repos:
         pass_filenames: false
       - id: mypy                          # 与 make lint 一致：始终检查固定目录
         name: mypy
-        entry: .venv/bin/mypy packages/contract/src services/runtime/src harness-adapters/claude-sdk/src
+        entry: .venv/bin/mypy packages/contract/src services/runtime/src harness-adapters/claude-sdk/src harness-adapters/probe/src
         language: system
         types: [python]
         pass_filenames: false

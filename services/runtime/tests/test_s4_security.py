@@ -198,7 +198,7 @@ def _sse_events(resp: Any) -> list[dict[str, Any]]:
 
 def test_pinned_pre_release_version_requires_allowlist(client: Any) -> None:
     """S4 评审：0% + 白名单的预发布版本（D66）不能被非白名单主体用 agent_version 直接调用——与不存在同样 404；
-    白名单主体可指定调用；续跑固定原版本，不受续跑者是否在白名单影响。/v1/messages 与 /v1/runs 共用 _load_agent，两者都覆盖。"""
+    白名单主体可指定调用；续跑固定原版本（续跑只允许发起人，D87 修订）。/v1/messages 与 /v1/runs 共用 _load_agent，两者都覆盖。"""
     tools = {"tools": ["ticket.close_batch"]}
     for version, extra in (("1", {}), ("2", {"rollout_percent": 0, "rollout_allowlist": ["human:evaluator"]})):
         assert client.post("/admin/agents", json={"agent_id": "prepin", "version": version, "config": tools}).status_code == 201
@@ -218,7 +218,7 @@ def test_pinned_pre_release_version_requires_allowlist(client: Any) -> None:
     r = client.post("/v1/runs", json=run, headers=evaluator)
     assert r.status_code == 202 and client.get(f"/v1/runs/{r.json()['run_id']}").json()["agent_version"] == "2"
 
-    # 续跑：白名单主体发起的 v2 Run 挂起审批后，由非白名单主体批准并续跑，仍按 v2 执行
+    # 续跑：白名单主体发起的 v2 Run 挂起审批后，由非白名单主体批准；审批人续跑 403（D87 修订），发起人续跑仍按 v2 执行
     close = [{"role": "user", "content": '!tool ticket.close_batch {"ids":["T-1"]}'}]
     with client.stream("POST", "/v1/messages", json=msg | {"messages": close, "stream": True}, headers=evaluator) as resp:
         evs = _sse_events(resp)
@@ -226,7 +226,8 @@ def test_pinned_pre_release_version_requires_allowlist(client: Any) -> None:
     run_id = evs[-1]["run_id"]
     approval = {"call_id": card["payload"]["call_id"], "params_hash": card["payload"]["params_hash"]}
     assert client.post(f"/v1/runs/{run_id}/approve", json=approval, headers=outsider).status_code == 200
-    with client.stream("POST", f"/v1/runs/{run_id}/resume", json={"messages": close}, headers=outsider) as resp:
+    assert client.post(f"/v1/runs/{run_id}/resume", json={"messages": close}, headers=outsider).status_code == 403
+    with client.stream("POST", f"/v1/runs/{run_id}/resume", json={"messages": close}, headers=evaluator) as resp:
         assert resp.status_code == 200
         resumed = _sse_events(resp)
     assert resumed[-1]["type"] == "done" and client.get(f"/v1/runs/{run_id}").json()["agent_version"] == "2"

@@ -1,0 +1,13 @@
+[project]
+name = "ai-harness-probe"
+version = "0.1.0"
+description = "Contract probe suite for Harness adapters: scripted model, platform simulator and the five Runtime Contract probes"
+requires-python = ">=3.11"
+dependencies = ["ai-contract"]
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]

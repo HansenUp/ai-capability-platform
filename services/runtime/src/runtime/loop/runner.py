@@ -33,7 +33,7 @@ from ai_contract import (
     DoneEvent,
     ErrorEvent,
     Event,
-    HookSet,
+    HookPoint,
     InputRequiredEvent,
     RunEvent,
     RunEventType,
@@ -53,9 +53,10 @@ from runtime.assemble.assembler import assemble
 from runtime.config import settings
 from runtime.context import budget as ctx
 from runtime.guard.gate import GateContext
+from runtime.guard.hooks import HookChain, HookConfigError, HookOutcome
 from runtime.harness import registry
 from runtime.loop import active
-from runtime.loop.toolbroker import RunCtx, handle_tool, record_unknown_result
+from runtime.loop.toolbroker import RunCtx, handle_tool, hmac_json, record_unknown_result, taint_of
 from runtime.observe import tracing
 from runtime.run import invariant
 from runtime.state.db import AgentVersion, Run, SessionLocal
@@ -73,11 +74,38 @@ def thinking_visibility(agent: AgentVersion) -> ThinkingVisibility:
 
 
 async def create_run(
-    agent: AgentVersion, subject: str, session_id: str | None, actor: str | None = None, rollout: str | None = None
+    agent: AgentVersion,
+    subject: str,
+    session_id: str | None,
+    actor: str | None = None,
+    rollout: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    initial_messages: list[dict[str, Any]] | None = None,
 ) -> str:
     """创建一个新 Run：写入 t_run 行并追加 RUN_CREATED 事件（seq=1），返回新生成的 run_id。
-    actor 为代为执行的 Agent / 应用（来自令牌的 act 声明或签发客户端），rollout 为选版原因（灰度），均随 RUN_CREATED 进事件日志。"""
+    actor 为代为执行的 Agent / 应用（来自令牌的 act 声明或签发客户端），rollout 为选版原因（灰度），均随 RUN_CREATED 进事件日志。
+
+    attachments 为本 Run 附件的元信息 `[{"artifact_id", "source_run_id", "data_class"}]`（D88）：原样写入 RUN_CREATED 的
+    `attachments`，并据此写 `inherited_taint`——任一附件为 confidential（或分级缺失 / 无法识别，失败关闭）即 "confidential"，
+    否则 None；该污点在本 Run 首次驱动与之后每次续跑时由 `_replayed_taint` 读取。默认 None 时不写这两个键（日志不变）。
+
+    initial_messages 为首次驱动将使用的初始消息（含附件说明消息）：其指纹写入 RUN_CREATED 的 `initial_messages_hash`，
+    把初始消息与事件日志绑定——续跑回传的初始消息必须与之一致（API 层 409，drive 兜底 INVARIANT_VIOLATION）。
+    默认 None 时不写该键。"""
     run_id = "run_" + uuid.uuid4().hex[:20]
+    created: dict[str, Any] = {
+        "agent_id": agent.agent_id,
+        "agent_version": agent.version,
+        "model_alias": agent.model_alias,
+        "subject": subject,
+        "actor": actor,
+        "rollout": rollout,
+    }
+    if attachments is not None:
+        created["attachments"] = attachments
+        created["inherited_taint"] = "confidential" if any(a.get("data_class") not in ("public", "internal") for a in attachments) else None
+    if initial_messages is not None:
+        created[invariant.INITIAL_MESSAGES_HASH] = invariant.message_hash(initial_messages)
     async with SessionLocal() as s:
         s.add(
             Run(
@@ -91,24 +119,18 @@ async def create_run(
             )
         )
         await s.flush()
-        await EventLog(s).append(
-            run_id,
-            RunEventType.RUN_CREATED,
-            {
-                "agent_id": agent.agent_id,
-                "agent_version": agent.version,
-                "model_alias": agent.model_alias,
-                "subject": subject,
-                "actor": actor,
-                "rollout": rollout,
-            },
-        )
+        await EventLog(s).append(run_id, RunEventType.RUN_CREATED, created)
         await s.commit()
     return run_id
 
 
 async def drive(
-    run_id: str, agent: AgentVersion, subject: str, messages: list[dict[str, Any]], credential: str | None = None
+    run_id: str,
+    agent: AgentVersion,
+    subject: str,
+    messages: list[dict[str, Any]],
+    credential: str | None = None,
+    credential_subject: str | None = None,
 ) -> AsyncIterator[Event]:
     """驱动一个 Run 的执行（首次执行或续跑均走此函数）：
     1) 组装上下文与工具集，构造 SessionSpec；
@@ -122,9 +144,13 @@ async def drive(
     同一 Run 的各条 Trace 以 `langfuse.session.id=run_id` 归入 Langfuse 同一 Session。t_run.trace_id
     始终指向最近一次 drive 的 Trace，与本次下发的 DoneEvent.trace_id 一致。
     本包装层只给 DoneEvent 补 trace_id 并记录停止原因，事件的种类、顺序与消费语义与 _drive 完全一致。
+
+    credential_subject 为 credential（执行工具所用令牌）所属主体（D87）。非 None 且与 Run 发起主体（subject）不同时，
+    记入 TOOL_EXECUTING 事件与工具审计；默认 None 时行为与此前完全一致。D87 修订后续跑只允许发起人，经 API 传入的
+    credential_subject 恒等于发起主体，因此不会写入；机制保留。
     """
     with tracing.run_span(run_id, agent, subject, agent.model_alias) as rs:
-        async with aclosing(_drive(run_id, agent, subject, messages, rs, credential)) as events:
+        async with aclosing(_drive(run_id, agent, subject, messages, rs, credential, credential_subject)) as events:
             async for ev in events:
                 if isinstance(ev, DoneEvent):
                     ev = ev.model_copy(update={"trace_id": rs.trace_id})
@@ -163,25 +189,74 @@ async def _stop_if_canceled(run_id: str) -> bool:
 
 
 def _replayed_taint(prior: list[RunEvent], tools_by_name: dict[str, ToolSpec]) -> set[str]:
-    """从事件日志重建本 Run 的数据分类污点（ADR-0010）：每个 status=ok 的 TOOL_RESULT 若对应工具的
-    data_class 为 confidential，即带上 confidential 污点。数据分类优先取 TOOL_RESULT 自身记录的
-    data_class；旧事件没有该字段时，按其 TOOL_REQUESTED 的工具名回退到当前工具表。"""
+    """从事件日志重建本 Run 的数据分类污点（ADR-0010，D88/D89）：RUN_CREATED 的 inherited_taint（附件继承），
+    加上每个 TOOL_RESULT 按 `taint_of(status, data_class)` 计出的污点（与工具代理实时传播同一口径：ok 与 error 都计）。
+    数据分类优先取 TOOL_RESULT 自身记录的 data_class（含 post_tool hook 的升级）；旧事件没有该字段时，
+    按其 TOOL_REQUESTED 的工具名回退到当前工具表。"""
     requested = {e.payload["call_id"]: e.payload.get("tool") for e in prior if e.type == RunEventType.TOOL_REQUESTED}
     taint: set[str] = set()
     for e in prior:
-        if e.type != RunEventType.TOOL_RESULT or e.payload.get("status") != "ok":
+        if e.type == RunEventType.RUN_CREATED and e.payload.get("inherited_taint") == "confidential":
+            taint.add("confidential")
+        if e.type != RunEventType.TOOL_RESULT:
             continue
         data_class = e.payload.get("data_class")
         if data_class is None:
             tool = tools_by_name.get(requested.get(e.payload["call_id"]) or "")
             data_class = tool.data_class if tool else None
-        if data_class == "confidential":
-            taint.add("confidential")
+        taint |= taint_of(e.payload.get("status"), data_class)
     return taint
 
 
+_TOOL_STATUSES = frozenset({"ok", "error", "denied", "pending_approval"})
+
+
+def _tool_statuses(prior: list[RunEvent], history: list[dict[str, Any]]) -> dict[str, Any]:
+    """TurnInput.tool_statuses（Contract V1.1）：本轮历史中各工具结果的处理状态，取自事件日志的 TOOL_RESULT。
+    适配器据此把 denied / error 结果以错误形式交给模型（如 claude-sdk 的 tool_result.is_error）；无工具结果时为空。"""
+    in_history = {m.get("call_id") for m in history if m.get("role") == "tool"}
+    return {
+        e.payload["call_id"]: e.payload["status"]
+        for e in prior
+        if e.type == RunEventType.TOOL_RESULT and e.payload.get("call_id") in in_history and e.payload.get("status") in _TOOL_STATUSES
+    }
+
+
+def _pre_model_payload(prior: list[RunEvent], agent: AgentVersion, messages_hash: str, rc: RunCtx) -> dict[str, Any]:
+    """pre_model hook 的负载：轮次与累计用量都从事件日志计算（续跑前后一致），不含消息原文。"""
+    usage = {"input_tokens": 0, "output_tokens": 0}
+    for e in prior:
+        if e.type == RunEventType.MODEL_RESPONSE:
+            u = e.payload.get("usage") or {}
+            usage["input_tokens"] += int(u.get("input_tokens") or 0)
+            usage["output_tokens"] += int(u.get("output_tokens") or 0)
+    return {
+        "round": sum(1 for e in prior if e.type == RunEventType.MODEL_REQUEST) + 1,
+        "model_alias": agent.model_alias,
+        "n_messages": len(rc.history),
+        "messages_hash": messages_hash,
+        "taint": sorted(rc.gate.taint),
+        "usage": usage | {"total_tokens": usage["input_tokens"] + usage["output_tokens"]},
+    }
+
+
+async def _fail(run_id: str, code: str, message: str, reason: str, **extra: Any) -> None:
+    """记一条 RUN_ERROR 并把 Run 迁移到 failed（hook 拒绝 / 配置不合规等平台侧失败）。"""
+    async with SessionLocal() as s:
+        log = EventLog(s)
+        await log.append(run_id, RunEventType.RUN_ERROR, {"code": code, "message": message} | extra)
+        await log.transition(run_id, RunState.FAILED, reason)
+        await s.commit()
+
+
 async def _drive(
-    run_id: str, agent: AgentVersion, subject: str, messages: list[dict[str, Any]], rs: tracing.RunSpan, credential: str | None = None
+    run_id: str,
+    agent: AgentVersion,
+    subject: str,
+    messages: list[dict[str, Any]],
+    rs: tracing.RunSpan,
+    credential: str | None = None,
+    credential_subject: str | None = None,
 ) -> AsyncGenerator[Event, None]:
     """drive() 的实际执行体（步骤见 drive 的说明）；rs 为本次 drive 的根 span，模型轮次与工具调用的子 span 挂在其下。
 
@@ -203,8 +278,10 @@ async def _drive(
         workspace_dir=f"{settings.workspace_dir}/{run_id}",
     )
     initial_messages = list(messages)
+    visibility = thinking_visibility(agent)
     rc = RunCtx(
         credential=credential,  # 终端用户令牌：工具经能力网关执行时换取 OBO 令牌，只在内存中
+        credential_subject=credential_subject,
         run_id=run_id,
         agent=agent,
         spec=spec,
@@ -226,15 +303,32 @@ async def _drive(
         yield DoneEvent(run_id=run_id, stop_reason="cancelled")
         return
 
+    # Hooks（S5）：平台在每轮边界执行 pre_model / post_model，工具代理执行 pre_tool / post_tool。快照中的 hooks
+    # 配置发布时已校验；运行期仍不合规（如绕过发布）则失败关闭，不在没有 hook 的情况下继续跑。
+    try:
+        chain = HookChain.for_agent(agent.config, visibility)
+    except HookConfigError as exc:
+        await _fail(run_id, "HOOK_CONFIG_INVALID", str(exc), "hook config")
+        yield ErrorEvent(code="HOOK_CONFIG_INVALID", message=str(exc))
+        yield DoneEvent(run_id=run_id, stop_reason="error")
+        return
+    rc.hooks = chain
+
     # ---- unknown tool result window ----
     # （结果未知窗口：日志里有某个 call_id 的 TOOL_EXECUTING，却没有对应的 TOOL_EXECUTED 与
     # TOOL_RESULT，说明工具已经开始执行但结果未落盘——它到底有没有产生副作用无从判断。
     # 这种情况下**禁止盲目重试**：必须转人工确认或与下游系统对账，因此把 Run 迁移到
     # input-required 并推一张对账卡片给前端，由人来决定补做还是跳过。）
     unknown: dict[str, Any] | None = None
+    mismatch: str | None = None  # 初始消息与 RUN_CREATED 记录的指纹不一致
     async with SessionLocal() as s:
         log = EventLog(s)
         prior = await log.list(run_id)
+        try:
+            # 初始消息与事件日志绑定：API 层续跑已先行比对（不一致 409）；此处兜底直接调用 drive 的路径
+            invariant.check_initial(prior, initial_messages)
+        except invariant.InvariantViolation as exc:
+            mismatch = str(exc)
         settled = {e.payload["call_id"] for e in prior if e.type in (RunEventType.TOOL_EXECUTED, RunEventType.TOOL_RESULT)}
         for e in prior:
             if e.type == RunEventType.TOOL_EXECUTING and e.payload["call_id"] not in settled:
@@ -243,10 +337,15 @@ async def _drive(
                     "tool": e.payload.get("tool"),
                     "operation_id": e.payload.get("operation_id"),
                 }
-        if unknown is not None:
+        if unknown is not None and mismatch is None:
             await _bind_trace(s, run_id, rs)
             await record_unknown_result(log, run_id, unknown)
             await s.commit()
+    if mismatch is not None:
+        await _fail(run_id, "INVARIANT_VIOLATION", mismatch, "invariant")
+        yield ErrorEvent(code="INVARIANT_VIOLATION", message=mismatch)
+        yield DoneEvent(run_id=run_id, stop_reason="error")
+        return
     if unknown is not None:
         yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown)
         yield DoneEvent(run_id=run_id, stop_reason="awaiting")
@@ -274,7 +373,9 @@ async def _drive(
                 # 找到"已请求但尚无结果"的工具调用：这是上次执行被挂起（等待审批）的位置，
                 # 续跑时需要先完成它，而不是让 harness 重新决策。
                 if e.type == RunEventType.TOOL_REQUESTED and e.payload["call_id"] not in resulted:
-                    pending_call = ToolUseEvent(call_id=e.payload["call_id"], tool_name=e.payload["tool"], input=e.payload.get("input", {}))
+                    # pre_tool 改写过入参时按 effective_input 续跑（审批指纹也是按它算的）；重放不重跑 hook。
+                    effective = e.payload["effective_input"] if "effective_input" in e.payload else e.payload.get("input", {})
+                    pending_call = ToolUseEvent(call_id=e.payload["call_id"], tool_name=e.payload["tool"], input=effective)
             if any(e.type in (RunEventType.TOOL_REQUESTED, RunEventType.MODEL_RESPONSE) for e in prior):
                 # 事件日志中已有过模型响应或工具请求，说明这是续跑：先按日志重建消息历史，
                 # 再让 harness 基于重放后的统一事件流重建会话（checkpoint via replay）。
@@ -304,10 +405,14 @@ async def _drive(
                     tracing.record_tool_event(tspan, ev)
                     yield ev
                 tracing.record_tool_requested_seq(tspan, await _tool_requested_seq(run_id, pending_call.call_id))
+                tracing.record_hooks(tspan, rc.hook_records)
             if rc.suspended:
                 return
 
-        hooks = HookSet()
+        # 传给适配器的 HookSet 只含它声明的 internal_hook_points（平台看不到的点），由同一条 hook 链包装而成；
+        # 适配器侧的 hook 结论随本轮 MODEL_RESPONSE 的 hooks 记录（source=adapter）。
+        adapter_hook_records: list[dict[str, Any]] = []
+        hooks = chain.hookset(harness.capabilities().internal_hook_points, adapter_hook_records)
         for _round in range(MAX_TOOL_ROUNDS):
             # 每轮开始前检查 Run 是否已被取消 API 抢先置为 canceled（例如上一轮工具执行期间被取消）。
             if await _stop_if_canceled(run_id):
@@ -325,12 +430,14 @@ async def _drive(
                 yield ErrorEvent(code="DATA_CLASS_MODEL_BLOCKED", message=msg)
                 yield DoneEvent(run_id=run_id, stop_reason="error")
                 return
+            pre_model: HookOutcome | None = None
             async with SessionLocal() as s:
                 log = EventLog(s)
+                prior_log = await log.list(run_id)
                 try:
                     # 不变量校验：确认即将发给模型的 rc.history 与"从事件日志重建的历史"完全一致，
                     # 防止上下文被意外篡改或与事件日志脱节（保证可重放性/审计一致性）。
-                    h = invariant.check(await log.list(run_id), initial_messages, rc.history)
+                    h = invariant.check(prior_log, initial_messages, rc.history)
                 except invariant.InvariantViolation as e:
                     await log.append(run_id, RunEventType.RUN_ERROR, {"code": "INVARIANT_VIOLATION", "message": str(e)})
                     await log.transition(run_id, RunState.FAILED, "invariant")
@@ -338,12 +445,21 @@ async def _drive(
                     yield ErrorEvent(code="INVARIANT_VIOLATION", message=str(e))
                     yield DoneEvent(run_id=run_id, stop_reason="error")
                     return
-                model_request = await log.append(
-                    run_id,
-                    RunEventType.MODEL_REQUEST,
-                    {"model_alias": agent.model_alias, "messages_hash": h, "n_messages": len(rc.history)},
-                )
+                round_no = sum(1 for e in prior_log if e.type == RunEventType.MODEL_REQUEST) + 1
+                request_payload: dict[str, Any] = {"model_alias": agent.model_alias, "messages_hash": h, "n_messages": len(rc.history)}
+                if chain.has(HookPoint.PRE_MODEL):
+                    # pre_model 在每轮边界由平台执行（对所有适配器）；结论随 MODEL_REQUEST 落日志，续跑不重跑。
+                    pre_model = await chain.run(HookPoint.PRE_MODEL, _pre_model_payload(prior_log, agent, h, rc))
+                    request_payload["hooks"] = pre_model.records
+                model_request = await log.append(run_id, RunEventType.MODEL_REQUEST, request_payload)
                 await s.commit()
+            if pre_model is not None and pre_model.denied:
+                msg = f"pre_model hook '{pre_model.denied_by}' denied: {pre_model.reason}"
+                await _fail(run_id, "HOOK_DENIED", msg, "hook denied", hook=pre_model.denied_by, point=HookPoint.PRE_MODEL.value)
+                tracing.record_hooks(rs.span, pre_model.records)
+                yield ErrorEvent(code="HOOK_DENIED", message=msg)
+                yield DoneEvent(run_id=run_id, stop_reason="error")
+                return
 
             tool_call: ToolUseEvent | None = None
             text_parts: list[str] = []
@@ -351,28 +467,52 @@ async def _drive(
             harness_stop: str = "end_turn"  # harness 本轮的停止原因（DoneEvent.stop_reason），决定 Run 终态
             harness_error: ErrorEvent | None = None  # harness 本轮产出的最后一个错误事件
             harness_exc: Exception | None = None  # 消费 run_turn 时抛出的非预期异常
+            post_denied: HookOutcome | None = None  # post_model 拒绝：本轮输出不进历史，Run 判为失败
             prompt = tracing.last_user_text(rc.history)  # 本轮提示词取发给模型前历史里的最后一条用户消息
+            # 配置了 post_model 时，本轮要下发给客户端的文本 / 思维 / 工具调用事件先按原顺序缓冲，post_model 通过后
+            # （UsageEvent 处）再下发；拒绝则一律丢弃——否则被拒的文本已实时到达客户端。未配置时保持流式。
+            held: list[Event] | None = [] if chain.has(HookPoint.POST_MODEL) else None
             with tracing.model_span(agent.model_alias, _round, parent=rs, model_request_seq=model_request.seq) as mspan:
+                if pre_model is not None:
+                    tracing.record_hooks(mspan, pre_model.records)
                 # aclosing：无论正常结束、break、异常还是本生成器被关闭，都确定性地关闭 harness 的轮次生成器，
                 # 不把清理留给 GC。协议声明的返回类型是 AsyncIterator，各适配器实际均为异步生成器（带 aclose）。
                 turn = cast(
                     AsyncGenerator[Event, None],
-                    harness.run_turn(session, TurnInput(messages=rc.history), assembled.tools, assembled.skills, hooks),
+                    harness.run_turn(
+                        session,
+                        TurnInput(messages=rc.history, tool_statuses=_tool_statuses(prior_log, rc.history)),
+                        assembled.tools,
+                        assembled.skills,
+                        hooks,
+                    ),
                 )
                 try:
                     async with aclosing(turn) as turn_events:
                         async for ev in turn_events:
                             if isinstance(ev, TextEvent):
                                 text_parts.append(ev.delta)
-                                yield ev
+                                if held is not None:
+                                    held.append(ev)
+                                else:
+                                    yield ev
                             elif isinstance(ev, ThinkingEvent):
                                 # 思维链一律随 MODEL_RESPONSE 进事件日志；可见性以 Agent 版本配置为准覆写，
                                 # 是否下发给客户端由 API 层按 visibility 决定（internal 不下发）。
+                                # summary（D4）：原始思维增量不下发，本轮结束时经 post_model 生成摘要后下发一条。
                                 thinking_parts.append(ev.delta)
-                                yield ev.model_copy(update={"visibility": thinking_visibility(agent)})
+                                if visibility != "summary":
+                                    shown = ev.model_copy(update={"visibility": visibility})
+                                    if held is not None:
+                                        held.append(shown)
+                                    else:
+                                        yield shown
                             elif isinstance(ev, ToolUseEvent):
                                 tool_call = ev
-                                yield ev
+                                if held is not None:
+                                    held.append(ev)
+                                else:
+                                    yield ev
                             elif isinstance(ev, PLATFORM_ONLY_EVENTS):
                                 # 工具结果、卡片、补充输入请求只能由平台（工具代理 / runner）产出：harness 产出的一律丢弃，
                                 # 不转发客户端、不进模型历史，只记一条错误供审计，Run 继续执行。
@@ -396,12 +536,50 @@ async def _drive(
                                 }
                                 if thinking_parts:
                                     payload["thinking"] = "".join(thinking_parts)
+                                summary: str | None = None
+                                hook_records: list[dict[str, Any]] = []
+                                if chain.has(HookPoint.POST_MODEL):
+                                    # post_model：结论与思维链摘要随 MODEL_RESPONSE 落日志（重放读日志，不重跑）。
+                                    post = await chain.run(
+                                        HookPoint.POST_MODEL,
+                                        {
+                                            "round": round_no,
+                                            "model_alias": agent.model_alias,
+                                            "text": payload["text"],
+                                            "thinking": payload.get("thinking", ""),
+                                            "tool_call": tool_call.model_dump(mode="json") if tool_call else None,
+                                            "usage": ev.model_dump(mode="json"),
+                                            "taint": sorted(rc.gate.taint),
+                                        },
+                                    )
+                                    hook_records += post.records
+                                    if post.denied:
+                                        post_denied = post
+                                        if payload["text"]:
+                                            # 本轮输出不进历史：文本不入可重建历史，事件日志只留带密钥的指纹（同 raw_output_hmac）
+                                            payload["withheld_text_hmac"] = hmac_json(payload["text"])
+                                            payload["text"] = ""
+                                    elif isinstance(post.overrides.get("thinking_summary"), str) and post.overrides["thinking_summary"]:
+                                        summary = post.overrides["thinking_summary"]
+                                        payload["thinking_summary"] = summary
+                                hook_records += adapter_hook_records
+                                adapter_hook_records.clear()
+                                if hook_records:
+                                    payload["hooks"] = hook_records
+                                    tracing.record_hooks(mspan, hook_records)
                                 async with SessionLocal() as s:
                                     model_response = await EventLog(s).append(run_id, RunEventType.MODEL_RESPONSE, payload)
                                     await s.commit()
                                 tracing.record_usage(mspan, ev, model_response.seq, plan.stable_prefix_hash)
-                                if text_parts:
+                                if text_parts and post_denied is None:
                                     rc.history.append({"role": "assistant", "content": "".join(text_parts)})
+                                if held:
+                                    if post_denied is None:
+                                        for held_ev in held:
+                                            yield held_ev
+                                    held.clear()
+                                if summary is not None and visibility == "summary":
+                                    yield ThinkingEvent(delta=summary, visibility="summary")
                                 yield ev
                             elif isinstance(ev, ErrorEvent):
                                 # harness 的错误（模型网关失败、SDK 异常等）：进事件日志供审计，并转发客户端；
@@ -440,6 +618,13 @@ async def _drive(
                     await log.transition(run_id, RunState.FAILED, "harness exception")
                     await s.commit()
                 yield ErrorEvent(code="HARNESS_EXCEPTION", message=message)
+                yield DoneEvent(run_id=run_id, stop_reason="error")
+                return
+            if post_denied is not None:
+                # post_model 拒绝：本轮文本未进历史、请求的工具不执行，Run 判为失败。
+                msg = f"post_model hook '{post_denied.denied_by}' denied: {post_denied.reason}"
+                await _fail(run_id, "HOOK_DENIED", msg, "hook denied", hook=post_denied.denied_by, point=HookPoint.POST_MODEL.value)
+                yield ErrorEvent(code="HOOK_DENIED", message=msg)
                 yield DoneEvent(run_id=run_id, stop_reason="error")
                 return
             if harness_stop == "error" or (harness_error is not None and tool_call is None):
@@ -485,6 +670,7 @@ async def _drive(
                     tracing.record_tool_event(tspan, ev)
                     yield ev
                 tracing.record_tool_requested_seq(tspan, await _tool_requested_seq(run_id, tool_call.call_id))
+                tracing.record_hooks(tspan, rc.hook_records)
             if rc.suspended:
                 return
 

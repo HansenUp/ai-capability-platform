@@ -9,6 +9,7 @@ Checkpoint（检查点/断点续跑）通过*重放 runtime 的事件日志*（r
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
+from enum import StrEnum
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -18,6 +19,27 @@ from .tools import SkillDir, ToolSpec
 
 # harness 的传输方式：进程内 / 标准输入输出子进程 / 本地代理 / 远程服务
 TransportMode = Literal["in-process", "stdio", "local-proxy", "remote"]
+
+
+class HookPoint(StrEnum):
+    """平台统一执行 hook 的四个拦截点（V1.1 新增）。runner 与工具代理对所有适配器在这四个点执行 hook，
+    结果以事件日志为准；适配器只需在 `HarnessCapabilities.internal_hook_points` 声明平台看不到、
+    必须由它自己调用的点（如 stdio 帧内部、子代理）。"""
+
+    PRE_MODEL = "pre_model"  # 调用模型前
+    POST_MODEL = "post_model"  # 一次模型调用产出完毕（收到 UsageEvent）后
+    PRE_TOOL = "pre_tool"  # 执行工具前（工具闸口之前）
+    POST_TOOL = "post_tool"  # 工具执行后、结果回灌模型前
+
+
+# 各拦截点 hook 返回值中允许覆盖 payload 的键白名单（V1.1 新增）。不在白名单内的键一律忽略并记日志；
+# 返回 {"deny": reason} 表示阻断，任何点都可用。post_tool 的 data_class 只允许升级、不允许降级。
+HOOK_OVERRIDABLE: dict[HookPoint, frozenset[str]] = {
+    HookPoint.PRE_MODEL: frozenset(),
+    HookPoint.POST_MODEL: frozenset({"thinking_summary"}),
+    HookPoint.PRE_TOOL: frozenset({"input"}),
+    HookPoint.POST_TOOL: frozenset({"output", "data_class"}),
+}
 
 
 class HarnessCapabilities(BaseModel):
@@ -41,6 +63,9 @@ class HarnessCapabilities(BaseModel):
     # 执行前拦截强度：none 无拦截，advisory 仅建议（harness 可绕过），enforcing 表示平台的拒绝不可被绕过
     tool_interception: Literal["none", "advisory", "enforcing"] = "none"
     can_resume_from_events: bool = False  # 能否由平台事件日志重建会话继续执行
+    # 平台看不到、须由适配器自己调用 hook 的拦截点（V1.1 新增，如 stdio 帧内部、子代理）。runner 传给 run_turn 的
+    # HookSet 只包含这里声明的点，其余点由平台统一执行；为空表示全部由平台执行。
+    internal_hook_points: list[HookPoint] = Field(default_factory=list)
 
 
 class SessionSpec(BaseModel):
@@ -75,6 +100,9 @@ class TurnInput(BaseModel):
 
     messages: list[dict[str, Any]]  # 本轮模型可见的消息历史
     attachments: list[str] = Field(default_factory=list)  # 附件引用列表
+    # 历史中工具结果的处理状态：call_id -> ok / error / denied / pending_approval（V1.1 新增，可选，默认空）。
+    # 平台按事件日志 TOOL_RESULT 填写，供需要把错误 / 拒绝标记给模型的适配器使用（如 tool_result.is_error）；可忽略。
+    tool_statuses: dict[str, Literal["ok", "error", "denied", "pending_approval"]] = Field(default_factory=dict)
 
 
 # Hook signatures. Returning a dict may override the payload; returning {"deny": reason} blocks.
@@ -90,6 +118,7 @@ class HookSet(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     pre_model: HookFn | None = None  # 调用模型前触发
+    post_model: HookFn | None = None  # 一次模型调用产出完毕后触发（V1.1 新增；可覆盖键见 HOOK_OVERRIDABLE）
     pre_tool: HookFn | None = None  # 执行工具前触发（工具闸口顺序中的 hooks 环节）
     post_tool: HookFn | None = None  # 执行工具后触发
     on_subagent: HookFn | None = None  # 触发子代理时调用

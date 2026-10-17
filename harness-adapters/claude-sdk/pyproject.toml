@@ -5,8 +5,10 @@ description = "Harness adapter for the Claude Agent SDK (CLI subprocess over std
 requires-python = ">=3.11"
 dependencies = ["ai-contract"]
 [project.optional-dependencies]
-sdk = ["claude-agent-sdk>=0.2,<0.3"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+# 精确钉版本：适配器依赖 CLI 会话转录格式与 SDK Transport 内部接口（S5 D80）；升级须重跑 spike 与 tests/test_live.py
+sdk = ["claude-agent-sdk==0.2.168"]
+# ai-harness-probe：进程内测试模式（ai_harness_claude_sdk.testing）与契约探针
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ai-harness-probe"]
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

@@ -3,16 +3,21 @@ PY ?= python3
 VENV ?= .venv
 PIP := $(VENV)/bin/pip
 PYTHON := $(VENV)/bin/python
-# 需要以可编辑模式安装的全部 Python 包（顺序无关，contract 会作为依赖被自动安装）
-PKGS := packages/contract packages/sdk-python services/runtime services/console-api services/capability-gateway services/policy services/observe-adapter harness-adapters/claude-sdk harness-adapters/stdio mcp-servers/template mcp-servers/ticket
+# 需要以可编辑模式安装的全部 Python 包及其 extras。本地包名（ai-contract、ai-harness-probe、ai-harness-claude-sdk 等）
+# 在 PyPI 上未注册：必须与依赖它们的包在同一条 pip 命令里以 -e 显式给出，pip 才会只用这些本地候选、不去索引查同名包
+# （防依赖混淆）；因此 setup 一次性安装、不逐个回退。被依赖者排在前面（contract → probe → 其余）。
+# runtime / stdio 带上 probe extra、claude-sdk 带 dev（含 ai-harness-probe），使这些 extras 也在同一次解析里落到本地包。
+# CI 需要 claude-sdk 的真实 SDK 时：make setup CLAUDE_SDK_EXTRAS=dev,sdk
+CLAUDE_SDK_EXTRAS ?= dev
+PKGS := packages/contract[dev] harness-adapters/probe[dev] packages/sdk-python[dev] services/runtime[dev,probe] services/console-api[dev] services/capability-gateway[dev] services/policy[dev] services/observe-adapter[dev] harness-adapters/claude-sdk[$(CLAUDE_SDK_EXTRAS)] harness-adapters/stdio[dev,probe] mcp-servers/template[dev] mcp-servers/ticket[dev]
 
-.PHONY: setup test test-mysql migrate migrate-new verify-s1 verify-s2 verify-s3 verify-s4 eval-ticket-summary lint openapi openapi-check sdk-types run-runtime run-console run-gateway run-observe compose-up compose-down compose-ps precommit-install precommit images
+.PHONY: setup test test-mysql migrate migrate-new verify-s1 verify-s2 verify-s3 verify-s4 verify-s5 probe eval-ticket-summary lint openapi openapi-check sdk-types run-runtime run-console run-gateway run-observe compose-up compose-down compose-ps precommit-install precommit images
 
-# 创建虚拟环境并安装所有包；优先带 [dev] 额外依赖，包未声明 dev 时退回普通安装
+# 创建虚拟环境并一次性安装所有本地包（任一失败即整体失败，不静默降级）
 setup:
 	$(PY) -m venv $(VENV)
 	$(PIP) install -U pip
-	for p in $(PKGS); do $(PIP) install -e "$$p[dev]" || $(PIP) install -e $$p; done
+	$(PIP) install $(foreach p,$(PKGS),-e "$(p)")
 
 # 运行全部 Python 测试（testpaths 见 pyproject.toml）
 test:
@@ -33,9 +38,14 @@ migrate:
 migrate-new:
 	cd services/runtime && $(abspath $(VENV))/bin/alembic revision --autogenerate -m "$(m)"
 
-# 静态检查：Ruff 全仓（经 scripts/lint_ruff.py，兼容本机透明加密）+ mypy 严格检查契约与 Runtime
+# 静态检查：Ruff 全仓（经 scripts/lint_ruff.py，兼容本机透明加密）+ mypy 严格检查契约、Runtime、claude-sdk 适配器与契约探针包
 lint:
-	$(PYTHON) scripts/lint_ruff.py && $(PYTHON) scripts/lint_ruff.py --format && $(VENV)/bin/mypy packages/contract/src services/runtime/src harness-adapters/claude-sdk/src
+	$(PYTHON) scripts/lint_ruff.py && $(PYTHON) scripts/lint_ruff.py --format && $(VENV)/bin/mypy packages/contract/src services/runtime/src harness-adapters/claude-sdk/src harness-adapters/probe/src
+
+# 契约探针上架门禁（S5 / D86）：对 runtime.harness.registry.KNOWN 中每个 harness 跑五项探针，任一不通过即失败；
+# 报告写到 probe-report.json。claude-sdk 的进程内探针需要 SDK：make setup CLAUDE_SDK_EXTRAS=dev,sdk
+probe:
+	$(PYTHON) -m ai_harness_probe.gate --report probe-report.json
 
 # 导出 Runtime / 能力网关的 OpenAPI 文档到 docs/api/（info.version 固定 v1，键排序，可重复生成）
 openapi:
@@ -110,6 +120,9 @@ eval-ticket-summary:  ## 对运行中的 Runtime 执行工单总结评测（30 �
 
 verify-s3:  ## S3 本机出口验证：Console 灰度放量与回滚、门户 PKCE 登录后对话、反馈进 Langfuse（需 keycloak、litellm、observe profile）
 	$(PYTHON) scripts/verify_s3_e2e.py
+
+verify-s5:  ## S5 本机出口验证：Contract 六要素完整化（hooks、结构化续跑、安全遗留；需 litellm、observe、keycloak 与模型 Key）
+	$(PYTHON) scripts/verify_s5_e2e.py
 
 verify-s2:  ## S2 本机出口验证：Keycloak JWT、统一审计、Vault 密钥注入、Prompt Cache 命中统计（需 keycloak、vault、observe profile）
 	$(PYTHON) scripts/verify_s2_e2e.py

@@ -67,10 +67,12 @@ def test_internal_thinking_not_streamed_but_logged(client, thinker_agents, key):
 
 @pytest.mark.parametrize("key", ["summary", "full"])
 def test_summary_and_full_thinking_streamed(client, thinker_agents, key):
-    """summary/full：thinking 事件原样下发，visibility 以 Agent 版本配置为准覆写。"""
+    """full：thinking 事件原样下发；summary（S5 D4）：原始增量不下发，本轮只下发一条 post_model 生成的摘要
+    （未声明 thinking_summary 时隐式挂默认 truncate 模式，短思维链的摘要即原文）。visibility 以 Agent 版本配置为准覆写。"""
     run_id, evs = _chat(client, f"think-{key}")
     thinking = [e for e in evs if e["type"] == "thinking"]
-    assert [t["delta"] for t in thinking] == ["先想一想，", "再回答。"]
+    expected = ["先想一想，", "再回答。"] if key == "full" else ["先想一想，再回答。"]
+    assert [t["delta"] for t in thinking] == expected
     assert {t["visibility"] for t in thinking} == {key}
     log = client.get(f"/v1/runs/{run_id}/events").json()
     assert next(e for e in log if e["type"] == "model.response")["payload"]["thinking"] == "先想一想，再回答。"

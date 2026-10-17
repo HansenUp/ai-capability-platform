@@ -282,6 +282,22 @@ def record_tool_event(span: Span, ev: Event) -> None:
         span.set_status(Status(StatusCode.ERROR, f"tool decision: {decision}"))
 
 
+def record_hooks(span: Span, records: list[dict[str, Any]]) -> None:
+    """把 hook 结论写到 span（S5）：按拦截点分组，只记 hook 名称、结论与导致拒绝的 hook，不记负载原文 / 拒绝理由。
+
+    属性：`ai.hook.<point>.names`、`ai.hook.<point>.verdicts`（与 names 一一对应），拒绝 / 失败时 `ai.hook.<point>.denied_by`。
+    """
+    by_point: dict[str, list[dict[str, Any]]] = {}
+    for r in records:
+        by_point.setdefault(str(r.get("point", "unknown")), []).append(r)
+    for point, recs in by_point.items():
+        span.set_attribute(f"ai.hook.{point}.names", [str(r.get("name")) for r in recs])
+        span.set_attribute(f"ai.hook.{point}.verdicts", [str(r.get("verdict")) for r in recs])
+        failed = next((r for r in recs if r.get("verdict") in ("deny", "error", "timeout")), None)
+        if failed is not None:
+            span.set_attribute(f"ai.hook.{point}.denied_by", str(failed.get("name")))
+
+
 def record_tool_requested_seq(span: Span, seq: int | None) -> None:
     """写入该调用 TOOL_REQUESTED 事件的 seq（找不到时不写）。"""
     if seq is not None:

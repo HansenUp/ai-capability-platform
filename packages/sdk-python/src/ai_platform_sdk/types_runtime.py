@@ -152,7 +152,8 @@ class PublishIn(BaseModel):
 class ResumeBody(BaseModel):
     """
     续跑请求体：messages: the original initial messages (clients keep them; workers read from session store)
-    （客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。）
+    （客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。
+    带附件的 Run 须连同首次驱动时追加的附件说明消息一并回传；指纹须与 RUN_CREATED 记录的一致，否则 409。）
     """
 
     messages: list[dict[str, Any]] = Field(..., title="Messages")

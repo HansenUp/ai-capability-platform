@@ -19,6 +19,7 @@ from runtime.api.auth import Principal, require_admin
 from runtime.api.views import ErrorDetail
 from runtime.assemble.assembler import LOCAL_TOOLS, load_skills, skills_digest
 from runtime.config import settings
+from runtime.guard.hooks import validate_hooks_config
 from runtime.harness import registry
 from runtime.observe import audit
 from runtime.state.db import AgentVersion, SessionLocal
@@ -97,10 +98,13 @@ async def publish(
 ) -> dict[str, Any]:
     """将草稿版本置为已发布状态，并冻结可复现快照（技能摘要、harness 版本）。
 
-    两道闸门依次生效，任一不满足都按业务规则拒绝返回 409（422 只保留给请求参数校验）：
+    以下闸门依次生效，任一不满足都按业务规则拒绝返回 409（422 只保留给请求参数校验）：
     1) 评测闸门——eval_passed=False 直接阻断；
-    2) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，
-       否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障。
+    2) Hooks 配置闸门（S5，D73）——config.hooks 只能引用平台内置 hook，点与参数须合规；
+    3) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，
+       否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障；
+    4) harness 持有循环的高风险写白名单（S5 §4-1，D79）——loop_owner=harness 的适配器即便达到 L2，
+       声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）。
 
     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
     """
@@ -112,10 +116,13 @@ async def publish(
             await _ensure_newest(s, av)
         if body.eval_passed is False:
             raise HTTPException(409, "evaluation gate failed; publish blocked")
+        cfg = av.config or {}
+        hook_problems = validate_hooks_config(cfg.get("hooks"))
+        if hook_problems:
+            raise HTTPException(409, "hooks 配置不合规：" + "; ".join(hook_problems))
         await _check_model_alias(av)
         caps = registry.get(av.harness).capabilities()
         tier = capability_tier(caps)
-        cfg = av.config or {}
         # 高风险写工具从本地工具注册表查风险等级；生产环境应改为向能力网关查询。
         high_risk = [n for n in cfg.get("tools", []) if n in LOCAL_TOOLS and LOCAL_TOOLS[n].risk_level == RiskLevel.WRITE_HIGH]
         if high_risk and tier != "L2":
@@ -123,6 +130,12 @@ async def publish(
                 409,
                 f"所选 Harness 不满足高风险写所需的能力等级（harness={caps.name}，当前 {tier}，需要 L2）；"
                 f"涉及的高风险写工具：{', '.join(high_risk)}",
+            )
+        if high_risk and caps.loop_owner == "harness" and agent_id not in settings.harness_loop_high_risk_allowlist:
+            raise HTTPException(
+                409,
+                f"所选 Harness 由自身持有模型-工具循环（harness={caps.name}，loop_owner=harness），高风险写须将 Agent "
+                f"'{agent_id}' 加入 HARNESS_LOOP_HIGH_RISK_ALLOWLIST；涉及的高风险写工具：{', '.join(high_risk)}",
             )
         av.status, av.eval_run_ref, av.eval_passed = "published", body.eval_run_ref, body.eval_passed
         av.rollout_percent, av.rollout_allowlist = body.rollout_percent, list(body.rollout_allowlist)

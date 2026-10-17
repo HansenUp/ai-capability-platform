@@ -22,6 +22,7 @@ dependencies = [
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff", "mypy", "schemathesis>=3.30"]
 mysql = ["asyncmy>=0.2"]
 claude = ["ai-harness-claude-sdk[sdk]"]
+probe = ["ai-harness-probe"]                 # 契约探针工厂（runtime.harness.mock 的脚本模式 / 门禁）
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -24,6 +24,7 @@ Done(max_tokens)，避免执行一个参数残缺的工具调用。
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Literal
@@ -45,7 +46,7 @@ from ai_contract import (
     UsageEvent,
 )
 from runtime.llm import client as llm
-from runtime.llm.client import LLMClient, LLMError, LLMUsage, ToolCall
+from runtime.llm.client import LLMChunk, LLMClient, LLMError, LLMUsage, ToolCall
 
 MAX_CACHED_SESSIONS = 4096  # 进程内缓存的会话规格上限（超出时淘汰最早的）
 ERROR_MESSAGE_LIMIT = 500  # HARNESS_ERROR 消息中保留的异常描述字符数
@@ -72,6 +73,7 @@ class LiteLLMHarness:
         self._specs: dict[str, SessionSpec] = {}  # session_id → 会话规格（interrupt 时删除）
         self._active: set[str] = set()  # 正在跑一轮的 session_id
         self._cancelled: set[str] = set()  # 进行中的一轮已被请求中断的 session_id（只记录 _active 中的会话）
+        self._pumps: dict[str, asyncio.Task[None]] = {}  # session_id → 读取上游流的任务（interrupt 时取消）
 
     def _llm(self) -> LLMClient:
         """返回本轮使用的 LLM 客户端。"""
@@ -107,6 +109,9 @@ class LiteLLMHarness:
         self._specs.pop(session.session_id, None)
         if session.session_id in self._active:
             self._cancelled.add(session.session_id)
+            pump = self._pumps.get(session.session_id)
+            if pump is not None:
+                pump.cancel()  # 上游可能长时间不出增量：直接停止等待，而不是等下一个增量
 
     async def _model_name(self, client: LLMClient, alias: str, reported: str | None) -> str:
         """UsageEvent.model 的取值：网关回报的模型与别名不同（如发生回退）时以回报为准，
@@ -159,6 +164,9 @@ class LiteLLMHarness:
             messages = system + llm.to_openai_messages(turn.messages)
             openai_tools = llm.to_openai_tools(tools)
             name_map = {llm.to_openai_tool_name(t.name): t.name for t in tools}  # OpenAI 函数名 → 平台工具名
+            if len(name_map) < len({t.name for t in tools}):
+                # 两个平台工具名编码成同一个 OpenAI 函数名：模型的调用无法还原，拒绝本轮（收口为 HARNESS_ERROR）
+                raise ValueError(f"platform tool names collide after OpenAI name encoding: {sorted(t.name for t in tools)}")
             extra = {"parallel_tool_calls": False} if openai_tools else None
 
             client = self._llm()
@@ -166,10 +174,31 @@ class LiteLLMHarness:
             finish_reason: str | None = None
             cancelled = False
             stream = client.stream_chat(spec.model_alias, messages, tools=openai_tools or None, extra=extra)
+            chunks: asyncio.Queue[LLMChunk | Exception | None] = asyncio.Queue()
+
+            async def pump() -> None:
+                # 整条流在同一个任务里打开、读取、关闭；interrupt 取消该任务即可立即停止等待上游
+                try:
+                    async for c in stream:
+                        chunks.put_nowait(c)
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    chunks.put_nowait(exc)
+                finally:
+                    await stream.aclose()  # 提前结束（中断）时关闭底层 HTTP 流
+                    chunks.put_nowait(None)
+
+            task = asyncio.create_task(pump())
+            # 任务在首次调度前就被 interrupt 取消时协程体不会执行，finally 里的结束标记也就不会入队：由完成回调
+            # 再补一个，保证下面的 chunks.get() 不会永久挂起（正常结束时多出的一个 None 在循环退出后无人读取，无害）。
+            task.add_done_callback(lambda _: chunks.put_nowait(None))
+            self._pumps[sid] = task
             try:
-                async for chunk in stream:
+                while (chunk := await chunks.get()) is not None:
+                    if isinstance(chunk, Exception):
+                        raise chunk
                     if sid in self._cancelled:
-                        cancelled = True
                         break
                     if chunk.kind == "thinking":
                         yield ThinkingEvent(delta=chunk.delta)  # visibility 由 runner 按 Agent 配置覆写
@@ -181,8 +210,11 @@ class LiteLLMHarness:
                         usage, reported_model = chunk.usage, chunk.model
                     elif chunk.kind == "done":
                         finish_reason, reported_model = chunk.finish_reason, chunk.model or reported_model
+                cancelled = sid in self._cancelled
             finally:
-                await stream.aclose()  # 提前结束（中断）时关闭底层 HTTP 流
+                task = self._pumps.pop(sid)
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
             if cancelled:
                 yield self._usage_event(usage, reported_model)

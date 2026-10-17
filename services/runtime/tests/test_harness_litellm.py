@@ -7,6 +7,8 @@ interrupt 后会话回收、推理文本经历史 tool_use 消息的 reasoning �
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 from collections.abc import Callable
@@ -103,6 +105,16 @@ async def run_turn(
     return [ev async for ev in h.run_turn(session, TurnInput(messages=messages), tools or [], [], hooks or HookSet())]
 
 
+async def test_colliding_tool_names_are_rejected_before_calling_model():
+    """ticket.search 与 ticket__search 编码成同一个 OpenAI 函数名：模型的调用无法还原，本轮以 HARNESS_ERROR 结束、不调用模型。"""
+    gw = Gateway(text_turn("不应出现"))
+    dup = LOCAL_TOOLS["ticket.search"].model_copy(update={"name": "ticket__search"})
+    events = await run_turn(make_harness(gw), [{"role": "user", "content": "查"}], [LOCAL_TOOLS["ticket.search"], dup])
+    assert [e.type.value for e in events] == ["error", "usage", "done"] and events[-1].stop_reason == "error"
+    assert events[0].code == "HARNESS_ERROR" and "collide" in events[0].message
+    assert gw.requests == []
+
+
 def test_registry_loads_litellm_harness_as_platform_loop():
     """registry 可按名称加载 litellm harness；平台持有循环，能力等级为 L2，模型无关。"""
     h = registry.get("litellm")
@@ -176,6 +188,34 @@ async def test_interrupt_cancels_running_turn_and_releases_session():
 
     again = [ev async for ev in h.run_turn(session, TurnInput(messages=[{"role": "user", "content": "hi"}]), [], [], HookSet())]
     assert [e.type for e in again] == ["error", "usage", "done"] and again[0].code == "SESSION_NOT_FOUND"
+
+
+async def test_interrupt_right_after_stream_opened_does_not_hang(monkeypatch: pytest.MonkeyPatch):
+    """开流后立即 interrupt：读取上游的任务在首次调度前就被取消（协程体与其 finally 都不执行），
+    消费端也不会永久挂起——以 Usage + Done(cancelled) 结束，且不留下任何会话状态。"""
+    h = make_harness(Gateway(text_turn("你好")))
+    session = await h.open_session(spec())
+    assert h._client is not None
+    original = h._client.stream_chat
+
+    def interrupt_now() -> None:
+        # 在读取任务首次调度之前同步执行一次真正的 interrupt（它没有 await 点）
+        coro = h.interrupt(session, "run_t")
+        with contextlib.suppress(StopIteration):
+            coro.send(None)
+
+    def stream_chat(*args: Any, **kwargs: Any) -> Any:
+        asyncio.get_running_loop().call_soon(interrupt_now)  # 排在随后 create_task 的首次调度之前
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(h._client, "stream_chat", stream_chat)
+
+    async def consume() -> list[Any]:
+        return [ev async for ev in h.run_turn(session, TurnInput(messages=[{"role": "user", "content": "hi"}]), [], [], HookSet())]
+
+    events = await asyncio.wait_for(consume(), timeout=5)
+    assert [e.type for e in events] == ["usage", "done"] and events[-1].stop_reason == "cancelled"
+    assert h._specs == {} and h._active == set() and h._cancelled == set() and h._pumps == {}
 
 
 async def test_interrupt_idle_session_leaves_no_state():

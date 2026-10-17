@@ -381,8 +381,14 @@ def test_publish_allowed_for_read_only_on_l1(client, tiered_harnesses):
     assert _status(client, "p05-l1-read") == "published"
 
 
-def test_publish_allowed_for_write_high_on_l2(client, tiered_harnesses):
-    """5.8：harness 自持循环但 enforcing + 可由事件日志恢复（L2）时，含 write_high 的版本可以发布。"""
+def test_publish_allowed_for_write_high_on_l2(client, tiered_harnesses, monkeypatch):
+    """5.8：harness 自持循环但 enforcing + 可由事件日志恢复（L2）时，含 write_high 的版本可以发布
+    （S5 §4-1 起 harness 持有循环的高风险写还须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中，见 test_s5_publish_gate）。"""
+    import dataclasses
+
+    from runtime.api import admin
+
+    monkeypatch.setattr(admin, "settings", dataclasses.replace(admin.settings, harness_loop_high_risk_allowlist=("p05-l2-high",)))
     assert _publish(client, "p05-l2-high", "p05-l2", ["ticket.close_batch"]).status_code == 200
     assert _status(client, "p05-l2-high") == "published"
 

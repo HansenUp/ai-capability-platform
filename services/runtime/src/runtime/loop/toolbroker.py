@@ -11,6 +11,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 import re
 from collections.abc import AsyncIterator
@@ -24,6 +27,7 @@ from ai_contract import (
     CardType,
     DoneEvent,
     Event,
+    HookPoint,
     RiskLevel,
     RunEventType,
     RunState,
@@ -35,11 +39,27 @@ from ai_contract import (
 from runtime.config import settings
 from runtime.context import budget as ctx
 from runtime.guard.gate import GateContext, evaluate, params_hash
+from runtime.guard.hooks import HookChain
 from runtime.observe import audit
 from runtime.state.db import AgentVersion, SessionLocal
 from runtime.state.eventlog import EventLog
 
 LOCAL_ONLY_TOOLS = frozenset({"echo"})  # 只在进程内执行、不经能力网关的开发工具（元工具 read_artifact 等另行处理）
+
+
+def taint_of(status: Any, data_class: Any) -> set[str]:
+    """一次工具结果带来的数据分类污点（ADR-0010，D89）：机密工具的结果——无论成功（ok）还是失败（error，
+    错误信息同样可能夹带机密内容）——都带上 confidential 污点；被拒绝（denied）的调用没有读到任何数据。
+    工具代理的实时传播与 runner 续跑时的重放重建共用本函数，保证续跑前后污点一致。"""
+    return {"confidential"} if status in ("ok", "error") and data_class == "confidential" else set()
+
+
+def hmac_json(value: Any) -> str:
+    """工具原始输出的规范化 HMAC-SHA256（密钥 HOOK_DIGEST_KEY，只在服务端）：post_tool hook 改写输出后，事件日志只留
+    原文指纹，不留原文（runner 对 post_model 拒绝时被扣下的文本同样只留本函数的指纹）。用带密钥的 HMAC 而不是
+    裸 sha256：被脱敏的往往是手机号、身份证号这类取值空间小的内容，裸哈希可被读日志的人穷举还原。"""
+    canon = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hmac.new(settings.hook_digest_key.encode("utf-8"), canon.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 class GatewayToolError(Exception):
@@ -192,6 +212,16 @@ class RunCtx:
     suspended: bool = False  # 本轮是否因等待审批而挂起（挂起时 drive 应立即返回）
     workspace: str = field(default=".")  # 本次 Run 的工作区目录，用于工具结果外置
     credential: str | None = field(default=None, repr=False)  # 终端用户访问令牌（只在内存中），经网关执行工具时换取 OBO 令牌
+    # credential 所属主体；与 Run 发起主体不同时记入 TOOL_EXECUTING 与工具审计（D87）。D87 修订后续跑只允许发起人，
+    # 经 API 不再出现不同的值；机制保留（直接调用 drive 时仍按此记录）
+    credential_subject: str | None = None
+    hooks: HookChain = field(default_factory=HookChain)  # 本 Agent 版本的 hook 链；空链时事件日志与此前逐字节一致
+    hook_records: list[dict[str, Any]] = field(default_factory=list)  # 最近一次 handle_tool 的 hook 结论（供工具 span 记录）
+
+    def foreign_credential_subject(self) -> str | None:
+        """执行工具所用令牌的主体与 Run 发起主体不同时返回该主体，否则 None（不写，保持日志不变）。"""
+        cs = self.credential_subject
+        return cs if cs is not None and cs != self.gate.subject else None
 
 
 async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = False, reasoning: str | None = None) -> AsyncIterator[Event]:
@@ -203,10 +233,34 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
     这里只需补完后续的判定与执行，不再重复记录 TOOL_REQUESTED，避免事件日志重复。
 
     reasoning：产生该工具调用的那一轮模型的思维链文本（没有则为 None）。非空时写入历史中 tool_use 消息的
-    顶层 "reasoning" 字段与 TOOL_REQUESTED 事件，使其可从事件日志重建（需要回传推理内容的模型据此续接）。）
+    顶层 "reasoning" 字段与 TOOL_REQUESTED 事件，使其可从事件日志重建（需要回传推理内容的模型据此续接）。
+
+    Hooks（S5）：pre_tool 在写 TOOL_REQUESTED 之前执行——拒绝则记 denied（reason=hook:<名称>）并写 tool.decision
+    审计、不进闸口；改写的入参作为 effective_input 与模型原始 input 一并记入 TOOL_REQUESTED，闸口判定、审批指纹与执行
+    一律用 effective_input（历史中的 tool_use 保持模型原始入参）。post_tool 在执行后、结果外置前执行：输出与升级后的
+    data_class 进 TOOL_RESULT，原文只留 sha256；拒绝 / 出错 / 超时则扣留输出、status=error。already_logged（续跑）时
+    不重跑 pre_tool：调用方传入的 call.input 即事件日志中的 effective_input。）
     """
     tool = rc.tools_by_name.get(call.tool_name)
-    phash = params_hash(call.input)  # 本次调用参数的规范化指纹，贯穿审批绑定与写前记录
+    rc.hook_records = []
+    effective = call.input  # 实际用于闸口判定与执行的入参（pre_tool 可改写）
+    pre = None
+    if not already_logged and rc.hooks.has(HookPoint.PRE_TOOL):
+        pre = await rc.hooks.run(
+            HookPoint.PRE_TOOL,
+            {
+                "call_id": call.call_id,
+                "tool": call.tool_name,
+                "input": call.input,
+                "risk_level": tool.risk_level.value if tool else "unknown",
+                "data_class": tool.data_class if tool else None,
+                "taint": sorted(rc.gate.taint),
+            },
+        )
+        rc.hook_records += pre.records
+        if not pre.denied and "input" in pre.overrides:
+            effective = pre.overrides["input"]
+    phash = params_hash(effective)  # 本次调用参数的规范化指纹，贯穿审批绑定与写前记录
     if not already_logged:
         tool_use_msg: dict[str, Any] = {
             "role": "assistant",
@@ -226,7 +280,34 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             }
             if reasoning:
                 requested["reasoning"] = reasoning
+            if pre is not None:
+                requested["hooks"] = pre.records
+                if not pre.denied:
+                    requested["effective_input"] = effective
             await log.append(rc.run_id, RunEventType.TOOL_REQUESTED, requested)
+        if pre is not None and pre.denied:
+            # pre_tool 拒绝：不进闸口，结论记 tool.decision 事件与审计，结果记 denied
+            reason = f"hook:{pre.denied_by}"
+            await log.append(
+                rc.run_id, RunEventType.TOOL_DECISION, {"call_id": call.call_id, "decision": "deny", "reason": reason, "params_hash": phash}
+            )
+            hook_row = audit.entry(
+                None,
+                "tool.decision",
+                f"tool:{call.tool_name}",
+                "deny",
+                actor=rc.gate.subject,
+                act=f"agent:{rc.agent.agent_id}",
+                tenant_id=rc.agent.tenant_id,
+                detail={"run_id": rc.run_id, "call_id": call.call_id, "reason": reason, "params_hash": phash},
+            )
+            hook_row.auth_method = None
+            s.add(hook_row)
+            await log.append(rc.run_id, RunEventType.TOOL_RESULT, {"call_id": call.call_id, "status": "denied", "output": reason})
+            await s.commit()
+            rc.history.append({"role": "tool", "call_id": call.call_id, "content": reason})
+            yield ToolResultEvent(call_id=call.call_id, status="denied", output=reason)
+            return
         if tool is None:
             # 模型请求了一个未在本次组装工具集中出现的工具名：直接记为错误结果，不进入闸口判定。
             result: Any = {"error": "unknown tool"}
@@ -235,7 +316,7 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             rc.history.append({"role": "tool", "call_id": call.call_id, "content": result})
             yield ToolResultEvent(call_id=call.call_id, status="error", output=result)
             return
-        gate = await evaluate(rc.gate, tool, call.input, call.call_id)
+        gate = await evaluate(rc.gate, tool, effective, call.call_id)
         await log.append(
             rc.run_id,
             RunEventType.TOOL_DECISION,
@@ -250,6 +331,16 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             },
         )
         # 统一审计（S2.3）：闸口判定与决策事件同一事务落 t_audit——谁（Run 发起主体）以哪个 Agent 调了什么工具、结论如何。
+        decision_detail: dict[str, Any] = {
+            "run_id": rc.run_id,
+            "call_id": call.call_id,
+            "risk_level": tool.risk_level,
+            "reason": gate.reason,
+            "policy_decision_id": gate.policy_decision_id,
+            "params_hash": phash,
+        }
+        if rc.foreign_credential_subject():
+            decision_detail["credential_subject"] = rc.foreign_credential_subject()  # 以审批人等他人令牌执行（D87）
         decision_row = audit.entry(
             None,
             "tool.decision",
@@ -258,14 +349,7 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             actor=rc.gate.subject,
             act=f"agent:{rc.agent.agent_id}",
             tenant_id=rc.agent.tenant_id,
-            detail={
-                "run_id": rc.run_id,
-                "call_id": call.call_id,
-                "risk_level": tool.risk_level,
-                "reason": gate.reason,
-                "policy_decision_id": gate.policy_decision_id,
-                "params_hash": phash,
-            },
+            detail=decision_detail,
         )
         decision_row.auth_method = None  # 非请求级审计：身份来源见该 Run 的请求审计行
         s.add(decision_row)
@@ -281,7 +365,7 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             preview: Any = {}
             if tool.supports_dry_run:
                 try:
-                    preview = await execute_tool(tool, call.input, dry_run=True, rc=rc, call_id=call.call_id)
+                    preview = await execute_tool(tool, effective, dry_run=True, rc=rc, call_id=call.call_id)
                 except GatewayToolError as exc:
                     # 影响预演失败不阻断审批流程：卡片如实标注"预演不可用"，由审批人决定（dry-run 不产生副作用）
                     preview = {"error": f"impact preview unavailable: {exc}"}
@@ -303,14 +387,18 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             # 写前记录（write-ahead）：先落 TOOL_EXECUTING 并单独提交，再真正执行。
             # 这样"已执行但未落日志"的结果未知窗口被消除——崩溃后日志里一定留有执行意图，
             # 重放时能识别出结果未知并转人工对账，而不是盲目重跑一遍产生重复副作用。
-            await log.append(
-                rc.run_id,
-                RunEventType.TOOL_EXECUTING,
-                {"call_id": call.call_id, "tool": tool.name, "operation_id": gate.idempotency_key, "params_hash": phash},
-            )
+            executing: dict[str, Any] = {
+                "call_id": call.call_id,
+                "tool": tool.name,
+                "operation_id": gate.idempotency_key,
+                "params_hash": phash,
+            }
+            if rc.foreign_credential_subject():
+                executing["credential_subject"] = rc.foreign_credential_subject()
+            await log.append(rc.run_id, RunEventType.TOOL_EXECUTING, executing)
             await s.commit()
             try:
-                result = await execute_tool(tool, call.input, rc=rc, call_id=call.call_id, idempotency_key=gate.idempotency_key)
+                result = await execute_tool(tool, effective, rc=rc, call_id=call.call_id, idempotency_key=gate.idempotency_key)
             except GatewayToolError as exc:
                 if tool.risk_level != RiskLevel.READ:
                     async for ev in _unknown_result(log, s, rc, call, tool, gate.idempotency_key, exc):
@@ -327,20 +415,40 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             await log.append(
                 rc.run_id, RunEventType.TOOL_EXECUTED, {"call_id": call.call_id, "tool": tool.name}, idempotency_key=gate.idempotency_key
             )
-        if tool.data_class == "confidential":
-            rc.gate.taint.add("confidential")  # 污点传播：本次 run 后续的外发类工具调用会因此被收紧为需审批
+        # 业务系统拒绝 / 不存在等作为工具错误
+        status: Literal["ok", "error"] = "error" if isinstance(result, dict) and "error" in result else "ok"
+        data_class = tool.data_class
+        post_extra: dict[str, Any] = {}
+        if rc.hooks.has(HookPoint.POST_TOOL):
+            raw_digest = hmac_json(result)
+            post = await rc.hooks.run(
+                HookPoint.POST_TOOL,
+                {"call_id": call.call_id, "tool": tool.name, "status": status, "output": result, "data_class": data_class},
+            )
+            rc.hook_records += post.records
+            if post.denied:
+                # 拒绝 / 出错 / 超时：扣留输出（失败关闭），模型只看到扣留说明
+                status, result = "error", {"error": f"output withheld by hook:{post.denied_by}"}
+            else:
+                result, data_class = post.payload["output"], post.payload["data_class"]
+            post_extra = {"hooks": post.records, "raw_output_hmac": raw_digest}
+        # 污点传播：本次 run 后续的外发类工具调用会因此被收紧为需审批（与续跑重建共用 taint_of）
+        rc.gate.taint |= taint_of(status, data_class)
         if tool.name == "read_artifact":
             # read_artifact 读回的就是外置内容：不再外置，否则模型永远读不到原文，只能反复读取直到轮数耗尽
             summary, ref = result, None
         else:
             summary, ref = ctx.offload_if_large(result, rc.workspace, settings.tool_result_offload_tokens)
-        # 结果事件带上工具的数据分类：续跑时据此重建污点，不依赖届时的工具表（工具定义可能已变化）。
-        # 业务系统拒绝 / 不存在等作为工具错误
-        status: Literal["ok", "error"] = "error" if isinstance(result, dict) and "error" in result else "ok"
+            if ref is not None and "confidential" in rc.gate.taint and data_class != "confidential":
+                # 外置工件的分级（D88）：工具分级与写入时 Run 已有污点两者取高——机密 Run 里经 internal 工具外置的内容
+                # 同样可能夹带机密上下文，附进新 Run 时按 confidential 继承（见 api.messages._artifact_data_class）。
+                # 只在污点高于工具分级时记录，其余情况 data_class 即工件分级（日志不变）。
+                post_extra["artifact_data_class"] = "confidential"
+        # 结果事件带上（post_tool 升级后的）数据分类：续跑时据此重建污点，不依赖届时的工具表（工具定义可能已变化）。
         await log.append(
             rc.run_id,
             RunEventType.TOOL_RESULT,
-            {"call_id": call.call_id, "status": status, "output": summary, "output_ref": ref, "data_class": tool.data_class},
+            {"call_id": call.call_id, "status": status, "output": summary, "output_ref": ref, "data_class": data_class} | post_extra,
         )
         await s.commit()
     rc.history.append({"role": "tool", "call_id": call.call_id, "content": ref or summary})

@@ -42,10 +42,13 @@ export interface paths {
          * Publish
          * @description 将草稿版本置为已发布状态，并冻结可复现快照（技能摘要、harness 版本）。
          *
-         *     两道闸门依次生效，任一不满足都按业务规则拒绝返回 409（422 只保留给请求参数校验）：
+         *     以下闸门依次生效，任一不满足都按业务规则拒绝返回 409（422 只保留给请求参数校验）：
          *     1) 评测闸门——eval_passed=False 直接阻断；
-         *     2) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，
-         *        否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障。
+         *     2) Hooks 配置闸门（S5，D73）——config.hooks 只能引用平台内置 hook，点与参数须合规；
+         *     3) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，
+         *        否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障；
+         *     4) harness 持有循环的高风险写白名单（S5 §4-1，D79）——loop_owner=harness 的适配器即便达到 L2，
+         *        声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）。
          *
          *     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
          */
@@ -206,7 +209,7 @@ export interface paths {
         };
         /**
          * Get Run
-         * @description 查询单个 Run 的当前状态与元信息。
+         * @description 查询单个 Run 的当前状态与元信息（读取权限见 run_reader：发起人 / 本 Run 审批人 / 管理员，待审批时含有审批资格者）。
          */
         get: operations["get_run_v1_runs__run_id__get"];
         put?: never;
@@ -253,6 +256,9 @@ export interface paths {
          * Cancel
          * @description 取消一个 Run；Run 不存在返回 404（RunNotFound 由应用级异常处理器映射），
          *     当前状态不允许迁移到 canceled（如已是终态）返回 409。
+         *
+         *     取消权限（D90）与完整读取权限相同：发起人、本 Run 已记录的审批人、平台管理员（开发态不检查角色）；
+         *     待审批期间仅有审批资格者（只读审批所需部分）不能取消，其他人 403，其他租户 404。
          */
         post: operations["cancel_v1_runs__run_id__cancel_post"];
         delete?: never;
@@ -270,7 +276,9 @@ export interface paths {
         };
         /**
          * Run Events
-         * @description 按 seq 增量查询 Run 的事件日志（自 since_seq 之后的所有事件）。
+         * @description 按 seq 增量查询 Run 的事件日志（自 since_seq 之后的所有事件）。读取权限见 run_reader；
+         *     待审批期间尚未成为审批人的有审批资格者只返回审批视图：待批调用的 tool.requested / tool.decision、
+         *     run.created（只留元数据）与 run.state_changed，字段收窄。
          *
          *     since_seq 限定在 [0, 2^53]：既覆盖任何现实的 seq，又保证 JS 客户端可精确表示，超界由 FastAPI 返回 422。
          */
@@ -339,6 +347,11 @@ export interface paths {
          * @description Continue a run after approval by replaying its event log (checkpoint via replay).
          *     （在审批通过后续跑一个 Run：通过重放该 Run 的事件日志实现 checkpoint 续跑，
          *     只允许对处于 working 状态的 Run 发起。）
+         *
+         *     续跑者（D87 修订）只能是 Run 发起人：审批人只能 approve / reject，审批人、管理员或其他同租户人员续跑一律 403
+         *     （其他租户 404，由 run_in_tenant 判定）；先判身份再判状态，不向无权者透露 Run 状态。
+         *     回传的初始消息须与 RUN_CREATED 记录的指纹（initial_messages_hash）一致，否则 409；S5 之前创建的 Run 没有
+         *     该字段，无从比对，兼容放行（与此前行为一致）。
          */
         post: operations["resume_v1_runs__run_id__resume_post"];
         delete?: never;
@@ -587,7 +600,8 @@ export interface components {
         /**
          * ResumeBody
          * @description 续跑请求体：messages: the original initial messages (clients keep them; workers read from session store)
-         *     （客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。）
+         *     （客户端需要回传最初的输入消息用于重建历史；生产环境中 worker 也可以改为从会话存储读取。
+         *     带附件的 Run 须连同首次驱动时追加的附件说明消息一并回传；指纹须与 RUN_CREATED 记录的一致，否则 409。）
          */
         ResumeBody: {
             /** Messages */
@@ -1331,6 +1345,15 @@ export interface operations {
                     "application/json": components["schemas"]["RunView"];
                 };
             };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
             /** @description Not Found */
             404: {
                 headers: {
@@ -1432,6 +1455,15 @@ export interface operations {
                     "application/json": components["schemas"]["RunStateView"];
                 };
             };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
             /** @description Not Found */
             404: {
                 headers: {
@@ -1485,6 +1517,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunEventsView"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
                 };
             };
             /** @description Validation Error */
@@ -1658,6 +1708,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
                 };
             };
             /** @description Not Found */
