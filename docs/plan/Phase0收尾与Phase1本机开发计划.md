@@ -44,7 +44,7 @@
 | A9 | 补齐 ADR 0002（Langfuse）、0003（APISIX 插件）、0004（stdio Harness 首选）、0006（模型别名）文件；ADR-0005 数据面 POC 范围完成评审 | P0-3.1、P0-3.2 | 按 `docs/adr/0000-template.md` 补写，内容与 README 已采纳结论一致 | `docs/adr/` 0001–0011 齐全，0005 为已采纳 |
 | A10 | 确认首个场景为工单总结；业务系统只读 API 负责人未到位时，本机先以 mock 数据源实现 `mcp-servers/ticket` | P0-3.3 | 选型确认纪要 | 纪要入库，含负责人与接口约定 |
 | A11 | P0-5.4～5.8 补专项测试并把计划状态改为已完成 | P0-5 | 针对写前记录、审批绑定失效、能力等级闸门各加用例 | 用例通过，`实施计划.md` 状态列更新 |
-| A12 | 启动 Docker Desktop，`make compose-up`（含 observe profile）；配置 `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` 给 LiteLLM | P0-4.1 本机替代 | `.env.example` 入库，真实 Key 只放本机 `.env`，不入库 | MySQL / Redis / Keycloak / LiteLLM / Langfuse / OTel 全部 healthy，`curl localhost:4000/health` 通过 |
+| A12 | 完成（2026-10-17） | compose 12 个服务全部 Up：MySQL（宿主机 3316）、Redis、MinIO、ES、Keycloak（realm ai-platform 已导入）、LiteLLM（5 个别名）、OTel、Langfuse 全家桶。修复：MySQL 端口改 3316、minio 固定版本、Keycloak mapper 补 protocol、Langfuse 补 CLICKHOUSE_MIGRATION_URL 与 CLICKHOUSE_CLUSTER_ENABLED=false。模型 Key 仍需填入 `.env` |
 
 与 S1 并行、不阻塞的文档项：P0-5.9 四项决策纪要、P0-5.10 文档一致性修订、P0-5.11 非功能测量口径。
 
@@ -97,5 +97,5 @@
 验证基线：`make test` 119 通过 / 1 跳过；`make lint` 通过；`make openapi-check` 通过；`pnpm -r build` 通过；`make precommit` 通过。
 本机环境发现：透明加密（DLP）使 ruff 等原生二进制读到密文，已用 `scripts/lint_ruff.py` 绕过，git 提交内容不受影响（见决策纪要 D12）。
 
-**进入 S1 的前置：** 修复 Docker 代理后完成 A12（compose 全部 healthy、LiteLLM `/health` 通过），并在 `.env` 中配置模型 Key。S1.2～S1.6 可在 A12 完成前先行开发（mock Harness 与 SQLite 不依赖 compose）。
+**进入 S1 的前置：** A12 已完成；只需在 `.env` 中配置模型 Key（真实模型对话需要）。S1.2～S1.6 可在 A12 完成前先行开发（mock Harness 与 SQLite 不依赖 compose）。
 

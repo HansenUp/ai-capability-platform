@@ -3,12 +3,72 @@
   "enabled": true,
   "accessTokenLifespan": 900,
   "clients": [
-    {"clientId": "portal-web", "publicClient": true, "redirectUris": ["http://localhost:5173/*"], "standardFlowEnabled": true},
-    {"clientId": "console-web", "publicClient": true, "redirectUris": ["http://localhost:5174/*"], "standardFlowEnabled": true},
-    {"clientId": "capability-gateway", "publicClient": false, "serviceAccountsEnabled": true, "attributes": {"token.exchange.enabled": "true"}},
-    {"clientId": "mcp-ticket", "publicClient": false, "bearerOnly": true},
-    {"clientId": "agent-demo", "publicClient": false, "serviceAccountsEnabled": true}
+    {
+      "clientId": "portal-web",
+      "publicClient": true,
+      "redirectUris": [
+        "http://localhost:5173/*"
+      ],
+      "standardFlowEnabled": true
+    },
+    {
+      "clientId": "console-web",
+      "publicClient": true,
+      "redirectUris": [
+        "http://localhost:5174/*"
+      ],
+      "standardFlowEnabled": true
+    },
+    {
+      "clientId": "capability-gateway",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "attributes": {
+        "token.exchange.enabled": "true"
+      }
+    },
+    {
+      "clientId": "mcp-ticket",
+      "publicClient": false,
+      "bearerOnly": true
+    },
+    {
+      "clientId": "agent-demo",
+      "publicClient": false,
+      "serviceAccountsEnabled": true
+    }
   ],
-  "roles": {"realm": [{"name": "sales"}, {"name": "aftersales"}, {"name": "finance"}, {"name": "platform-admin"}]},
-  "clientScopes": [{"name": "act", "protocol": "openid-connect", "protocolMappers": [{"name": "act-claim", "protocolMapper": "oidc-usersessionmodel-note-mapper", "config": {"claim.name": "act", "user.session.note": "act"}}]}]
+  "roles": {
+    "realm": [
+      {
+        "name": "sales"
+      },
+      {
+        "name": "aftersales"
+      },
+      {
+        "name": "finance"
+      },
+      {
+        "name": "platform-admin"
+      }
+    ]
+  },
+  "clientScopes": [
+    {
+      "name": "act",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "act-claim",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "config": {
+            "claim.name": "act",
+            "user.session.note": "act"
+          },
+          "protocol": "openid-connect"
+        }
+      ]
+    }
+  ]
 }
