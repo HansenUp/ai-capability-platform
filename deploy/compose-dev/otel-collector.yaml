@@ -2,7 +2,11 @@
 receivers: { otlp: { protocols: { grpc: { endpoint: 0.0.0.0:4317 }, http: { endpoint: 0.0.0.0:4318 } } } }
 processors: { batch: {} }                # 批量发送，降低请求数
 exporters:
-  otlphttp/langfuse: { endpoint: http://langfuse-web:3000/api/public/otel }   # Langfuse 作为 Trace 事实源（ADR-0002）
+  # Langfuse 作为 Trace 事实源（ADR-0002）。Langfuse OTel 端点要求项目公钥:私钥的 Basic Auth，
+  # 头值由 compose 的 otel-collector.environment.LANGFUSE_OTEL_AUTH 注入（"Basic " + base64("pk:sk")）。
+  otlphttp/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers: { Authorization: "${env:LANGFUSE_OTEL_AUTH}" }
   debug: { verbosity: basic }            # 控制台打印，便于本地排查
 service:
   pipelines:

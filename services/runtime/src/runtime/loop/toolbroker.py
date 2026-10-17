@@ -83,31 +83,39 @@ class RunCtx:
     workspace: str = field(default=".")  # 本次 Run 的工作区目录，用于工具结果外置
 
 
-async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = False) -> AsyncIterator[Event]:
+async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = False, reasoning: str | None = None) -> AsyncIterator[Event]:
     """Gate → (approval) → execute → offload → log. Sets rc.suspended when the run must wait.
     （处理单次工具调用的完整流程：闸口判定 →（如需）等待审批 → 执行 → 结果外置 → 写入事件日志。
     当 Run 必须等待人工干预（如审批）时，将 rc.suspended 置 True，调用方据此提前返回。
 
     already_logged=True 用于续跑场景：该调用此前已经写过 TOOL_REQUESTED 事件（且已获批准），
-    这里只需补完后续的判定与执行，不再重复记录 TOOL_REQUESTED，避免事件日志重复。）
+    这里只需补完后续的判定与执行，不再重复记录 TOOL_REQUESTED，避免事件日志重复。
+
+    reasoning：产生该工具调用的那一轮模型的思维链文本（没有则为 None）。非空时写入历史中 tool_use 消息的
+    顶层 "reasoning" 字段与 TOOL_REQUESTED 事件，使其可从事件日志重建（需要回传推理内容的模型据此续接）。）
     """
     tool = rc.tools_by_name.get(call.tool_name)
     phash = params_hash(call.input)  # 本次调用参数的规范化指纹，贯穿审批绑定与写前记录
     if not already_logged:
-        rc.history.append({"role": "assistant", "tool_use": {"call_id": call.call_id, "name": call.tool_name, "input": call.input}})
+        tool_use_msg: dict[str, Any] = {
+            "role": "assistant",
+            "tool_use": {"call_id": call.call_id, "name": call.tool_name, "input": call.input},
+        }
+        if reasoning:
+            tool_use_msg["reasoning"] = reasoning
+        rc.history.append(tool_use_msg)
     async with SessionLocal() as s:
         log = EventLog(s)
         if not already_logged:
-            await log.append(
-                rc.run_id,
-                RunEventType.TOOL_REQUESTED,
-                {
-                    "call_id": call.call_id,
-                    "tool": call.tool_name,
-                    "input": call.input,
-                    "risk_level": tool.risk_level if tool else "unknown",
-                },
-            )
+            requested: dict[str, Any] = {
+                "call_id": call.call_id,
+                "tool": call.tool_name,
+                "input": call.input,
+                "risk_level": tool.risk_level if tool else "unknown",
+            }
+            if reasoning:
+                requested["reasoning"] = reasoning
+            await log.append(rc.run_id, RunEventType.TOOL_REQUESTED, requested)
         if tool is None:
             # 模型请求了一个未在本次组装工具集中出现的工具名：直接记为错误结果，不进入闸口判定。
             result: Any = {"error": "unknown tool"}
@@ -184,8 +192,11 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
         if tool.data_class == "confidential":
             rc.gate.taint.add("confidential")  # 污点传播：本次 run 后续的外发类工具调用会因此被收紧为需审批
         summary, ref = ctx.offload_if_large(result, rc.workspace, settings.tool_result_offload_tokens)
+        # 结果事件带上工具的数据分类：续跑时据此重建污点，不依赖届时的工具表（工具定义可能已变化）。
         await log.append(
-            rc.run_id, RunEventType.TOOL_RESULT, {"call_id": call.call_id, "status": "ok", "output": summary, "output_ref": ref}
+            rc.run_id,
+            RunEventType.TOOL_RESULT,
+            {"call_id": call.call_id, "status": "ok", "output": summary, "output_ref": ref, "data_class": tool.data_class},
         )
         await s.commit()
     rc.history.append({"role": "tool", "call_id": call.call_id, "content": ref or summary})

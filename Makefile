@@ -6,7 +6,7 @@ PYTHON := $(VENV)/bin/python
 # 需要以可编辑模式安装的全部 Python 包（顺序无关，contract 会作为依赖被自动安装）
 PKGS := packages/contract packages/sdk-python services/runtime services/console-api services/capability-gateway services/policy services/observe-adapter harness-adapters/claude-sdk harness-adapters/stdio mcp-servers/template
 
-.PHONY: setup test lint openapi openapi-check sdk-types run-runtime run-console run-gateway compose-up compose-down compose-ps precommit-install precommit images
+.PHONY: setup test test-mysql migrate migrate-new verify-s1 lint openapi openapi-check sdk-types run-runtime run-console run-gateway compose-up compose-down compose-ps precommit-install precommit images
 
 # 创建虚拟环境并安装所有包；优先带 [dev] 额外依赖，包未声明 dev 时退回普通安装
 setup:
@@ -18,9 +18,22 @@ setup:
 test:
 	$(PYTHON) -m pytest -q
 
+# 用 compose 的 MySQL 跑 Runtime 测试：测试库 ai_platform_test 由 conftest 自动创建并在会话开始前清空重建
+TEST_MYSQL_URL ?= mysql+asyncmy://root:root@localhost:3316/ai_platform_test
+test-mysql:
+	RUNTIME_TEST_DATABASE_URL=$(TEST_MYSQL_URL) $(PYTHON) -m pytest services/runtime -q
+
+# 把 DATABASE_URL 指向的 Runtime 引擎库升级到最新迁移（Runtime 启动时也会自动执行）
+migrate:
+	cd services/runtime && $(abspath $(VENV))/bin/alembic upgrade head
+
+# 按 ORM 模型与当前库的差异自动生成新迁移：make migrate-new m="add xxx column"
+migrate-new:
+	cd services/runtime && $(abspath $(VENV))/bin/alembic revision --autogenerate -m "$(m)"
+
 # 静态检查：Ruff 全仓（经 scripts/lint_ruff.py，兼容本机透明加密）+ mypy 严格检查契约与 Runtime
 lint:
-	$(PYTHON) scripts/lint_ruff.py && $(PYTHON) scripts/lint_ruff.py --format && $(VENV)/bin/mypy packages/contract/src services/runtime/src
+	$(PYTHON) scripts/lint_ruff.py && $(PYTHON) scripts/lint_ruff.py --format && $(VENV)/bin/mypy packages/contract/src services/runtime/src harness-adapters/claude-sdk/src
 
 # 导出 Runtime / 能力网关的 OpenAPI 文档到 docs/api/（info.version 固定 v1，键排序，可重复生成）
 openapi:
@@ -80,3 +93,6 @@ images:
 	for s in runtime console-api capability-gateway policy observe-adapter; do \
 	  docker build -f services/$$s/Dockerfile -t ai-platform/$$s:dev . || exit 1; \
 	done
+
+verify-s1:  ## S1 本机出口验证：两种 Harness 真实对话 + Langfuse 查 Trace（需 compose observe profile 与模型 Key）
+	$(PYTHON) scripts/verify_s1_e2e.py

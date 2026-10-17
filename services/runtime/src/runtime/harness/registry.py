@@ -25,12 +25,17 @@ def get(name: str | None = None) -> HarnessAdapter:
 
 
 def _load(key: str) -> None:
-    """按 key 懒加载并注册对应的 harness 适配器。claude-sdk/stdio 为可选依赖，
+    """按 key 懒加载并注册对应的 harness 适配器。mock 为无模型的开发/CI 适配器；litellm 为平台持有循环、
+    经 LiteLLM 网关调用模型的适配器（runtime.llm）；claude-sdk/stdio 为可选依赖，
     仅在实际选用时才导入，避免未安装对应扩展包时影响其他 harness 的可用性。"""
     if key == "mock":
         from runtime.harness.mock import MockHarness
 
         register("mock", MockHarness())
+    elif key == "litellm":
+        from runtime.harness.litellm import LiteLLMHarness
+
+        register("litellm", LiteLLMHarness())
     elif key == "claude-sdk":
         from ai_harness_claude_sdk import ClaudeSdkHarness  # optional dependency（可选依赖）
 

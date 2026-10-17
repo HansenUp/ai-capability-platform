@@ -1,29 +1,29 @@
 # 本地开发依赖。平台自身服务从源码启动（make run-*），这里只提供基础设施。
 # profile：默认（core）启动 MySQL / Redis / MinIO / ES / Keycloak / LiteLLM；`--profile observe` 追加 OTel Collector 与 Langfuse。
-# 所有口令均为开发默认值，生产由 Vault 注入。
+# 所有口令均为开发默认值，生产由 Vault 注入。端口一律只绑定宿主机 127.0.0.1，不对局域网暴露（开发口令即默认口令）。
 services:
   mysql:                                  # 平台主库（Runtime / Console / 网关，S8 / S10 迁移后使用）
     image: mysql:8.4
     environment: { MYSQL_ROOT_PASSWORD: root, MYSQL_DATABASE: ai_platform }
-    ports: ["3316:3306"]                  # 宿主机 3316：避免与本机已有 MySQL 的 3306 冲突；容器内仍为 3306
+    ports: ["127.0.0.1:3316:3306"]                  # 宿主机 3316：避免与本机已有 MySQL 的 3306 冲突；容器内仍为 3306
   redis:                                  # Run 队列（Redis Streams，S7）、LiteLLM 响应缓存
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports: ["127.0.0.1:6379:6379"]
   minio:                                  # 对象存储：工具结果外置、Skill 包、Langfuse 事件
     image: minio/minio:RELEASE.2025-06-13T11-33-47Z-cpuv1   # 固定版本：latest 在部分机器上命中旧缓存镜像，不支持 --console-address
     command: server /data --console-address ":9001"
     environment: { MINIO_ROOT_USER: minio, MINIO_ROOT_PASSWORD: minio12345 }
-    ports: ["9000:9000", "9001:9001"]
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
   elasticsearch:                          # 能力目录检索索引、知识库混合检索
     image: elasticsearch:8.15.0
     environment: { discovery.type: single-node, xpack.security.enabled: "false", ES_JAVA_OPTS: "-Xms512m -Xmx512m" }
-    ports: ["9200:9200"]
+    ports: ["127.0.0.1:9200:9200"]
   keycloak:                               # 身份中心：OIDC 登录、Token Exchange；启动时自动导入 realm
     image: quay.io/keycloak/keycloak:26.0
     command: start-dev --import-realm
     environment: { KC_BOOTSTRAP_ADMIN_USERNAME: admin, KC_BOOTSTRAP_ADMIN_PASSWORD: admin }
     volumes: ["../../services/identity/realm-export.json:/opt/keycloak/data/import/realm.json:ro"]
-    ports: ["8180:8080"]                  # 宿主机 8180 避免与 Runtime 的 8080 冲突
+    ports: ["127.0.0.1:8180:8080"]                  # 宿主机 8180 避免与 Runtime 的 8080 冲突
   litellm:                                # 模型网关（LiteLLM Proxy），配置来自 services/model-gateway/config.yaml
     image: ghcr.io/berriai/litellm:main-latest
     command: ["--config", "/app/config.yaml", "--port", "4000"]
@@ -41,7 +41,7 @@ services:
       HTTPS_PROXY: ${CONTAINER_PROXY:-}
       NO_PROXY: localhost,127.0.0.1,redis,mysql,minio,elasticsearch,keycloak,litellm-db,langfuse-web,langfuse-worker,langfuse-db,clickhouse,otel-collector
     volumes: ["../../services/model-gateway/config.yaml:/app/config.yaml:ro"]
-    ports: ["4000:4000"]
+    ports: ["127.0.0.1:4000:4000"]
     depends_on: [litellm-db, redis]
   litellm-db:                             # LiteLLM 自用库：虚拟 Key、预算、spend 表
     image: postgres:16
@@ -50,13 +50,22 @@ services:
     image: otel/opentelemetry-collector-contrib:0.110.0
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes: ["./otel-collector.yaml:/etc/otelcol/config.yaml:ro"]
-    ports: ["4317:4317", "4318:4318"]
+    ports: ["127.0.0.1:4317:4317", "127.0.0.1:4318:4318"]
     profiles: [observe]
+    environment:
+      # 导出到 Langfuse OTel 端点的 Basic Auth 头。默认值 = "Basic " + base64("pk-lf-dev:sk-lf-dev")，
+      # 即下方 langfuse-web 无头初始化的开发密钥对；覆盖 LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY 时须同步改这里（仅本机开发）。
+      LANGFUSE_OTEL_AUTH: ${LANGFUSE_OTEL_AUTH:-Basic cGstbGYtZGV2OnNrLWxmLWRldg==}
+  minio-init:                             # 一次性任务：创建 Langfuse 事件桶（Langfuse 不会自动建桶；observe profile）
+    image: minio/minio:RELEASE.2025-06-13T11-33-47Z-cpuv1   # 与 minio 同镜像，自带 mc 客户端
+    profiles: [observe]
+    entrypoint: ["sh", "-c", "until mc alias set local http://minio:9000 minio minio12345; do sleep 1; done && mc mb --ignore-existing local/langfuse"]
+    depends_on: [minio]
   # Langfuse v3 自托管（postgres + clickhouse + redis + minio）—— 参见 https://langfuse.com/self-hosting
   langfuse-web:                           # Langfuse Web / API（observe profile）
     image: langfuse/langfuse:3
     profiles: [observe]
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     environment:
       DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
       CLICKHOUSE_URL: http://clickhouse:8123
@@ -73,7 +82,23 @@ services:
       LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
       LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: minio12345
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
-    depends_on: [langfuse-db, clickhouse, redis, minio]
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1          # MinIO 不校验 region，但 AWS SDK 必填；缺省时 OTel 摄取报 "Region is missing" 并使 web 崩溃
+      # 无头初始化（仅本机开发；生产不用，项目与密钥由管理员在 UI / Vault 管理）：首次启动时按 ID 创建组织、
+      # 项目、项目 API 密钥与登录用户，免去手工在 UI 建项目。已存在同 ID 的对象时不会覆盖。
+      LANGFUSE_INIT_ORG_ID: local
+      LANGFUSE_INIT_ORG_NAME: Local
+      LANGFUSE_INIT_PROJECT_ID: ai-platform
+      LANGFUSE_INIT_PROJECT_NAME: ai-platform
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-dev}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-dev}
+      LANGFUSE_INIT_USER_EMAIL: dev@local.test
+      LANGFUSE_INIT_USER_NAME: dev
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-devpassword1}
+    depends_on:
+      langfuse-db: { condition: service_started }
+      clickhouse: { condition: service_started }
+      redis: { condition: service_started }
+      minio-init: { condition: service_completed_successfully }   # 事件桶建好后再起，避免首次摄取写 S3 失败
   langfuse-worker:                        # Langfuse 异步处理 Worker（observe profile）
     image: langfuse/langfuse-worker:3
     profiles: [observe]
@@ -91,7 +116,12 @@ services:
       LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
       LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: minio12345
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
-    depends_on: [langfuse-db, clickhouse, redis, minio]
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1          # MinIO 不校验 region，但 AWS SDK 必填；缺省时 OTel 摄取报 "Region is missing" 并使 web 崩溃
+    depends_on:
+      langfuse-db: { condition: service_started }
+      clickhouse: { condition: service_started }
+      redis: { condition: service_started }
+      minio-init: { condition: service_completed_successfully }   # 事件桶建好后再起，避免首次摄取写 S3 失败
   langfuse-db:                            # Langfuse 元数据库（observe profile）
     image: postgres:16
     profiles: [observe]
@@ -100,4 +130,4 @@ services:
     image: clickhouse/clickhouse-server:24.8
     profiles: [observe]
     environment: { CLICKHOUSE_PASSWORD: clickhouse }
-    ports: ["8123:8123"]
+    ports: ["127.0.0.1:8123:8123"]

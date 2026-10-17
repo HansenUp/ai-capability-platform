@@ -8,7 +8,6 @@ demo Agent（conftest 发布）声明了 echo / ticket.search / ticket.close_bat
 import json
 import os
 import re
-import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -304,11 +303,26 @@ def test_expired_approval_requires_reapproval_on_resume(client, exec_calls):
 
 def _tamper_requested_input(run_id: str, new_input: dict) -> None:
     """模拟"批准之后参数被改动"：直接改写事件库中该 Run 的 tool.requested 入参。"""
-    db_path = os.environ["DATABASE_URL"].split("///", 1)[1]
-    with sqlite3.connect(db_path) as conn:
-        (seq, raw) = conn.execute("SELECT seq, payload FROM t_run_event WHERE run_id = ? AND type = 'tool.requested'", (run_id,)).fetchone()
-        payload = json.loads(raw) | {"input": new_input}
-        conn.execute("UPDATE t_run_event SET payload = ? WHERE run_id = ? AND seq = ?", (json.dumps(payload), run_id, seq))
+    # 方言无关（SQLite / MySQL）：独立的 NullPool 异步引擎 + text()，在本线程新起事件循环执行后即释放
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    async def _tamper() -> None:
+        eng = create_async_engine(os.environ["DATABASE_URL"], poolclass=NullPool)
+        try:
+            async with eng.begin() as conn:
+                sel = "SELECT seq, payload FROM t_run_event WHERE run_id = :run_id AND type = 'tool.requested'"
+                (seq, raw) = (await conn.execute(text(sel), {"run_id": run_id})).one()
+                payload = (raw if isinstance(raw, dict) else json.loads(raw)) | {"input": new_input}
+                upd = "UPDATE t_run_event SET payload = :payload WHERE run_id = :run_id AND seq = :seq"
+                await conn.execute(text(upd), {"payload": json.dumps(payload), "run_id": run_id, "seq": seq})
+        finally:
+            await eng.dispose()
+
+    asyncio.run(_tamper())
 
 
 def test_changed_params_invalidate_approval_on_resume(client, exec_calls):

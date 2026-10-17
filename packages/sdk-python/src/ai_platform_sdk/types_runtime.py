@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, constr
 
 
 class AgentVersionIn(BaseModel):
@@ -14,13 +14,13 @@ class AgentVersionIn(BaseModel):
     创建/更新一个 Agent 版本快照的请求体。
     """
 
-    agent_id: str = Field(..., title="Agent Id")
+    agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
     config: dict[str, Any] | None = Field(None, title="Config")
-    harness: str | None = Field(None, title="Harness")
-    model_alias: str | None = Field("default-chat", title="Model Alias")
+    harness: constr(max_length=32) | None = Field(None, title="Harness")
+    model_alias: constr(min_length=1, max_length=64) | None = Field("default-chat", title="Model Alias")
     system_prompt: str | None = Field("", title="System Prompt")
-    tenant_id: str | None = Field("default", title="Tenant Id")
-    version: str = Field(..., title="Version")
+    tenant_id: constr(min_length=1, max_length=64) | None = Field("default", title="Tenant Id")
+    version: constr(min_length=1, max_length=32) = Field(..., title="Version")
 
 
 class ApprovalBody(BaseModel):

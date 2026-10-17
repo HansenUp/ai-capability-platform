@@ -26,11 +26,13 @@ router = APIRouter(prefix="/admin")
 class AgentVersionIn(BaseModel):
     """创建/更新一个 Agent 版本快照的请求体。"""
 
-    agent_id: str  # Agent 标识
-    version: str  # 版本号
-    tenant_id: str = "default"  # 租户标识
-    model_alias: str = "default-chat"  # 绑定的模型别名
-    harness: str | None = None  # 指定 harness，缺省时使用节点默认 harness
+    # 字符串长度上限与 t_agent_version 的列宽一致：MySQL 严格模式下超长会在 INSERT 时报错（SQLite 不会），
+    # 在请求体上约束后统一返回 422，而不是 500。
+    agent_id: str = Field(min_length=1, max_length=64)  # Agent 标识
+    version: str = Field(min_length=1, max_length=32)  # 版本号
+    tenant_id: str = Field(default="default", min_length=1, max_length=64)  # 租户标识
+    model_alias: str = Field(default="default-chat", min_length=1, max_length=64)  # 绑定的模型别名
+    harness: str | None = Field(default=None, max_length=32)  # 指定 harness，缺省时使用节点默认 harness
     system_prompt: str = ""  # 系统提示词
     config: dict[str, Any] = Field(default_factory=dict)  # tools, skills, budgets, redlines（工具/技能/预算/红线等配置）
 

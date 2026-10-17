@@ -42,12 +42,14 @@ def rebuild_messages(log: list[RunEvent], initial_messages: list[dict[str, Any]]
         elif ev.type == RunEventType.MODEL_RESPONSE and ev.payload.get("text"):
             msgs.append({"role": "assistant", "content": ev.payload["text"]})
         elif ev.type == RunEventType.TOOL_REQUESTED:
-            msgs.append(
-                {
-                    "role": "assistant",
-                    "tool_use": {"call_id": ev.payload["call_id"], "name": ev.payload["tool"], "input": ev.payload.get("input", {})},
-                }
-            )
+            msg: dict[str, Any] = {
+                "role": "assistant",
+                "tool_use": {"call_id": ev.payload["call_id"], "name": ev.payload["tool"], "input": ev.payload.get("input", {})},
+            }
+            if ev.payload.get("reasoning"):
+                # 产生该调用的那一轮带思维链时，reasoning 随 tool_use 消息一起重建（与 toolbroker 写历史的约定一致）。
+                msg["reasoning"] = ev.payload["reasoning"]
+            msgs.append(msg)
         elif ev.type == RunEventType.TOOL_RESULT:
             # 工具结果优先使用 output_ref（外置引用），没有外置时才回退到内联的 output 内容。
             msgs.append(

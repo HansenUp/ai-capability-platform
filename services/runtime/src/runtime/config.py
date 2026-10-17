@@ -24,6 +24,12 @@ class Settings:
     workspace_dir: str = field(default_factory=lambda: _env("WORKSPACE_DIR", "./runtime-workspace"))  # Run 工作区根目录
     harness: str = field(default_factory=lambda: _env("HARNESS", "mock"))  # mock | claude-sdk | stdio（默认 harness）
     model_gateway_url: str = field(default_factory=lambda: _env("MODEL_GATEWAY_URL", "http://localhost:4000"))  # 模型网关地址
+    # 调用模型网关的 Key：本机为 LiteLLM 开发主密钥，生产环境使用按 Agent 签发的虚拟 Key
+    model_gateway_api_key: str = field(default_factory=lambda: _env("MODEL_GATEWAY_API_KEY", "sk-dev-master"))
+    llm_timeout_s: float = field(default_factory=lambda: float(_env("LLM_TIMEOUT_S", "120")))  # 单次模型请求超时（秒）
+    llm_max_retries: int = field(default_factory=lambda: int(_env("LLM_MAX_RETRIES", "2")))  # 可重试错误（429/5xx/网络）的最大重试次数
+    # OTLP/HTTP 端点（基址），未设置则只装 TracerProvider、不导出 Trace
+    otel_exporter_endpoint: str | None = field(default_factory=lambda: os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
     capability_gateway_url: str = field(default_factory=lambda: _env("CAPABILITY_GATEWAY_URL", "http://localhost:8082"))  # 能力网关地址
     policy_url: str = field(default_factory=lambda: _env("POLICY_URL", "http://localhost:8083"))  # 策略服务（Cedar）地址
     langfuse_host: str | None = field(default_factory=lambda: os.environ.get("LANGFUSE_HOST"))  # 可观测性 Langfuse 主机

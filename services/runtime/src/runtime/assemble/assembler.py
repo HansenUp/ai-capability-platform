@@ -35,7 +35,11 @@ READ_ARTIFACT_TOOL = ToolSpec(
 # Local registry for dev; production pulls from the capability gateway Discovery API.
 # （开发环境本地工具注册表；生产环境应从能力网关的 Discovery API 拉取。）
 LOCAL_TOOLS: dict[str, ToolSpec] = {
-    "echo": ToolSpec(name="echo", description="回显输入（开发用）"),
+    "echo": ToolSpec(
+        name="echo",
+        description="回显输入（开发用）",
+        input_schema={"type": "object", "properties": {"text": {"type": "string", "description": "要回显的文本"}}},
+    ),
     "ticket.search": ToolSpec(name="ticket.search", description="查询工单", capability_id="cap.ticket.search"),
     "ticket.close_batch": ToolSpec(
         name="ticket.close_batch",

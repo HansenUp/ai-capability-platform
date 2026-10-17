@@ -99,3 +99,35 @@
 
 **进入 S1 的前置：** A12 已完成；只需在 `.env` 中配置模型 Key（真实模型对话需要）。S1.2～S1.6 可在 A12 完成前先行开发（mock Harness 与 SQLite 不依赖 compose）。
 
+---
+
+## 7. S1 执行结果（2026-10-17）
+
+| 任务 | 结果 | 说明 |
+|---|---|---|
+| S1.2 | 完成 | `runtime/llm/client.py`：流式 SSE、分片工具调用聚合、`reasoning_content` → 思维链、别名解析（`/model/info`，缓存 60 s）、超时与指数退避重试（只在尚未产出增量前重试）。新增平台持有循环的 `litellm` Harness（L2） |
+| S1.3 | 完成 | claude-sdk 适配器：SDK 子进程经 LiteLLM 的 Anthropic 兼容端点访问模型；平台工具以进程内 MCP 注入，SDK 只拿到平台裁决后的结果；隔离本机设置与内置工具 |
+| S1.4 | 完成 | `HARNESS=claude-sdk` 与 `litellm` 均可经 `/v1/messages` 对话并完成工具往返 |
+| S1.5 | 完成 | 每次 drive 一条 Trace：`run` 根 span、`chat` 模型轮次、`execute_tool` 工具；属性含事件日志 seq；compose 中 Langfuse 无头初始化、Collector 带 Basic Auth、补 MinIO 桶与 S3 region |
+| S1.6 | 完成 | Alembic 0001；启动时自动 `upgrade head`；`UTCDateTime`、utf8mb4、连接池参数；`make migrate` / `make test-mysql` |
+
+本机出口标准核对（第 4 节）：
+
+| 标准 | 结果 | 证据 |
+|---|---|---|
+| mock 与 claude-sdk 各完成一次对话 | 通过 | `make verify-s1`：litellm、claude-sdk 各跑纯对话与工具调用，Run 均为 completed |
+| Langfuse 可查到 Trace 且 seq 与 Run 事件对应 | 通过 | `scripts/verify_langfuse_trace.py` 退出码 0；`make verify-s1` 四条 Trace 均有根 span，sessionId 等于 run_id |
+| `DATABASE_URL` 指向 compose MySQL 时全部测试通过 | 通过 | `make test-mysql` 109 通过 / 2 跳过 |
+
+验证基线：`make test` 197 通过 / 5 跳过（跳过项为需要真实模型或 MySQL 的用例）；`make lint`（含 claude-sdk 适配器 mypy）通过；`make openapi-check` 通过；`pnpm -r build` 通过。
+
+联调中发现并修复的问题：
+
+- Harness 以错误结束时 Run 被记为 completed：runner 改为按 `DoneEvent.stop_reason` 迁移终态（error → failed，cancelled → canceled，max_tokens 如实记录）。
+- MySQL 严格模式下 Agent 请求体超长字段导致 500：请求体按列宽加长度约束，返回 422。
+- 开发用 `echo` 工具没有参数 schema，模型无法传参：补 `text` 参数。
+- DeepSeek 思考模式要求工具轮次回传 `reasoning_content`：思维链写入事件日志并进入可重建历史后回传（D25）。
+- 独立代码评审的 5 个重要问题：旧库启动崩溃、claude-sdk 会话与子进程泄漏及取消无效、续跑后机密污点丢失、推理文本绕过不变量、Harness 异常时 Run 卡在 working，均已修复并补回归测试。
+
+S1 遗留（进入后续 Sprint）：见决策纪要 `docs/decisions/2026-10-17-S1架构决策.md` 第 3 节。
+

@@ -20,7 +20,7 @@ from sse_starlette.sse import EventSourceResponse
 from ai_contract import Event, RunEventType, RunState, TextEvent, ThinkingEvent
 from runtime.api.auth import Principal, current_principal
 from runtime.api.views import ApprovalView, ErrorDetail, RunEventsView, RunStateView, RunView
-from runtime.loop import runner
+from runtime.loop import active, runner
 from runtime.state.db import AgentVersion, Run, SessionLocal
 from runtime.state.eventlog import EventLog
 
@@ -256,6 +256,12 @@ async def cancel(run_id: str) -> dict[str, Any]:
         except ValueError as e:
             raise HTTPException(409, str(e)) from e
         await s.commit()
+    # 迁移提交后，若该 Run 正在本进程驱动（登记在 loop.active），再中断其 harness 会话：阻塞中的模型轮次
+    # 尽快收尾，runner 随后发现 Run 已是 canceled，以 done(cancelled) 结束流而不再做任何状态迁移。
+    running = active.get(run_id)
+    if running is not None:
+        harness, session = running
+        await active.interrupt_quietly(harness, session, run_id)
     return {"run_id": run_id, "state": RunState.CANCELED}
 
 
