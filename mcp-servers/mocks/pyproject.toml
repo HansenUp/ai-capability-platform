@@ -1,0 +1,15 @@
+[project]
+name = "ai-mcp-mocks"
+version = "0.1.0"
+description = "S8 e2e 用 mock 连接器（宿主机运行、只绑 127.0.0.1）：knowledge(8092) / crm(8093) / mail(8094)，与 mcp-template 共用鉴权与写规范"
+requires-python = ">=3.11"
+dependencies = ["ai-mcp-template", "fastapi>=0.110", "uvicorn[standard]>=0.29", "pydantic>=2.6"]
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx"]
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]
+[tool.setuptools.package-data]
+mcp_mocks = ["data/*.json"]

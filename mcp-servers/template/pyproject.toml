@@ -1,11 +1,12 @@
 [project]
-name = "mcp-template"
-version = "0.1.0"
-description = "MCP Server template for business systems: OBO token verification, idempotency, dry-run impact preview, cards"
+name = "ai-mcp-template"
+version = "0.2.0"
+description = "MCP Server 模板与连接器公共件：OBO 令牌 JWKS 验签、act 断言校验、写规范（幂等 / dry-run / 补偿工具）manifest"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "pydantic>=2.6"]
+dependencies = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "httpx", "pydantic>=2.6", "pyjwt[crypto]>=2.10"]
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
+redis = ["redis>=5"]  # <P>_ACT_REPLAY_REDIS_URL：多副本共享 jti 防重放
 dev = ["pytest>=8", "httpx"]
 [build-system]
 requires = ["setuptools>=68"]

@@ -1,6 +1,6 @@
 """S6 WP-D 多模态（图片附件，D102）：图片只以 image_ref 引用进入平台历史与事件日志，litellm 适配器发送时才读工作区
-转成 OpenAI 兼容 image_url data URL；harness 或模型别名不支持图片 → 422 ATTACHMENT_MODALITY_UNSUPPORTED；张数 / 大小 /
-类型限制；内联图片 422；附件归属规则不变（他人工件 403）；事件日志、重建历史与 Trace 中不出现 base64。
+转成 OpenAI 兼容 image_url data URL；harness 或模型别名不支持图片 → 400 ATTACHMENT_MODALITY_UNSUPPORTED；张数 / 大小 /
+类型限制；内联图片 400；附件归属规则不变（他人工件 403）；事件日志、重建历史与 Trace 中不出现 base64。
 
 模型网关以 httpx.MockTransport 模拟（本机 DeepSeek 无视觉能力），只断言请求体结构。
 """
@@ -155,19 +155,19 @@ def test_jpeg_with_wrong_extension_is_stored_by_actual_type(client: Any, vision:
     assert os.path.isfile(os.path.join(settings.workspace_dir, r.json()["run_id"], f"{ref.removeprefix('artifact://')}.jpg"))
 
 
-def test_harness_without_vision_is_422(client: Any, vision: None) -> None:
-    """demo 使用 mock harness（supports_vision=False）：即使别名在清单内也 422。"""
+def test_harness_without_vision_is_400(client: Any, vision: None) -> None:
+    """demo 使用 mock harness（supports_vision=False）：即使别名在清单内也 400。"""
     ref = _artifact(_own_run(client), _png())
     r = _chat(client, "demo", [ref])
-    assert r.status_code == 422 and r.json()["detail"].startswith("ATTACHMENT_MODALITY_UNSUPPORTED")
+    assert r.status_code == 400 and r.json()["detail"].startswith("ATTACHMENT_MODALITY_UNSUPPORTED")
 
 
-def test_alias_without_vision_is_422(client: Any) -> None:
-    """VISION_MODEL_ALIASES 默认空：支持图片的 harness 也一律 422（失败关闭）；文本工件不受影响。"""
+def test_alias_without_vision_is_400(client: Any) -> None:
+    """VISION_MODEL_ALIASES 默认空：支持图片的 harness 也一律 400（失败关闭）；文本工件不受影响。"""
     src = _own_run(client)
     agent, gw = _vision_agent(client)
     r = _chat(client, agent, [_artifact(src, _png())])
-    assert r.status_code == 422 and r.json()["detail"].startswith("ATTACHMENT_MODALITY_UNSUPPORTED")
+    assert r.status_code == 400 and r.json()["detail"].startswith("ATTACHMENT_MODALITY_UNSUPPORTED")
     assert gw.requests == []
     assert _chat(client, agent, [_artifact(src, b"{}", "txt")]).status_code == 200
 
@@ -178,13 +178,13 @@ def test_image_limits(client: Any, vision: None, monkeypatch: pytest.MonkeyPatch
     a, b = _artifact(src, _png()), _artifact(src, _png())
     monkeypatch.setattr(messages, "settings", dataclasses.replace(messages.settings, attachment_image_max_count=1))
     r = _chat(client, agent, [a, b])
-    assert r.status_code == 422 and r.json()["detail"].startswith("ATTACHMENT_TOO_MANY")
+    assert r.status_code == 400 and r.json()["detail"].startswith("ATTACHMENT_TOO_MANY")
     monkeypatch.setattr(messages, "settings", dataclasses.replace(messages.settings, attachment_image_max_bytes=16))
     r = _chat(client, agent, [a])
     assert r.status_code == 413 and r.json()["detail"].startswith("ATTACHMENT_TOO_LARGE")
     monkeypatch.setattr(messages, "settings", dataclasses.replace(messages.settings, attachment_image_max_bytes=1024))
     r = _chat(client, agent, [_artifact(src, b"<svg xmlns='http://www.w3.org/2000/svg'/>")])
-    assert r.status_code == 422 and r.json()["detail"].startswith("ATTACHMENT_TYPE_UNSUPPORTED")
+    assert r.status_code == 400 and r.json()["detail"].startswith("ATTACHMENT_TYPE_UNSUPPORTED")
     assert _chat(client, agent, [_artifact(src, b"%PDF-1.7", "pdf")]).status_code == 403  # 不是可附加的工件类型
     assert gw.requests == []
 
@@ -217,17 +217,17 @@ def test_inline_content_rejected(client: Any, vision: None, part: Any) -> None:
     """白名单：列表形式的 content 只允许纯文本块；/v1/messages 与 /v1/runs 都覆盖。"""
     content = [{"type": "text", "text": "看图"}, part]
     r = client.post("/v1/messages", json={"agent_id": "demo", "messages": [{"role": "user", "content": content}]}, headers=H)
-    assert r.status_code == 422 and r.json()["detail"].startswith("INLINE_CONTENT_UNSUPPORTED")
+    assert r.status_code == 400 and r.json()["detail"].startswith("INLINE_CONTENT_UNSUPPORTED")
     r = client.post("/v1/runs", json={"agent_id": "demo", "input": [{"role": "user", "content": content}]}, headers=H)
-    assert r.status_code == 422 and r.json()["detail"].startswith("INLINE_CONTENT_UNSUPPORTED")
+    assert r.status_code == 400 and r.json()["detail"].startswith("INLINE_CONTENT_UNSUPPORTED")
 
 
 @pytest.mark.parametrize("content", [{"type": "image_ref", "ref": "artifact://" + "a" * 32}, 42])
 def test_non_string_non_list_content_rejected(client: Any, content: Any) -> None:
     r = client.post("/v1/messages", json={"agent_id": "demo", "messages": [{"role": "user", "content": content}]}, headers=H)
-    assert r.status_code == 422 and r.json()["detail"].startswith("INLINE_CONTENT_UNSUPPORTED")
+    assert r.status_code == 400 and r.json()["detail"].startswith("INLINE_CONTENT_UNSUPPORTED")
     r = client.post("/v1/runs", json={"agent_id": "demo", "input": [{"role": "user", "content": content}]}, headers=H)
-    assert r.status_code == 422 and r.json()["detail"].startswith("INLINE_CONTENT_UNSUPPORTED")
+    assert r.status_code == 400 and r.json()["detail"].startswith("INLINE_CONTENT_UNSUPPORTED")
 
 
 def test_text_parts_still_accepted(client: Any) -> None:

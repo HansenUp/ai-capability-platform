@@ -9,9 +9,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from runtime.api import admin, messages, runs
 from runtime.api.audit import AuditMiddleware
+from runtime.api.views import error_code
 from runtime.config import settings, validate_for_production
 from runtime.harness import registry
 from runtime.observe import tracing
@@ -46,17 +48,26 @@ app.include_router(admin.router)
 app.add_middleware(AuditMiddleware)  # 每个 /v1、/admin 请求响应结束后写一行 t_audit（S2.3）
 
 
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """所有 HTTPException 统一输出 ErrorDetail{detail, code}（Contract V1.3，D135），保留原响应头（如 WWW-Authenticate）。"""
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    body = {"detail": detail, "code": error_code(exc.status_code, detail, getattr(exc, "code", None))}
+    return JSONResponse(status_code=exc.status_code, content=body, headers=getattr(exc, "headers", None))
+
+
 @app.exception_handler(RunNotFound)
 async def run_not_found(request: Request, exc: RunNotFound) -> JSONResponse:
     """事件日志找不到目标 Run 时统一映射为 404，避免以 500 暴露给调用方。"""
-    return JSONResponse(status_code=404, content={"detail": f"run '{exc.args[0]}' not found"})
+    return JSONResponse(status_code=404, content={"detail": f"run '{exc.args[0]}' not found", "code": "NOT_FOUND"})
 
 
 @app.exception_handler(StaleWriter)
 async def stale_writer(request: Request, exc: StaleWriter) -> JSONResponse:
     """写入前提已被并发写者改变（SeqConflict / LeaseLost，如两人同时审批 / 拒绝同一 Run）：统一映射为 409（可重读后重试），
     不以 500 暴露。各接口已有的专门处理（取消重试一次、/input 的 409 文案）优先。"""
-    return JSONResponse(status_code=409, content={"detail": f"run was updated concurrently; reload and retry ({type(exc).__name__})"})
+    detail = f"run was updated concurrently; reload and retry ({type(exc).__name__})"
+    return JSONResponse(status_code=409, content={"detail": detail, "code": "CONCURRENT_UPDATE"})
 
 
 @app.get("/healthz")

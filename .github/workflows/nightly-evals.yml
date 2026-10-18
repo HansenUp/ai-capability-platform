@@ -1,4 +1,4 @@
-# 夜间评测：每天 18:00 UTC（北京时间次日 02:00）回放 evals/ 下的快照，也可手动触发。全程不调用任何模型。
+# 夜间评测：每天 18:00 UTC（北京时间次日 02:00）回放 evals/ 下的快照并跑 S8 五条链路 e2e，也可手动触发。全程不调用任何模型。
 name: nightly-evals
 on:
   schedule:
@@ -16,3 +16,53 @@ jobs:
       # 快照漂移检查：用当前代码重录（进程内真实 Runtime + 网关 + mcp-ticket，脚本化模型），与已提交快照不一致即失败，
       # 说明事件日志形态已变化、快照需按 evals/record_snapshots.py 的说明重录并审查
       - run: .venv/bin/python evals/record_snapshots.py && test -z "$(git status --porcelain -- evals/snapshots)"
+  s8-e2e:                                 # S8 能力网关五条链路（scripts/verify_s8_e2e.py + evals/e2e/test_s8_chains.py）
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env: { MYSQL_ROOT_PASSWORD: root }
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 -proot" --health-interval 5s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+      elasticsearch:                      # 与 compose 同版本；单节点、关闭安全与磁盘水位阈值（CI 磁盘余量小时不拒写）
+        image: elasticsearch:8.15.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          cluster.routing.allocation.disk.threshold_enabled: "false"
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports: ["9200:9200"]
+        options: --health-cmd "curl -fs http://localhost:9200/_cluster/health" --health-interval 5s --health-timeout 5s --health-retries 40
+    env:
+      S8_EMBED_PROVIDER: hash             # 确定性的字 2-gram 特征哈希向量（不下载模型）
+      S8_MYSQL_URL: mysql+asyncmy://root:root@localhost:3306
+      ES_URL: http://localhost:9200
+      KEYCLOAK_URL: http://localhost:8180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable   # Cedar 判定引擎 sidecar 从源码编译
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "services/policy/cedar-engine -> target" }
+      # Keycloak 26.3 需要挂载仓库里的 realm 文件导入（含 ai-runtime-svc 与 mcp-* 受众），服务容器启动早于 checkout，故在此 docker run
+      - run: >-
+          docker run -d --name keycloak -p 8180:8080
+          -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+          -v "$PWD/services/identity/realm-export.json:/opt/keycloak/data/import/realm.json:ro"
+          quay.io/keycloak/keycloak:26.3 start-dev --import-realm
+      - run: make setup GATEWAY_EXTRAS=dev,mysql RUNTIME_EXTRAS=dev,probe,mysql
+      - run: make cedar-build CEDAR_CARGO=cargo
+      - name: 等待 Keycloak 导入 realm
+        run: |
+          for i in $(seq 1 90); do
+            curl -fs http://localhost:8180/realms/ai-platform/.well-known/openid-configuration >/dev/null && exit 0
+            sleep 2
+          done
+          docker logs keycloak | tail -50; exit 1
+      # 脚本化模型（OpenAI 兼容，脚本内置）经真实 litellm harness；Runtime 以 ai-runtime-svc 服务令牌调用网关
+      - run: .venv/bin/python scripts/verify_s8_e2e.py

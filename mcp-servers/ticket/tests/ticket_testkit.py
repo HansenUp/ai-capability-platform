@@ -1,4 +1,4 @@
-"""测试公共件：测试用 IdP（现场生成 RSA 密钥、签发令牌、以 MockTransport 提供 JWKS）与固定身份常量。
+"""测试公共件：测试用 IdP（现场生成 RSA 密钥、签发令牌、以 MockTransport 提供 JWKS）、假能力网关（签 act 断言）与固定身份常量。
 
 不命名为 conftest 以便测试文件直接导入，且与仓库内其他 tests 目录的模块名不冲突。
 """
@@ -14,9 +14,13 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 
+from mcp_template.testing import GATEWAY_JWKS_URL, FakeGateway
+
 ISSUER = "http://idp.test/realms/ai-platform"
 AUDIENCE = "mcp-ticket"
 JWKS_URL = "http://idp.test/realms/ai-platform/protocol/openid-connect/certs"
+ACT_JWKS_URL = GATEWAY_JWKS_URL
+GATEWAY = FakeGateway()  # 进程内唯一的假网关：conftest 把它的 JWKS 注入 mcp_template.jwks
 
 ALICE = "00000000-0000-4000-8000-0000000a11ce"  # sales，tenant default
 BOB = "00000000-0000-4000-8000-000000000b0b"  # aftersales，tenant default
@@ -68,5 +72,17 @@ class IdP:
         return jwt.encode(body, self.key, algorithm="RS256", headers={"kid": "k1"})
 
 
-def bearer(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+def bearer(token: str, *, assertion: bool = True, agent: str = "agent:ticket-summary@1", **assertion_claims: Any) -> dict[str, str]:
+    """生产态请求头：OBO 令牌 + 网关为它签发的 act 断言（每次生成新 jti，同一组头不能用于两次请求）。
+
+    令牌无法解析出 sub（如 garbage / 已删 sub）时只带令牌：这类请求在 OBO 校验阶段就会失败。
+    """
+    headers = {"Authorization": f"Bearer {token}"}
+    if assertion:
+        try:
+            sub = jwt.decode(token, options={"verify_signature": False}).get("sub")
+        except jwt.PyJWTError:
+            sub = None
+        if sub:
+            headers["X-AI-Act-Assertion"] = GATEWAY.assertion(token, aud=AUDIENCE, agent=agent, **assertion_claims)
+    return headers

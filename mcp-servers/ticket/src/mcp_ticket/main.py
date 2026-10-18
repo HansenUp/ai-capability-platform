@@ -5,7 +5,8 @@
 接口：
 - ``GET /healthz``：存活探针，无需鉴权；
 - ``GET /tools``：工具清单（名称、说明、风险等级、入参 schema，写工具另声明 dry-run / 幂等 / 补偿工具）；
-- ``POST /tools/ticket.search`` / ``ticket.get`` / ``ticket.close_batch``：见 ``mcp_ticket.tools``，均需 OBO 令牌。
+- ``POST /tools/ticket.search`` / ``ticket.get`` / ``ticket.close_batch`` / ``ticket.reopen_batch``：见 ``mcp_ticket.tools``，
+  均需 OBO 令牌；生产态另需能力网关签发的 ``X-AI-Act-Assertion``（见 ``mcp_ticket.auth``）。
 
 行级权限：租户必须一致；租户内 ``aftersales`` 角色可见全部工单，其余只可见本人作为 requester / owner 的工单；
 无权限与不存在返回同一个 404 ``{"detail": "ticket not found or no permission"}``。
@@ -19,7 +20,17 @@ from typing import Any
 from fastapi import Depends, FastAPI
 
 from mcp_ticket.auth import Identity, identity
-from mcp_ticket.tools import TOOL_MANIFEST, CloseBatchIn, GetIn, SearchIn, ticket_close_batch, ticket_get, ticket_search
+from mcp_ticket.tools import (
+    TOOL_MANIFEST,
+    CloseBatchIn,
+    GetIn,
+    ReopenBatchIn,
+    SearchIn,
+    ticket_close_batch,
+    ticket_get,
+    ticket_reopen_batch,
+    ticket_search,
+)
 
 app = FastAPI(title="MCP Server · ticket", version="0.1.0")
 
@@ -53,3 +64,9 @@ def get(body: GetIn, ident: Identity = Depends(identity)) -> dict[str, Any]:
 def close_batch(body: CloseBatchIn, ident: Identity = Depends(identity)) -> dict[str, Any]:
     """高风险写工具：批量关闭工单，支持 dry_run 影响预演与幂等键去重。"""
     return ticket_close_batch(ident, body)
+
+
+@app.post("/tools/ticket.reopen_batch")
+def reopen_batch(body: ReopenBatchIn, ident: Identity = Depends(identity)) -> dict[str, Any]:
+    """高风险写工具（close_batch 的补偿）：批量重开工单，支持 dry_run 影响预演与幂等键去重。"""
+    return ticket_reopen_batch(ident, body)

@@ -82,12 +82,26 @@ def service(name: str, app: str, app_dir: str, port: int, env: dict[str, str]) -
         log.close()
 
 
+_policy_url: str | None = None
+
+
+def policy_url() -> str:
+    """真实策略栈（Cedar 引擎 + 策略服务子进程，首次调用时启动，进程退出时停止；需 make cedar-build）。"""
+    global _policy_url
+    if _policy_url is None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import devkit
+
+        _policy_url = devkit.start_policy_stack(_tmp)
+    return _policy_url
+
+
 def runtime_env(tag: str, **extra: str) -> dict[str, str]:
     return {
         "DATABASE_URL": f"sqlite+aiosqlite:///{_tmp}/runtime-{tag}.db",
         "WORKSPACE_DIR": str(_tmp / f"ws-{tag}"),
         "HARNESS": "mock",
-        "POLICY_URL": "http://127.0.0.1:1",
+        "POLICY_URL": policy_url(),
         "CAPABILITY_GATEWAY_URL": "http://127.0.0.1:1",
         "OTEL_EXPORTER_OTLP_ENDPOINT": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"),
     } | extra

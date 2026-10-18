@@ -1,12 +1,22 @@
-// Cedar 实体与动作 Schema。实体属性来自身份中心（Keycloak）与能力目录（能力网关）。
+// Cedar 实体与动作 Schema。实体属性来自身份中心（Keycloak 验签令牌）与能力目录（能力网关）。
+// cedar-engine 加载策略时按本 Schema 严格校验（ValidationMode::Strict），校验不通过的策略不会生效；
+// 每条判定请求的实体与 context 也按本 Schema 校验，不合规的请求一律 deny（失败关闭）。
 
-// 人类用户：角色、租户、部门（用于按部门授权）
-entity User = { role: String, tenant: String, department: String };
+// 人类用户：租户、角色集合（取自验签令牌），部门可选（为按部门授权预留）
+entity User = { tenant: String, roles: Set<String>, department?: String };
 // Agent 主体：OBO 场景中 act 声明对应的代理者，owner 为其归属人
-entity Agent = { owner: String, tenant: String };
-// 能力：所属系统、风险级别（read / write_low / write_high）、数据分级、租户
+entity Agent = { tenant: String, owner?: String };
+// 能力：所属系统、风险级别（read / write_low / write_high）、数据分级、租户（属性取自能力目录）
 entity Capability = { system: String, risk_level: String, data_class: String, tenant: String };
-// invoke：调用一个能力；context.approved 为审批状态，context.taint 为本次 Run 的数据污点集合
-action invoke appliesTo { principal: [User, Agent], resource: [Capability], context: { approved: Bool, taint: Set<String> } };
+
+// 代理执行的 Agent（act）：id、版本与所属租户
+type AgentRef = { id: String, version?: String, tenant: String };
+// 判定上下文：approved 为审批状态，taint 为本次 Run 的数据污点集合，agent 为代理执行的 Agent
+type AuthzContext = { approved: Bool, taint: Set<String>, agent?: AgentRef };
+
+// invoke：调用一个能力
+action invoke appliesTo { principal: [User, Agent], resource: [Capability], context: AuthzContext };
 // read_data：读取能力返回的数据（为数据分级 / 脱敏规则预留）
-action read_data appliesTo { principal: [User, Agent], resource: [Capability], context: { approved: Bool, taint: Set<String> } };
+action read_data appliesTo { principal: [User, Agent], resource: [Capability], context: AuthzContext };
+// approve：审批一次高风险调用（为 S11 审批人指派与收件箱预留，当前无 permit，默认拒绝）
+action approve appliesTo { principal: [User], resource: [Capability], context: AuthzContext };

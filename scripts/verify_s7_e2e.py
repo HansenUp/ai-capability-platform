@@ -12,7 +12,7 @@ WORKSPACE_DIR；mock harness（``MOCK_TURN_DELAY_S`` 每轮延迟，便于在执
  ③ kill -9 持租约 Worker，60 s 内由另一 Worker 完成（报实际耗时）；
  ④ 写工具 EXECUTING 期间 kill -9 → 接管者转对账（input-required）→ /input 对账 → 完成，每个幂等键只有一条 TOOL_EXECUTED、下游只执行一次；
  ⑤ 同一 Run 重复投递只有一个租约持有者（epoch 1），队列消息只含 run_id 与 reason；
- ⑥ request_user_input → /input 完成；非发起人 403、schema 不符 422；
+ ⑥ request_user_input → /input 完成；非发起人 403、schema 不符 400（S8 统一错误体 {detail, code}）；
  ⑦ 跨节点取消（B 节点取消 Worker 上执行的 Run）2 s 内生效（报实际耗时）；
  ⑧ Redis 清空（只 FLUSHDB 本脚本专用的逻辑库 15，不动 compose 其他服务在用的 db 0）后 Run 仍完成；双写者考验：对持租约
    Worker ``kill -STOP`` 持续 LEASE_TTL+5 s，等另一 Worker 抢到租约（epoch 递增、持有者变化）后 ``kill -CONT``——旧持有者
@@ -21,7 +21,7 @@ WORKSPACE_DIR；mock harness（``MOCK_TURN_DELAY_S`` 每轮延迟，便于在执
  ⑨ 三个节点同时对空库启动只迁移一次（独立测试库 ai_runtime_s7_migrate_test 与 Redis 逻辑库 13，结束后删除 / 清空）；
  ⑩ 60 s 有效期令牌（经 Keycloak 管理 API 以 portal-web 为模板临时创建令牌有效期 60 s 的专用客户端，取完令牌即在 finally 中删除，
    不改共享的 portal-web）：
-   Worker 转 input-required{kind:credential}，用仍将过期的令牌刷新 422，用新令牌刷新后完成，终态删凭据；
+   Worker 转 input-required{kind:credential}，用仍将过期的令牌刷新 400，用新令牌刷新后完成，终态删凭据；
  ⑪ 预算超限（budget.max_wall_s）→ Run failed，RUN_ERROR BUDGET_EXCEEDED。
 
 用法：.venv/bin/python scripts/verify_s7_e2e.py     退出码 0 表示全部通过。
@@ -74,6 +74,7 @@ UID = devkit.USER_IDS
 
 failures: list[str] = []
 timings: dict[str, float] = {}
+POLICY_URL = "http://127.0.0.1:1"  # main 中替换为真实策略栈（Cedar 引擎 + 策略服务）的地址
 
 
 def check(ok: bool, what: str) -> bool:
@@ -259,7 +260,7 @@ def runtime_env(db: str = DB_NAME, redis_url: str = REDIS_URL) -> dict[str, str]
         "WORKSPACE_DIR": str(TMP / "ws"),  # 所有节点共享（D118）
         "HARNESS": "mock",
         "MOCK_TURN_DELAY_S": TURN_DELAY_S,
-        "POLICY_URL": "http://127.0.0.1:1",
+        "POLICY_URL": POLICY_URL,  # 真实策略栈（main 中启动），闸口失败关闭
         "CAPABILITY_GATEWAY_URL": f"http://127.0.0.1:{PORTS['gateway']}",
         "TOOL_DISPATCH": "gateway",
         "AUTH_REQUIRED": "true",
@@ -553,7 +554,7 @@ def s6_user_input() -> None:
     check(state == "input-required" and req.get("kind") == "answer", f"Run 挂起 input-required{{kind:answer}}（{state}）")
     url = f"/v1/runs/{run_id}/input"
     bad = B.post(url, json={"kind": "answer", "call_id": req.get("call_id"), "value": {"id": "T"}}, headers=auth("alice"))
-    check(bad.status_code == 422, f"回答不符 schema 422（HTTP {bad.status_code}）")
+    check(bad.status_code == 400 and bool(bad.json().get("code")), f"回答不符 schema 400 + 错误码（HTTP {bad.status_code}）")
     other = B.post(url, json={"kind": "answer", "call_id": req.get("call_id"), "value": {"id": "T-1001"}}, headers=auth("bob"))
     check(other.status_code == 403, f"非发起人回答 403（HTTP {other.status_code}）")
     ok = B.post(url, json={"kind": "answer", "call_id": req.get("call_id"), "value": {"id": "T-1001"}}, headers=auth("alice"))
@@ -767,7 +768,7 @@ def s10_expiring_credential() -> None:
     )
     url = f"/v1/runs/{run_id}/input"
     still = B.post(url, json={"kind": "credential"}, headers={"Authorization": f"Bearer {short}"})
-    check(still.status_code == 422, f"用仍将过期的令牌刷新 422（HTTP {still.status_code}）")
+    check(still.status_code == 400 and bool(still.json().get("code")), f"用仍将过期的令牌刷新 400 + 错误码（HTTP {still.status_code}）")
     check(B.post(url, json={"kind": "credential"}, headers=auth("bob")).status_code == 403, "他人令牌刷新 403")
     _tokens.pop("alice", None)
     ok = B.post(url, json={"kind": "credential"}, headers=auth("alice"))
@@ -810,10 +811,11 @@ def preflight() -> None:
 
 
 def main() -> int:
-    global A, B, STUB
+    global A, B, STUB, POLICY_URL
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     print(f"临时目录 {TMP}")
     preflight()
+    POLICY_URL = devkit.start_policy_stack(TMP)  # 进程退出时停止（需 make cedar-build）
     reset_db(DB_NAME)
     flush_dedicated(REDIS_URL)
     STUB = StubGateway(PORTS["gateway"])

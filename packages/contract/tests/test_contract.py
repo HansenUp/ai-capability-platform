@@ -113,7 +113,7 @@ def test_contract_version_exported():
     """CONTRACT_VERSION 存在、是语义化版本号，并在 __all__ 中导出。"""
     import ai_contract
 
-    assert ai_contract.CONTRACT_VERSION == "1.2.0"
+    assert ai_contract.CONTRACT_VERSION == "1.3.0"
     assert "CONTRACT_VERSION" in ai_contract.__all__
     for name in ("InputRequiredEvent", "CardType", "ThinkingVisibility"):
         assert name in ai_contract.__all__
@@ -148,6 +148,20 @@ def test_input_run_event_types():
     assert RunEventType.INPUT_PROVIDED == "input.provided"
     ev = RunEvent(run_id="r1", seq=2, type=RunEventType.INPUT_PROVIDED, payload={"input": {"ids": ["T-1"]}})
     assert ev.model_dump(mode="json")["type"] == "input.provided"
+
+
+def test_v13_capabilities_discovered_and_error_detail():
+    """V1.3：发现事件类型 capabilities.discovered；统一错误体 ErrorDetail{detail, code} 两字段必填。"""
+    import ai_contract
+
+    assert RunEventType.CAPABILITIES_DISCOVERED == "capabilities.discovered"
+    ev = RunEvent(run_id="r1", seq=3, type=RunEventType.CAPABILITIES_DISCOVERED, payload={"tools": [], "tools_hash": "x"})
+    assert ev.model_dump(mode="json")["type"] == "capabilities.discovered"
+    assert "ErrorDetail" in ai_contract.__all__
+    err = ai_contract.ErrorDetail(detail="run is not awaiting approval", code="CONFLICT")
+    assert err.model_dump() == {"detail": "run is not awaiting approval", "code": "CONFLICT"}
+    with pytest.raises(ValidationError):
+        ai_contract.ErrorDetail(detail="x")  # type: ignore[call-arg]
 
 
 def test_thinking_visibility_default_and_values():

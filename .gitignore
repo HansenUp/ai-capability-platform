@@ -15,4 +15,4 @@ runtime-workspace/
 .DS_Store
 .env.local
 .dev/
-probe-report.json
+probe-report*.json

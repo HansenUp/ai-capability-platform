@@ -48,11 +48,29 @@
         "ai-runtime"
       ],
       "optionalClientScopes": [
-        "mcp-ticket-audience"
+        "mcp-ticket-audience",
+        "mcp-knowledge-audience",
+        "mcp-crm-audience",
+        "mcp-mail-audience"
       ]
     },
     {
       "clientId": "mcp-ticket",
+      "publicClient": false,
+      "bearerOnly": true
+    },
+    {
+      "clientId": "mcp-knowledge",
+      "publicClient": false,
+      "bearerOnly": true
+    },
+    {
+      "clientId": "mcp-crm",
+      "publicClient": false,
+      "bearerOnly": true
+    },
+    {
+      "clientId": "mcp-mail",
       "publicClient": false,
       "bearerOnly": true
     },
@@ -109,6 +127,58 @@
       "clientId": "ai-runtime",
       "publicClient": false,
       "bearerOnly": true
+    },
+    {
+      "clientId": "ai-runtime-svc",
+      "name": "Agent Runtime 服务客户端（S8，调用能力网关的服务间令牌）",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "ai-runtime-svc-dev-secret",
+      "attributes": {
+        "standard.token.exchange.enabled": "false",
+        "oauth2.device.authorization.grant.enabled": "false"
+      },
+      "defaultClientScopes": [],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "audience-capability-gateway",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "included.client.audience": "capability-gateway"
+          }
+        },
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "client-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "user.session.note": "client_id",
+            "claim.name": "client_id",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     }
   ],
   "roles": {
@@ -253,6 +323,66 @@
             "introspection.token.claim": "true",
             "id.token.claim": "false",
             "included.client.audience": "mcp-ticket"
+          }
+        }
+      ]
+    },
+    {
+      "name": "mcp-knowledge-audience",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-mcp-knowledge",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "included.client.audience": "mcp-knowledge"
+          }
+        }
+      ]
+    },
+    {
+      "name": "mcp-crm-audience",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-mcp-crm",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "included.client.audience": "mcp-crm"
+          }
+        }
+      ]
+    },
+    {
+      "name": "mcp-mail-audience",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-mcp-mail",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "included.client.audience": "mcp-mail"
           }
         }
       ]

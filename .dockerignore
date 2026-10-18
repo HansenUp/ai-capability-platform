@@ -24,3 +24,4 @@ docs
 # 前端与其它非服务代码
 apps
 evals
+**/target

@@ -5,10 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
-from ticket_testkit import AUDIENCE, ISSUER, JWKS_URL, IdP
+from ticket_testkit import ACT_JWKS_URL, AUDIENCE, GATEWAY, ISSUER, JWKS_URL, IdP
 
+from mcp_template import jwks
+from mcp_template.act import replay_cache
 from mcp_ticket import auth
 from mcp_ticket.main import app
 
@@ -20,8 +23,19 @@ def ticket_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("MCP_TICKET_JWKS_URL", JWKS_URL)
     monkeypatch.setenv("MCP_TICKET_ISSUER", ISSUER)
     monkeypatch.setenv("MCP_TICKET_AUDIENCE", AUDIENCE)
-    for name in ("MCP_TICKET_DATA", "MCP_TICKET_DEV_AUTH", "MCP_TICKET_TRUSTED_AZP"):
+    monkeypatch.setenv("MCP_TICKET_ACT_JWKS_URL", ACT_JWKS_URL)
+    names = ("MCP_TICKET_DATA", "MCP_TICKET_DEV_AUTH", "MCP_TICKET_TRUSTED_AZP", "MCP_TICKET_ACT_ISSUER", "MCP_TICKET_ACT_AUDIENCE")
+    for name in names:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def gateway_jwks() -> Iterator[None]:
+    """act 断言公钥：假网关的 JWKS 经 MockTransport 提供；每个用例清空 jti 缓存。"""
+    jwks.set_transport_for_tests(httpx.MockTransport(lambda _req: httpx.Response(200, json=GATEWAY.jwks())))
+    replay_cache.clear()
+    yield
+    jwks.set_transport_for_tests(None)
 
 
 @pytest.fixture

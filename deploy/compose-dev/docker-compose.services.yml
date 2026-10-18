@@ -16,6 +16,8 @@ services:
     image: ai-platform/capability-gateway:dev
     ports: ["8082:8082"]
   policy:
+    # 生产判定：POLICY_ENV 或 PLATFORM_ENV 任一为 prod 即生产（禁止 POLICY_ENGINE=baseline，POLICY_SERVICE_TOKEN 必配）；
+    # 本机开发不配 POLICY_SERVICE_TOKEN 即不校验服务间令牌。配置时网关与 Runtime 须设同值的 POLICY_SERVICE_TOKEN。
     build: { context: ../.., dockerfile: services/policy/Dockerfile }
     image: ai-platform/policy:dev
     ports: ["8083:8083"]

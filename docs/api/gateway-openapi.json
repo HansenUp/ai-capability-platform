@@ -2,10 +2,26 @@
   "components": {
     "schemas": {
       "AuthzIn": {
-        "description": "授权判定请求。",
+        "description": "授权判定请求；主体取自 X-AI-User-Token（开发态可用 subject / X-AI-Subject）。",
         "properties": {
           "agent": {
             "title": "Agent",
+            "type": "string"
+          },
+          "agent_tenant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Tenant"
+          },
+          "agent_version": {
+            "default": "",
+            "title": "Agent Version",
             "type": "string"
           },
           "approved": {
@@ -18,6 +34,7 @@
             "type": "string"
           },
           "subject": {
+            "default": "",
             "title": "Subject",
             "type": "string"
           },
@@ -30,22 +47,117 @@
           }
         },
         "required": [
-          "subject",
           "agent",
           "capability"
         ],
         "title": "AuthzIn",
         "type": "object"
       },
-      "Capability": {
-        "description": "一条能力登记记录；`to_tool_spec()` 输出 Runtime 需要的 ToolSpec 字段。",
+      "AuthzOut": {
         "properties": {
-          "core_for_agents": {
+          "decision": {
+            "enum": [
+              "allow",
+              "deny",
+              "require_approval"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "policy_ids": {
             "items": {
               "type": "string"
             },
-            "title": "Core For Agents",
+            "title": "Policy Ids",
             "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "AuthzOut",
+        "type": "object"
+      },
+      "Binding": {
+        "description": "Agent 与能力的绑定（替代旧的 core_for_agents）：core 为第一级预载候选，discoverable 为第二级可检索范围。\nagent_id 为 \"*\" 表示对所有 Agent 生效。",
+        "properties": {
+          "agent_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "capability_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Capability Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "core",
+            "enum": [
+              "core",
+              "discoverable"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "capability_id"
+        ],
+        "title": "Binding",
+        "type": "object"
+      },
+      "Capability": {
+        "description": "一条能力登记记录；`to_tool_spec()` 输出 Runtime 需要的 ToolSpec 字段。",
+        "properties": {
+          "compensate_tool": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compensate Tool"
+          },
+          "connector": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connector"
           },
           "data_class": {
             "default": "internal",
@@ -62,6 +174,8 @@
             "type": "string"
           },
           "id": {
+            "maxLength": 128,
+            "minLength": 1,
             "title": "Id",
             "type": "string"
           },
@@ -71,11 +185,14 @@
             "type": "object"
           },
           "name": {
+            "maxLength": 128,
+            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
           "owner": {
             "default": "",
+            "maxLength": 128,
             "title": "Owner",
             "type": "string"
           },
@@ -94,6 +211,11 @@
             "title": "Risk Level",
             "type": "string"
           },
+          "row_version": {
+            "default": 0,
+            "title": "Row Version",
+            "type": "integer"
+          },
           "status": {
             "default": "published",
             "enum": [
@@ -111,11 +233,13 @@
           },
           "system": {
             "default": "",
+            "maxLength": 64,
             "title": "System",
             "type": "string"
           },
           "tenant": {
             "default": "default",
+            "maxLength": 64,
             "title": "Tenant",
             "type": "string"
           },
@@ -134,6 +258,7 @@
           },
           "version": {
             "default": "1.0.0",
+            "maxLength": 32,
             "title": "Version",
             "type": "string"
           }
@@ -146,22 +271,316 @@
         "title": "Capability",
         "type": "object"
       },
-      "ErrorDetail": {
-        "description": "HTTPException 的响应体。业务规则拒绝统一用 409 + ErrorDetail，422 只保留给 FastAPI 参数校验。",
+      "ConnectorTool": {
+        "description": "探活时从连接器 manifest 读到的一个工具及其写规范校验结果。",
         "properties": {
+          "connector": {
+            "title": "Connector",
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "read_only": {
+            "default": true,
+            "title": "Read Only",
+            "type": "boolean"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "connector",
+          "version",
+          "name"
+        ],
+        "title": "ConnectorTool",
+        "type": "object"
+      },
+      "ConnectorVersion": {
+        "description": "连接器（MCP Server / REST 工具服务）的一个版本；同名连接器同一时刻只有一个 active 版本。",
+        "properties": {
+          "activated_manifest_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activated Manifest Hash"
+          },
+          "auth_type": {
+            "default": "inherit",
+            "enum": [
+              "inherit",
+              "service"
+            ],
+            "title": "Auth Type",
+            "type": "string"
+          },
+          "consecutive_failures": {
+            "default": 0,
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "endpoint": {
+            "maxLength": 512,
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "health": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "up",
+              "down"
+            ],
+            "title": "Health",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_probe_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Probe At"
+          },
+          "manifest_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Hash"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "protocol": {
+            "default": "rest",
+            "enum": [
+              "rest",
+              "mcp"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          },
+          "status": {
+            "default": "inactive",
+            "enum": [
+              "inactive",
+              "active"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "system": {
+            "default": "",
+            "maxLength": 64,
+            "title": "System",
+            "type": "string"
+          },
+          "version": {
+            "default": "1",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "endpoint"
+        ],
+        "title": "ConnectorVersion",
+        "type": "object"
+      },
+      "ConnectorView": {
+        "properties": {
+          "activated_manifest_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activated Manifest Hash"
+          },
+          "auth_type": {
+            "default": "inherit",
+            "enum": [
+              "inherit",
+              "service"
+            ],
+            "title": "Auth Type",
+            "type": "string"
+          },
+          "consecutive_failures": {
+            "default": 0,
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "endpoint": {
+            "maxLength": 512,
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "health": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "up",
+              "down"
+            ],
+            "title": "Health",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_probe_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Probe At"
+          },
+          "manifest_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Hash"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "protocol": {
+            "default": "rest",
+            "enum": [
+              "rest",
+              "mcp"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          },
+          "status": {
+            "default": "inactive",
+            "enum": [
+              "inactive",
+              "active"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "system": {
+            "default": "",
+            "maxLength": 64,
+            "title": "System",
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectorTool"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
+          "version": {
+            "default": "1",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "endpoint"
+        ],
+        "title": "ConnectorView",
+        "type": "object"
+      },
+      "ErrorDetail": {
+        "description": "业务错误响应体：detail 为人读描述，code 为稳定的机器可读错误码。",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
           "detail": {
             "title": "Detail",
             "type": "string"
           }
         },
         "required": [
-          "detail"
+          "detail",
+          "code"
         ],
         "title": "ErrorDetail",
         "type": "object"
       },
       "ExchangeIn": {
-        "description": "令牌交换请求。执行者身份不在此声明：请求体里即使混入 actor 等字段也会被忽略。",
+        "description": "令牌交换请求。执行者身份不在此声明：请求体里即使混入 actor 等字段也会被忽略。\n已配置 Keycloak 时用户令牌只取 X-AI-User-Token（已验签），subject_token 被忽略。",
         "properties": {
           "agent_id": {
             "title": "Agent Id",
@@ -176,12 +595,18 @@
             "type": "string"
           },
           "subject_token": {
-            "title": "Subject Token",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Token"
           }
         },
         "required": [
-          "subject_token",
           "audience",
           "agent_id",
           "agent_version"
@@ -210,10 +635,27 @@
             "title": "Agent Id",
             "type": "string"
           },
+          "agent_tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Tenant"
+          },
           "agent_version": {
             "maxLength": 32,
             "title": "Agent Version",
             "type": "string"
+          },
+          "approved": {
+            "default": false,
+            "title": "Approved",
+            "type": "boolean"
           },
           "call_id": {
             "anyOf": [
@@ -262,9 +704,18 @@
             "title": "Run Id"
           },
           "subject": {
+            "default": "",
             "maxLength": 128,
             "title": "Subject",
             "type": "string"
+          },
+          "taint": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Taint",
+            "type": "array"
           },
           "tool": {
             "maxLength": 128,
@@ -274,7 +725,6 @@
         },
         "required": [
           "tool",
-          "subject",
           "agent_id",
           "agent_version"
         ],
@@ -282,29 +732,51 @@
         "type": "object"
       },
       "McpServerIn": {
-        "description": "MCP Server 登记信息。",
+        "description": "连接器登记信息。",
         "properties": {
           "auth_type": {
             "default": "inherit",
+            "enum": [
+              "inherit",
+              "service"
+            ],
             "title": "Auth Type",
             "type": "string"
           },
           "endpoint": {
+            "maxLength": 512,
+            "minLength": 1,
             "title": "Endpoint",
             "type": "string"
           },
           "name": {
+            "maxLength": 128,
+            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
           "protocol": {
             "default": "streamable-http",
+            "enum": [
+              "rest",
+              "http",
+              "mcp",
+              "streamable-http"
+            ],
             "title": "Protocol",
             "type": "string"
           },
           "system": {
             "default": "",
+            "maxLength": 64,
             "title": "System",
+            "type": "string"
+          },
+          "version": {
+            "default": "1",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Version",
             "type": "string"
           }
         },
@@ -316,32 +788,168 @@
         "type": "object"
       },
       "SearchIn": {
-        "description": "第二级发现请求，由 Runtime 的 search_capabilities 元工具发起。",
+        "description": "第二级发现请求（Runtime 的 search_capabilities 元工具发起）；用户由 X-AI-User-Token 确定。",
         "properties": {
-          "agent": {
-            "title": "Agent",
+          "agent_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Agent Id",
             "type": "string"
           },
-          "intent": {
-            "title": "Intent",
+          "agent_tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Tenant"
+          },
+          "agent_version": {
+            "default": "",
+            "maxLength": 32,
+            "title": "Agent Version",
             "type": "string"
           },
           "limit": {
             "default": 5,
+            "maximum": 20.0,
+            "minimum": 1.0,
             "title": "Limit",
             "type": "integer"
           },
-          "subject": {
-            "title": "Subject",
+          "query": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "taint": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Taint",
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "agent_id"
+        ],
+        "title": "SearchIn",
+        "type": "object"
+      },
+      "SearchItem": {
+        "properties": {
+          "data_class": {
+            "title": "Data Class",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "allow",
+              "require_approval"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "requires_idempotency_key": {
+            "default": false,
+            "title": "Requires Idempotency Key",
+            "type": "boolean"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "supports_dry_run": {
+            "default": false,
+            "title": "Supports Dry Run",
+            "type": "boolean"
+          },
+          "system": {
+            "title": "System",
+            "type": "string"
+          },
+          "tenant": {
+            "title": "Tenant",
             "type": "string"
           }
         },
         "required": [
-          "subject",
-          "agent",
-          "intent"
+          "id",
+          "name",
+          "description",
+          "input_schema",
+          "risk_level",
+          "data_class",
+          "system",
+          "tenant",
+          "decision",
+          "score"
         ],
-        "title": "SearchIn",
+        "title": "SearchItem",
+        "type": "object"
+      },
+      "SearchOut": {
+        "properties": {
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SearchItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "degraded"
+        ],
+        "title": "SearchOut",
         "type": "object"
       },
       "SkillIn": {
@@ -445,6 +1053,53 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "VersionIn": {
+        "properties": {
+          "auth_type": {
+            "default": "inherit",
+            "enum": [
+              "inherit",
+              "service"
+            ],
+            "title": "Auth Type",
+            "type": "string"
+          },
+          "endpoint": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "protocol": {
+            "default": "streamable-http",
+            "enum": [
+              "rest",
+              "http",
+              "mcp",
+              "streamable-http"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          },
+          "system": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System"
+          }
+        },
+        "required": [
+          "endpoint"
+        ],
+        "title": "VersionIn",
+        "type": "object"
       }
     }
   },
@@ -454,10 +1109,387 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/.well-known/jwks.json": {
+      "get": {
+        "description": "act 断言的验签公钥（ES256）。",
+        "operationId": "jwks__well_known_jwks_json_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Jwks  Well Known Jwks Json Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Jwks"
+      }
+    },
+    "/agents/{agent_id}/bindings": {
+      "get": {
+        "description": "某 Agent 的能力绑定（不含 \"*\" 通配，查通配用 agent_id=*）。",
+        "operationId": "list_bindings_agents__agent_id__bindings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Binding"
+                  },
+                  "title": "Response List Bindings Agents  Agent Id  Bindings Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Bindings"
+      }
+    },
+    "/agents/{agent_id}/bindings/{cid}": {
+      "delete": {
+        "operationId": "delete_binding_agents__agent_id__bindings__cid__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "title": "Cid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "core",
+              "enum": [
+                "core",
+                "discoverable"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Binding"
+      },
+      "put": {
+        "description": "绑定能力到 Agent（core：第一级预载候选；discoverable：第二级可检索）。",
+        "operationId": "put_binding_agents__agent_id__bindings__cid__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "title": "Cid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "core",
+              "enum": [
+                "core",
+                "discoverable"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Binding"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Binding"
+      }
+    },
     "/authz/check": {
       "post": {
-        "description": "对已登记能力执行授权判定。",
+        "description": "对已登记能力执行授权判定（策略服务不可达 → deny，reason=policy_unavailable）。",
         "operationId": "authz_check_authz_check_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -473,15 +1505,41 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Authz Check Authz Check Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/AuthzOut"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -492,6 +1550,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Authz Check"
@@ -499,7 +1567,7 @@
     },
     "/capabilities": {
       "get": {
-        "description": "第一级发现：返回该 Agent 需要预载的核心工具（受 CORE_LIMIT 限制）。\n带 names（逗号分隔的工具名，即 Agent 版本快照声明的白名单）时只返回其中已发布的能力——Runtime 据此组装，\n网关侧登记的 core_for_agents 不能给 Agent 额外加工具。",
+        "description": "第一级发现：该 Agent 的 core 绑定（含 \"*\"）中已发布的能力（受 CORE_TOOL_LIMIT 限制）。\n带 names（逗号分隔，即 Agent 版本快照声明的白名单）时取 binding(core) ∩ names，按 names 顺序（D62）。",
         "operationId": "core_capabilities_capabilities_get",
         "parameters": [
           {
@@ -535,6 +1603,102 @@
               ],
               "title": "Names"
             }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
+            }
           }
         ],
         "responses": {
@@ -550,6 +1714,26 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -559,12 +1743,22 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Core Capabilities"
       },
       "post": {
-        "description": "登记或更新一条能力（生产由 Console 管理员操作）。",
+        "description": "登记或更新一条能力（生产由 Console 管理员操作）；承载连接器无已探活的 manifest、工具不在其中或写规范不合规、\n同租户工具名冲突 409。",
         "operationId": "upsert_capability_capabilities_post",
         "parameters": [
           {
@@ -605,6 +1799,26 @@
             },
             "description": "Successful Response"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -621,8 +1835,106 @@
     },
     "/capabilities/search": {
       "post": {
-        "description": "第二级发现：按意图检索并用策略引擎过滤掉会被直接拒绝的能力。",
+        "description": "硬过滤 → BM25 top50 + kNN top50 → RRF(k=60) → 取 3×limit 交策略批量判定（deny 剔除、require_approval 标注）→ 截断 limit。",
         "operationId": "search_capabilities_capabilities_search_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -638,13 +1950,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Search Capabilities Capabilities Search Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SearchOut"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
           },
           "422": {
             "content": {
@@ -655,6 +1985,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Search Capabilities"
@@ -662,7 +2002,7 @@
     },
     "/capabilities/{cid}": {
       "get": {
-        "description": "按 id 查询能力详情。",
+        "description": "按 id 查询能力详情；服务态只返回用户租户内的能力（其他租户与不存在同为 404）。",
         "operationId": "get_capability_capabilities__cid__get",
         "parameters": [
           {
@@ -672,6 +2012,102 @@
             "schema": {
               "title": "Cid",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
             }
           }
         ],
@@ -686,6 +2122,36 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -695,6 +2161,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Get Capability"
@@ -725,7 +2201,7 @@
     },
     "/invoke": {
       "post": {
-        "description": "把一次工具调用分发到能力所属系统的 MCP Server。\n\n- 能力必须已登记且已发布；策略判定为 deny 时 403（Runtime 闸口之外的第二道防线）；\n- 身份：配置了 KEYCLOAK_TOKEN_URL 时必须带终端用户令牌（Authorization: Bearer），网关换取 OBO 令牌后转发，\n  执行 Agent 以 `X-AI-Act` 头声明（MCP Server 只信任 azp 为本网关的令牌携带的该头）；未配置时为开发态，\n  以 `X-AI-Dev-Sub` 头转发发起主体（MCP Server 需显式开启开发身份）；\n- MCP Server 的业务结果（含 4xx，如无权限 / 不存在）原样包在 `{ok, status_code, output}` 中返回，\n  网关自身的问题（未登记、令牌换取失败、MCP 不可达）才用 HTTP 错误码。",
+        "description": "把一次工具调用分发到能力所属连接器。\n\n- 能力须已登记、已发布且属于用户租户；写操作非 dry-run 缺幂等键 409；策略 deny（或策略不可达）403（第二道防线）；\n  策略 require_approval 且非 dry-run（Runtime 未传 approved=true）403 approval_required；approved / taint / agent_tenant 由\n  Runtime 闸口给出，Agent 跨租户、污点外发未审批据此被策略拒绝；\n- 连接器连续探活失败（down）503；工具须在最近一次 manifest 中且合规、manifest 与激活基线一致（否则 409 / 503）；\n- 身份：已配置 Keycloak 时以已验签的用户令牌换 OBO 放入 Authorization，并附 `X-AI-Act-Assertion`（act.py）；\n  开发态以 `X-AI-Dev-Sub` 转发主体；两种模式都带 `X-AI-Act`（只在开发态被 MCP 端采信）；\n- 业务结果（含 4xx）原样包在 `{ok, status_code, output}` 中返回；网关自身问题才用 HTTP 错误码。",
         "operationId": "invoke_invoke_post",
         "parameters": [
           {
@@ -742,6 +2218,86 @@
                 }
               ],
               "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
             }
           }
         ],
@@ -798,6 +2354,16 @@
             },
             "description": "Not Found"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -817,6 +2383,16 @@
               }
             },
             "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Invoke"
@@ -824,16 +2400,49 @@
     },
     "/mcp/servers": {
       "get": {
-        "description": "列出已登记的 MCP Server。",
+        "description": "列出各连接器的 active 版本。",
         "operationId": "list_mcp_mcp_servers_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/ConnectorVersion"
                   },
                   "title": "Response List Mcp Mcp Servers Get",
                   "type": "array"
@@ -841,12 +2450,42 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "List Mcp"
       },
       "post": {
-        "description": "登记一个 MCP Server（健康状态由 S6 工作包的探活任务维护）。",
+        "description": "登记连接器（inactive）；尚无 active 版本时探活 + 写规范校验通过才激活，否则保持 inactive。",
         "operationId": "register_mcp_mcp_servers_post",
         "parameters": [
           {
@@ -881,13 +2520,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Register Mcp Mcp Servers Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ConnectorVersion"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
@@ -901,6 +2558,378 @@
           }
         },
         "summary": "Register Mcp"
+      }
+    },
+    "/mcp/servers/{name}": {
+      "get": {
+        "description": "某连接器的全部版本（含最近一次探活的工具与校验结果）。",
+        "operationId": "get_mcp_mcp_servers__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectorView"
+                  },
+                  "title": "Response Get Mcp Mcp Servers  Name  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Mcp"
+      }
+    },
+    "/mcp/servers/{name}/probe": {
+      "post": {
+        "description": "立即探活 active 版本。",
+        "operationId": "probe_now_mcp_servers__name__probe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectorView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Probe Now"
+      }
+    },
+    "/mcp/servers/{name}/versions/{version}": {
+      "put": {
+        "description": "新增或更新一个 inactive 版本（不激活）；active 版本不可修改（409）。",
+        "operationId": "put_version_mcp_servers__name__versions__version__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectorVersion"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Version"
+      }
+    },
+    "/mcp/servers/{name}/versions/{version}/activate": {
+      "post": {
+        "description": "探活通过且 manifest 全部合规后切为 active（探活不合规的版本不可发布）。",
+        "operationId": "activate_version_mcp_servers__name__versions__version__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectorView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate Version"
       }
     },
     "/skills": {
@@ -1012,6 +3041,70 @@
               ],
               "title": "X-Gateway-Client"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
+            }
           }
         ],
         "requestBody": {
@@ -1037,6 +3130,26 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1046,6 +3159,26 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Token Exchange"

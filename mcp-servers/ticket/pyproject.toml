@@ -1,9 +1,9 @@
 [project]
 name = "ai-mcp-ticket"
 version = "0.1.0"
-description = "工单系统 MCP Server（只读为主）：OBO 令牌 JWKS 验签、行级权限、批量关闭的 dry-run 与幂等"
+description = "工单系统 MCP Server：OBO 令牌 JWKS 验签 + act 断言、行级权限、批量关闭 / 重开（补偿）的 dry-run 与幂等"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "httpx", "pydantic>=2.6", "pyjwt[crypto]>=2.10"]
+dependencies = ["ai-mcp-template", "fastapi>=0.110", "uvicorn[standard]>=0.29", "httpx", "pydantic>=2.6", "pyjwt[crypto]>=2.10"]
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx"]
 [build-system]

@@ -148,7 +148,7 @@ _TYPES: dict[str, Any] = {
 
 def validate_answer(schema: dict[str, Any] | None, value: Any, path: str = "$") -> None:
     """按 JSON Schema 的常用子集校验回答（type / enum / const / required / properties / additionalProperties=false /
-    items / min/maxLength / minimum / maximum / min/maxItems），不符抛 ValueError（API 映射 422）。schema 为空时只要求有值。"""
+    items / min/maxLength / minimum / maximum / min/maxItems），不符抛 ValueError（API 映射 400）。schema 为空时只要求有值。"""
     if schema is None:
         if value is None or (isinstance(value, str) and not value.strip()):
             raise ValueError(f"{path}: an answer is required")
@@ -216,16 +216,23 @@ async def _agent_of(s: AsyncSession, run: Run) -> AgentVersion | None:
 
 
 async def provide_input(
-    run_id: str, subject: str, kind: str, call_id: str | None = None, value: Any = None, action: str | None = None
+    run_id: str,
+    subject: str,
+    kind: str,
+    call_id: str | None = None,
+    value: Any = None,
+    action: str | None = None,
+    user_token: str | None = None,
 ) -> dict[str, Any]:
     """发起人为 input-required 的 Run 补充输入，同一事务写事件并 CAS 回 working；返回 ``{run_id, state, kind, call_id}``。
 
     - answer：call_id 须为待回答的 request_user_input 调用；value 按其 schema 校验（不符 ValueError）；
-    - reconcile：call_id 须为结果未知的调用；action ∈ done / skip / retry（done 时 value 可选，作为补记的结果）；
+    - reconcile：call_id 须为结果未知的调用；action ∈ done / skip / retry（done 时 value 可选，作为补记的结果）；retry 时以
+      user_token（发起人本次请求的令牌）向能力网关查询工具元数据——服务态网关的发现接口必须带用户令牌；
     - credential：value 为新令牌时在同一事务内覆盖存储（剩余有效期不足 ValueError）；为 None 时要求 API 层已存入有效凭据。
 
     异常：Run 不存在 RunNotFound（404）；非发起人 InputForbidden / CredentialSubjectMismatch（403）；不在 input-required
-    或无匹配的待补充输入 InputNotPending（409）；输入不合规 ValueError（422）；并发写者抢先 SeqConflict（409，可重试）。"""
+    或无匹配的待补充输入 InputNotPending（409）；输入不合规 ValueError（400）；并发写者抢先 SeqConflict（409，可重试）。"""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
     async with SessionLocal() as s:
@@ -241,7 +248,7 @@ async def provide_input(
         if kind == KIND_ANSWER:
             await _answer(s, log, run, prior, call_id, value)
         elif kind == KIND_RECONCILE:
-            await _reconcile(s, log, run, prior, call_id, action, value)
+            await _reconcile(s, log, run, prior, call_id, action, value, user_token)
         else:
             call_id = await _credential(s, log, run, prior, subject, value)
         await log.transition(run_id, RunState.WORKING, f"input {kind}")
@@ -258,7 +265,7 @@ async def _answer(s: AsyncSession, log: EventLog, run: Run, prior: list[RunEvent
         raise ValueError(f"answer nested deeper than {MAX_ANSWER_DEPTH} levels")
     try:
         validate_answer(req.payload.get("schema"), value)
-    except RecursionError as e:  # 回答嵌套过深（schema 深度已在请求时限制）：按不合规处理（422）
+    except RecursionError as e:  # 回答嵌套过深（schema 深度已在请求时限制）：按不合规处理（400）
         raise ValueError("answer is nested too deeply") from e
     from runtime.loop.toolbroker import hmac_json  # 延迟导入：toolbroker 在运行期导入本模块
 
@@ -292,7 +299,14 @@ async def _answer(s: AsyncSession, log: EventLog, run: Run, prior: list[RunEvent
 
 
 async def _reconcile(
-    s: AsyncSession, log: EventLog, run: Run, prior: list[RunEvent], call_id: str | None, action: str | None, value: Any
+    s: AsyncSession,
+    log: EventLog,
+    run: Run,
+    prior: list[RunEvent],
+    call_id: str | None,
+    action: str | None,
+    value: Any,
+    user_token: str | None = None,
 ) -> None:
     pending = pending_reconcile(prior)
     if pending is None or pending["call_id"] != call_id:
@@ -306,7 +320,7 @@ async def _reconcile(
         if agent is not None:
             from runtime.assemble.assembler import assemble
 
-            tool = next((t for t in (await assemble(agent, run.subject)).tools if t.name == pending["tool"]), None)
+            tool = next((t for t in (await assemble(agent, run.subject, user_token)).tools if t.name == pending["tool"]), None)
         if tool is None or not tool.requires_idempotency_key:
             raise ValueError(
                 f"retry is only allowed for tools whose downstream declares idempotency (use done or skip): {pending['tool']!r}"

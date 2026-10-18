@@ -21,7 +21,7 @@ from runtime.assemble.assembler import LOCAL_TOOLS, load_skills, skills_digest
 from runtime.config import settings
 from runtime.guard.hooks import validate_hooks_config
 from runtime.harness import registry
-from runtime.loop import runner
+from runtime.loop import discovery, runner
 from runtime.observe import audit
 from runtime.state.db import AgentVersion, SessionLocal
 
@@ -108,7 +108,9 @@ async def publish(
        声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）；
     5) budget / user_input 配置闸门（S7）——budget 须为合规的双预算对象（DEF-1），user_input 须为布尔值；
     6) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
-       harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值。
+       harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值；
+    7) discovery 配置闸门（S8.2）——{enabled, scope?, max_tools?} 须合规；开启后运行期可能动态加入高风险写工具，
+       按声明了高风险写处理（须 L2，harness 持有循环的还须在白名单内）。
 
     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
     """
@@ -130,6 +132,9 @@ async def publish(
             raise HTTPException(409, f"budget 配置不合规：{exc}") from None
         if "user_input" in cfg and not isinstance(cfg["user_input"], bool):
             raise HTTPException(409, "user_input 配置不合规：须为 true / false（是否注入平台工具 request_user_input）")
+        discovery_problem = discovery.validate_config(cfg.get("discovery"))
+        if discovery_problem:
+            raise HTTPException(409, f"discovery 配置不合规：{discovery_problem}")
         await _check_model_alias(av)
         caps = registry.get(av.harness).capabilities()
         if caps.loop_owner == "harness" and not caps.version.strip():
@@ -137,6 +142,8 @@ async def publish(
         tier = capability_tier(caps)
         # 高风险写工具从本地工具注册表查风险等级；生产环境应改为向能力网关查询。
         high_risk = [n for n in cfg.get("tools", []) if n in LOCAL_TOOLS and LOCAL_TOOLS[n].risk_level == RiskLevel.WRITE_HIGH]
+        if discovery.enabled(av):
+            high_risk.append(f"{discovery.TOOL_NAME}（动态发现的工具）")
         if high_risk and tier != "L2":
             raise HTTPException(
                 409,

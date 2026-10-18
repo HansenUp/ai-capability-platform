@@ -238,11 +238,17 @@ def test_pinned_pre_release_version_requires_allowlist(client: Any) -> None:
 
 
 def _gateway_returns(monkeypatch: pytest.MonkeyPatch, invoke: Any) -> None:
-    """工具经能力网关分发，网关 /invoke 恒返回 HTTP 200 + invoke(请求体)（模拟网关把 MCP 状态码包进结果）。"""
+    """工具经能力网关分发，网关 /invoke 恒返回 HTTP 200 + invoke(请求体)（模拟网关把 MCP 状态码包进结果）。
+    S8 起组装器的 /capabilities 也经同一网关客户端：此处返回 503，组装器回退到本地工具注册表（与此前网关不可达时一致）。"""
     import httpx
 
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path != "/invoke":
+            return httpx.Response(503)
+        return httpx.Response(200, json=invoke(json.loads(req.content)))
+
     monkeypatch.setattr(toolbroker, "settings", dataclasses.replace(toolbroker.settings, tool_dispatch="gateway"))
-    toolbroker.set_gateway_transport_for_tests(httpx.MockTransport(lambda req: httpx.Response(200, json=invoke(json.loads(req.content)))))
+    toolbroker.set_gateway_transport_for_tests(httpx.MockTransport(handler))
 
 
 def _assert_reconciliation(client: Any, evs: list[dict[str, Any]], run_id: str, tool: str) -> None:

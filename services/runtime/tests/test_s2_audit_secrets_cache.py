@@ -162,11 +162,20 @@ def test_production_baseline(monkeypatch: pytest.MonkeyPatch, clean_vault: None)
     monkeypatch.setattr(secret_store, "source", lambda name: "file")  # 其余密钥项同样经文件注入
     assert any("SQLite" in p for p in config.production_problems(ok))  # 数据库仍是默认 SQLite
     ok = dataclasses.replace(ok, database_url="mysql+asyncmy://u:p@db:3306/ai", tool_dispatch="gateway", credential_enc_key="ck-real")
+    # S8：调用能力网关须带服务令牌——缺令牌端点与服务客户端密钥均拒绝启动
+    assert [p for p in config.production_problems(ok) if "RUNTIME_GATEWAY" in p] == [
+        "缺少 RUNTIME_GATEWAY_TOKEN_URL（调用能力网关须带 ai-runtime-svc 服务令牌）",
+        "RUNTIME_GATEWAY_CLIENT_SECRET 未配置（服务客户端 ai-runtime-svc 的密钥）",
+    ]
+    assert "POLICY_SERVICE_TOKEN 未配置（调用策略服务的服务间令牌）" in config.production_problems(ok)
+    ok = dataclasses.replace(ok, gateway_token_url="https://idp/token", gateway_client_secret="svc-real")  # noqa: S106
+    ok = dataclasses.replace(ok, policy_service_token="pst-real")  # noqa: S106
     assert config.production_problems(ok) == ["HOOK_DIGEST_KEY 未配置或仍为开发默认值"]  # hook 指纹密钥仍是开发默认值
     ok = dataclasses.replace(ok, hook_digest_key="hk-real")
     assert config.production_problems(ok) == []
     assert "hk-real" not in repr(ok)
     assert "u:p" not in repr(ok) and "sk-real" not in repr(ok) and "ck-real" not in repr(ok)  # 密钥项不进 repr（日志、异常栈）
+    assert "svc-real" not in repr(ok) and "pst-real" not in repr(ok)
     assert config.production_problems(dataclasses.replace(ok, credential_enc_key=config.DEV_CREDENTIAL_ENC_KEY)) == [
         "CREDENTIAL_ENC_KEY 未配置或仍为开发默认值"
     ]

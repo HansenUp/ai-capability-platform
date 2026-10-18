@@ -1,5 +1,5 @@
 {
-  "started_at": "2026-10-17T21:25:45+00:00",
+  "started_at": "2026-10-18T00:17:06+00:00",
   "alias": "deepseek-v4-pro-2026-08",
   "pinned": {
     "goose": "1.54.0",
@@ -20,23 +20,23 @@
       "label": "v1 claude-sdk",
       "version": "1",
       "harness": "claude-sdk",
-      "run_id": "run_6e5d61125d2d4597b668",
-      "trace_id": "b7ffa802b0076a8a1b680a4fbc368635",
+      "run_id": "run_ceaee0cac5b443949686",
+      "trace_id": "f70b26e7f9fa0ed7b6c3efca5aae605f",
       "state": "completed",
-      "seconds": 3.4,
+      "seconds": 2.9,
       "attempts": [
         {
-          "run_id": "run_6e5d61125d2d4597b668",
+          "run_id": "run_ceaee0cac5b443949686",
           "state": "completed",
           "precondition": true
         }
       ],
       "search_requested": 1,
       "search_executed": 1,
-      "answer_excerpt": "查询关键字“固件”的工单结果如下：\n\n- 工单号：T-1002\n- 当前状态：open（处理中/待处理）\n\n共找到 1 条相关工单。",
+      "answer_excerpt": "查询“固件”关键字的工单结果如下：\n\n| 工单号 | 当前状态 |\n|--------|----------|\n| T-1002 | open |\n\n共找到 1 条工单。",
       "usage": {
-        "input_tokens": 2790,
-        "output_tokens": 126,
+        "input_tokens": 2654,
+        "output_tokens": 138,
         "model_responses": 2
       }
     },
@@ -44,23 +44,23 @@
       "label": "v2 goose",
       "version": "2",
       "harness": "goose",
-      "run_id": "run_d47f55dcc8a64f07b667",
-      "trace_id": "3a9cfd922ad6e88dd6dc2a142961062a",
+      "run_id": "run_e1f62554be1341a791bb",
+      "trace_id": "db5a1ac9cdb86f8883e7d86428572b51",
       "state": "completed",
-      "seconds": 4.0,
+      "seconds": 3.7,
       "attempts": [
         {
-          "run_id": "run_d47f55dcc8a64f07b667",
+          "run_id": "run_e1f62554be1341a791bb",
           "state": "completed",
           "precondition": true
         }
       ],
       "search_requested": 1,
       "search_executed": 1,
-      "answer_excerpt": "查询关键字“固件”的工单结果如下：\n\n- **工单号：** T-1002\n- **当前状态：** open（待处理）",
+      "answer_excerpt": "查询到 1 个匹配关键字“固件”的工单：\n\n- **T-1002**（工业路由器 IR-500 固件升级后频繁掉线）— 当前状态：**open**",
       "usage": {
-        "input_tokens": 2183,
-        "output_tokens": 113,
+        "input_tokens": 2039,
+        "output_tokens": 120,
         "model_responses": 2
       }
     },
@@ -68,23 +68,23 @@
       "label": "v3 dsh",
       "version": "3",
       "harness": "dsh",
-      "run_id": "run_3a22b7c3626d459e8a4b",
-      "trace_id": "aacfc273dbeb25b195e15c75ba7c67d9",
+      "run_id": "run_e4ad234d818e4755a608",
+      "trace_id": "decb34cd854b0d9e9dc355dcc1f49331",
       "state": "completed",
-      "seconds": 5.5,
+      "seconds": 5.4,
       "attempts": [
         {
-          "run_id": "run_3a22b7c3626d459e8a4b",
+          "run_id": "run_e4ad234d818e4755a608",
           "state": "completed",
           "precondition": true
         }
       ],
       "search_requested": 1,
       "search_executed": 1,
-      "answer_excerpt": "查询关键字“固件”的工单结果如下：\n\n| 工单号 | 当前状态 |\n|--------|----------|\n| T-1002 | open（未处理） |\n\n共找到 1 条工单。",
+      "answer_excerpt": "查询关键字“固件”的工单结果如下：\n\n- 工单号：T-1002\n- 当前状态：open（未处理）\n\n共找到 1 条匹配工单。",
       "usage": {
-        "input_tokens": 2209,
-        "output_tokens": 128,
+        "input_tokens": 2057,
+        "output_tokens": 117,
         "model_responses": 2
       }
     },
@@ -92,50 +92,50 @@
       "label": "回切 claude-sdk",
       "version": "1",
       "harness": "claude-sdk",
-      "run_id": "run_e8a724db8fdf4e4a8d61",
-      "trace_id": "de19a9ebe7eee5f08f5683852d02fa93",
+      "run_id": "run_061d556b240a42a2afec",
+      "trace_id": "dd1978b555ba4df6d7c645e9d11d80e6",
       "state": "completed",
-      "seconds": 3.3,
+      "seconds": 2.6,
       "attempts": [
         {
-          "run_id": "run_e8a724db8fdf4e4a8d61",
+          "run_id": "run_061d556b240a42a2afec",
           "state": "completed",
           "precondition": true
         }
       ],
       "search_requested": 1,
       "search_executed": 1,
-      "answer_excerpt": "查询到 1 个工单：\n\n- 工单号：T-1002\n- 当前状态：open（待处理）",
+      "answer_excerpt": "查询关键字“固件”的工单结果如下：\n\n- 工单号：T-1002\n- 当前状态：open（待处理）\n\n共找到 1 条相关工单。",
       "usage": {
-        "input_tokens": 2792,
-        "output_tokens": 110,
+        "input_tokens": 2641,
+        "output_tokens": 122,
         "model_responses": 2
       }
     }
   ],
   "goose": {
     "second_message": {
-      "run_id": "run_847f2f700c91459ab76a",
+      "run_id": "run_7c38ffd7c2144d8fab8a",
       "attempts": [
         {
-          "run_id": "run_847f2f700c91459ab76a",
+          "run_id": "run_7c38ffd7c2144d8fab8a",
           "state": "completed",
           "precondition": true
         }
       ],
-      "answer_excerpt": "查询关键字“固件”的工单如下：\n\n- 工单号：T-1002\n- 当前状态：open\n\n口令2DC4BA",
-      "word": "口令2DC4BA"
+      "answer_excerpt": "查询到 1 个含“固件”的工单：\n\n- 工单号：T-1002，当前状态：open\n\n口令：口令EFBD49",
+      "word": "口令EFBD49"
     },
     "approval": {
-      "run_id": "run_ffef0e72ea1742fcae02",
+      "run_id": "run_02c84f6c4d754d2c90fd",
       "attempts": [
         {
-          "run_id": "run_ffef0e72ea1742fcae02",
+          "run_id": "run_02c84f6c4d754d2c90fd",
           "state": "auth-required",
           "precondition": true
         }
       ],
-      "call_id": "call_00_WghIDNSXHMOEZtk8cD0n9669",
+      "call_id": "call_00_r0JheWXnIs2DvOnXU4YG2930",
       "tool_executed": 1,
       "answer_excerpt": ""
     },
@@ -143,72 +143,72 @@
       "before": {
         "bridges": [
           {
-            "pid": 12302,
-            "pgid": 12302
+            "pid": 85066,
+            "pgid": 85066
           }
         ],
         "group_procs": [
           {
-            "pid": 12302,
-            "pgid": 12302,
+            "pid": 85066,
+            "pgid": 85066,
             "cmd": "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m ai_harness_stdio.acp.bridge --profile goose"
           },
           {
-            "pid": 12303,
-            "pgid": 12302,
+            "pid": 85071,
+            "pgid": 85066,
             "cmd": "/opt/homebrew/bin/goose acp"
           }
         ],
         "agents": [
           {
-            "pid": 12303,
-            "pgid": 12302
+            "pid": 85071,
+            "pgid": 85066
           }
         ],
         "stray_agents": []
       },
-      "run_id": "run_e03943f34afc4b119227",
+      "run_id": "run_7bd591db526d4bab9724",
       "during": {
         "bridges": [
           {
-            "pid": 12322,
-            "pgid": 12322
+            "pid": 85082,
+            "pgid": 85082
           },
           {
-            "pid": 12302,
-            "pgid": 12302
+            "pid": 85066,
+            "pgid": 85066
           }
         ],
         "group_procs": [
           {
-            "pid": 12322,
-            "pgid": 12322,
+            "pid": 85082,
+            "pgid": 85082,
             "cmd": "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m ai_harness_stdio.acp.bridge --profile goose"
           },
           {
-            "pid": 12324,
-            "pgid": 12322,
+            "pid": 85084,
+            "pgid": 85082,
             "cmd": "/opt/homebrew/bin/goose acp"
           },
           {
-            "pid": 12302,
-            "pgid": 12302,
+            "pid": 85066,
+            "pgid": 85066,
             "cmd": "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m ai_harness_stdio.acp.bridge --profile goose"
           },
           {
-            "pid": 12303,
-            "pgid": 12302,
+            "pid": 85071,
+            "pgid": 85066,
             "cmd": "/opt/homebrew/bin/goose acp"
           }
         ],
         "agents": [
           {
-            "pid": 12324,
-            "pgid": 12322
+            "pid": 85084,
+            "pgid": 85082
           },
           {
-            "pid": 12303,
-            "pgid": 12302
+            "pid": 85071,
+            "pgid": 85066
           }
         ],
         "stray_agents": []
@@ -216,26 +216,26 @@
       "after": {
         "bridges": [
           {
-            "pid": 12322,
-            "pgid": 12322
+            "pid": 85082,
+            "pgid": 85082
           }
         ],
         "group_procs": [
           {
-            "pid": 12322,
-            "pgid": 12322,
+            "pid": 85082,
+            "pgid": 85082,
             "cmd": "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m ai_harness_stdio.acp.bridge --profile goose"
           },
           {
-            "pid": 12324,
-            "pgid": 12322,
+            "pid": 85084,
+            "pgid": 85082,
             "cmd": "/opt/homebrew/bin/goose acp"
           }
         ],
         "agents": [
           {
-            "pid": 12324,
-            "pgid": 12322
+            "pid": 85084,
+            "pgid": 85082
           }
         ],
         "stray_agents": []
@@ -267,18 +267,18 @@
   ],
   "langfuse": {
     "runs": {
-      "run_6e5d61125d2d4597b668": {
+      "run_ceaee0cac5b443949686": {
         "traces": [
-          "b7ffa802b0076a8a1b680a4fbc368635"
+          "f70b26e7f9fa0ed7b6c3efca5aae605f"
         ],
         "chat_spans": 2,
         "harness": [
           "claude-sdk"
         ]
       },
-      "run_d47f55dcc8a64f07b667": {
+      "run_e1f62554be1341a791bb": {
         "traces": [
-          "3a9cfd922ad6e88dd6dc2a142961062a"
+          "db5a1ac9cdb86f8883e7d86428572b51"
         ],
         "chat_spans": 2,
         "harness": [
@@ -286,9 +286,9 @@
         ],
         "litellm_generations": 2
       },
-      "run_3a22b7c3626d459e8a4b": {
+      "run_e4ad234d818e4755a608": {
         "traces": [
-          "aacfc273dbeb25b195e15c75ba7c67d9"
+          "decb34cd854b0d9e9dc355dcc1f49331"
         ],
         "chat_spans": 2,
         "harness": [
@@ -296,9 +296,9 @@
         ],
         "litellm_generations": 2
       },
-      "run_e8a724db8fdf4e4a8d61": {
+      "run_061d556b240a42a2afec": {
         "traces": [
-          "de19a9ebe7eee5f08f5683852d02fa93"
+          "dd1978b555ba4df6d7c645e9d11d80e6"
         ],
         "chat_spans": 2,
         "harness": [
@@ -308,7 +308,7 @@
     },
     "litellm_callback": "checked"
   },
-  "finished_at": "2026-10-17T21:26:24+00:00",
+  "finished_at": "2026-10-18T00:17:44+00:00",
   "checks": [
     {
       "section": "preflight",
@@ -362,12 +362,12 @@
     },
     {
       "section": "v1 claude-sdk",
-      "check": "v1 claude-sdk：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\\n\\n- 工单号：T-1002\\n- 当前状态：open（处理中/待处理）\\n\\n共找到 1 '…）",
+      "check": "v1 claude-sdk：回答含工单号 T-1002（'查询“固件”关键字的工单结果如下：\\n\\n| 工单号 | 当前状态 |\\n|--------|----------|\\n| T-'…）",
       "passed": true
     },
     {
       "section": "v1 claude-sdk",
-      "check": "v1 claude-sdk：用量 > 0（{'input_tokens': 2790, 'output_tokens': 126, 'model_responses': 2}）",
+      "check": "v1 claude-sdk：用量 > 0（{'input_tokens': 2654, 'output_tokens': 138, 'model_responses': 2}）",
       "passed": true
     },
     {
@@ -402,12 +402,12 @@
     },
     {
       "section": "v2 goose",
-      "check": "v2 goose：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\\n\\n- **工单号：** T-1002\\n- **当前状态：** open（待处理）'…）",
+      "check": "v2 goose：回答含工单号 T-1002（'查询到 1 个匹配关键字“固件”的工单：\\n\\n- **T-1002**（工业路由器 IR-500 固件升级后频繁掉线）— '…）",
       "passed": true
     },
     {
       "section": "v2 goose",
-      "check": "v2 goose：用量 > 0（{'input_tokens': 2183, 'output_tokens': 113, 'model_responses': 2}）",
+      "check": "v2 goose：用量 > 0（{'input_tokens': 2039, 'output_tokens': 120, 'model_responses': 2}）",
       "passed": true
     },
     {
@@ -427,7 +427,7 @@
     },
     {
       "section": "goose 第二条消息",
-      "check": "第二条消息：回答复述了只在第一条用户消息里的口令 口令2DC4BA（历史经 shim 重放到模型）",
+      "check": "第二条消息：回答复述了只在第一条用户消息里的口令 口令EFBD49（历史经 shim 重放到模型）",
       "passed": true
     },
     {
@@ -577,12 +577,12 @@
     },
     {
       "section": "v3 dsh",
-      "check": "v3 dsh：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\\n\\n| 工单号 | 当前状态 |\\n|--------|----------|\\n| T-'…）",
+      "check": "v3 dsh：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\\n\\n- 工单号：T-1002\\n- 当前状态：open（未处理）\\n\\n共找到 1 条匹配工'…）",
       "passed": true
     },
     {
       "section": "v3 dsh",
-      "check": "v3 dsh：用量 > 0（{'input_tokens': 2209, 'output_tokens': 128, 'model_responses': 2}）",
+      "check": "v3 dsh：用量 > 0（{'input_tokens': 2057, 'output_tokens': 117, 'model_responses': 2}）",
       "passed": true
     },
     {
@@ -617,12 +617,12 @@
     },
     {
       "section": "回切 claude-sdk",
-      "check": "回切 claude-sdk：回答含工单号 T-1002（'查询到 1 个工单：\\n\\n- 工单号：T-1002\\n- 当前状态：open（待处理）'…）",
+      "check": "回切 claude-sdk：回答含工单号 T-1002（'查询关键字“固件”的工单结果如下：\\n\\n- 工单号：T-1002\\n- 当前状态：open（待处理）\\n\\n共找到 1 条相关工'…）",
       "passed": true
     },
     {
       "section": "回切 claude-sdk",
-      "check": "回切 claude-sdk：用量 > 0（{'input_tokens': 2792, 'output_tokens': 110, 'model_responses': 2}）",
+      "check": "回切 claude-sdk：用量 > 0（{'input_tokens': 2641, 'output_tokens': 122, 'model_responses': 2}）",
       "passed": true
     },
     {
@@ -728,5 +728,5 @@
   ],
   "failures": [],
   "passed": true,
-  "logs_dir": "/var/folders/57/4jrkpsv12rx3jvcbgj30b34h0000gn/T/s6-e2e-ggdux452"
+  "logs_dir": "/var/folders/57/4jrkpsv12rx3jvcbgj30b34h0000gn/T/s6-e2e-a08mq7yl"
 }

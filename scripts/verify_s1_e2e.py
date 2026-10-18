@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """S1 本机出口验证：litellm 与 claude-sdk 两种 Harness 经 /v1/messages 与真实模型对话，并在 Langfuse 查到 Trace。
 
-前置：compose 已启动且含 observe profile（LiteLLM、OTel Collector、Langfuse 在线），`.env` 中已配置模型 Key。
+前置：compose 已启动且含 observe profile（LiteLLM、OTel Collector、Langfuse 在线），`.env` 中已配置模型 Key；
+已 `make cedar-build`（闸口经真实策略栈判定：本脚本以子进程启动 Cedar 引擎 + 策略服务）。
 每种 Harness 跑两次：一次纯对话，一次要求调用 echo 工具；断言 Run 终态为 completed、每轮都有 usage，
 再到 Langfuse 按 trace_id 查询，确认 Trace 含根 span 且 sessionId 等于 run_id。
 
@@ -20,9 +21,13 @@ import os
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import devkit  # noqa: E402
 
 _tmp = tempfile.mkdtemp(prefix="s1-e2e-")
 os.environ.update(
@@ -30,7 +35,8 @@ os.environ.update(
         "DATABASE_URL": f"sqlite+aiosqlite:///{_tmp}/runtime.db",
         "WORKSPACE_DIR": f"{_tmp}/ws",
         "HARNESS": "litellm",
-        "POLICY_URL": "http://127.0.0.1:1",  # 策略服务不可达 → 闸口回退基线规则（echo 为只读工具，放行）
+        # 闸口经真实策略栈判定（Cedar；策略不可达即拒绝）；echo 为只读工具，同租户放行
+        "POLICY_URL": devkit.start_policy_stack(Path(_tmp)),
         "CAPABILITY_GATEWAY_URL": "http://127.0.0.1:1",
     }
 )

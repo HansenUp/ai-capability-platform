@@ -1,0 +1,86 @@
+[
+ {
+  "id": "O-3001",
+  "tenant": "default",
+  "name": "GW-200 批量替换（300 台）",
+  "customer": "华东某制造企业",
+  "stage": "negotiation",
+  "amount": 1280000,
+  "currency": "CNY",
+  "owner": "00000000-0000-4000-8000-0000000a11ce",
+  "expected_close": "2026-11-30",
+  "updated_at": "2026-10-12"
+ },
+ {
+  "id": "O-3002",
+  "tenant": "default",
+  "name": "物流园区网关扩容",
+  "customer": "西南某物流园区",
+  "stage": "proposal",
+  "amount": 560000,
+  "currency": "CNY",
+  "owner": "00000000-0000-4000-8000-0000000a11ce",
+  "expected_close": "2026-12-15",
+  "updated_at": "2026-10-09"
+ },
+ {
+  "id": "O-3003",
+  "tenant": "default",
+  "name": "边缘计算网关试点",
+  "customer": "华北某能源集团",
+  "stage": "qualification",
+  "amount": 350000,
+  "currency": "CNY",
+  "owner": "00000000-0000-4000-8000-00000000e11e",
+  "expected_close": "2027-01-20",
+  "updated_at": "2026-10-05"
+ },
+ {
+  "id": "O-3004",
+  "tenant": "default",
+  "name": "门店网关替换",
+  "customer": "华南某零售连锁",
+  "stage": "prospecting",
+  "amount": 900000,
+  "currency": "CNY",
+  "owner": "00000000-0000-4000-8000-00000000e11e",
+  "expected_close": "2027-03-01",
+  "updated_at": "2026-09-28"
+ },
+ {
+  "id": "O-3005",
+  "tenant": "default",
+  "name": "GW-200 年度框架协议",
+  "customer": "某汽车零部件厂",
+  "stage": "won",
+  "amount": 2100000,
+  "currency": "CNY",
+  "owner": "00000000-0000-4000-8000-0000000a11ce",
+  "expected_close": "2026-09-30",
+  "updated_at": "2026-09-30"
+ },
+ {
+  "id": "O-3006",
+  "tenant": "t2",
+  "name": "t2 园区网关升级",
+  "customer": "t2 某园区运营方",
+  "stage": "proposal",
+  "amount": 420000,
+  "currency": "CNY",
+  "owner": "00000000-0000-4000-8000-0000000da7e0",
+  "expected_close": "2026-12-01",
+  "updated_at": "2026-10-11"
+ },
+ {
+  "id": "O-3007",
+  "tenant": "t2",
+  "name": "t2 工厂网关新建",
+  "customer": "t2 某电子厂",
+  "stage": "negotiation",
+  "amount": 760000,
+  "currency": "CNY",
+  "owner": "00000000-0000-4000-8000-0000000f2a11",
+  "expected_close": "2026-11-20",
+  "updated_at": "2026-10-03"
+ }
+]

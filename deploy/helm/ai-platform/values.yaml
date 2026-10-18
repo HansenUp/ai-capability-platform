@@ -26,9 +26,14 @@ vault:
     database-url: DATABASE_URL
     model-gateway-api-key: MODEL_GATEWAY_API_KEY
     claude-sdk-auth-token: CLAUDE_SDK_AUTH_TOKEN
+    policy-service-token: POLICY_SERVICE_TOKEN   # 调用策略服务的服务间令牌（S8 评审 #7，RUNTIME_ENV=prod 必配）
 consoleApi: { replicas: 2 }               # Console API 副本数
 capabilityGateway: { replicas: 2 }        # 能力网关副本数
-policy: { replicas: 2 }                   # 策略服务副本数
+# 策略服务：生产判定认统一环境变量——POLICY_ENV 或 PLATFORM_ENV 任一为 prod 即按生产处理（禁止 POLICY_ENGINE=baseline，
+# 必须配置 POLICY_SERVICE_TOKEN，经 Vault 注入；能力网关与 Runtime 以 X-Policy-Service-Token 携带同一值）。草稿不做 helm 校验。
+policy:
+  replicas: 2                             # 策略服务副本数
+  env: { PLATFORM_ENV: prod, POLICY_ENGINE: cedar, CEDAR_URL: "http://127.0.0.1:8183" }
 observeAdapter: { replicas: 1 }           # 观测适配器副本数
 # APISIX 路由插件（ADR-0003）：周期拉取 Console 路由表，按 Agent 绑定把请求转发到对应节点组
 apisix: { enabled: true, routingPlugin: { routingUrl: http://console-api:8081/routing, refreshSeconds: 15 } }

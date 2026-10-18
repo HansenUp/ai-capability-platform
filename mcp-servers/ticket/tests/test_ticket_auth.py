@@ -1,14 +1,18 @@
-"""身份与行级权限：JWT 验签（aud / iss / exp / alg）、租户缺失 403、X-AI-Act 仅对可信 azp 采信、开发头仅在开发模式生效、
-跨用户 / 跨租户读取与"不存在"不可区分。"""
+"""身份与行级权限：JWT 验签（aud / iss / exp / alg）、租户缺失 403、act 断言（S8.4）与裸 X-AI-Act 仅开发态采信、
+开发头仅在开发模式生效、跨用户 / 跨租户读取与"不存在"不可区分。"""
 
 from __future__ import annotations
 
 import time
 
+import httpx
 import jwt
 import pytest
 from fastapi.testclient import TestClient
-from ticket_testkit import ALICE, AUDIENCE, BOB, DAVE, ISSUER, IdP, bearer
+from ticket_testkit import ALICE, AUDIENCE, BOB, DAVE, GATEWAY, ISSUER, IdP, bearer
+
+from mcp_template import jwks
+from mcp_template.spec import validate_manifest
 
 NOT_FOUND = {"detail": "ticket not found or no permission"}
 
@@ -42,9 +46,9 @@ def test_dave_sees_only_tenant_t2_own(client: TestClient, idp: IdP) -> None:
 
 def test_cross_user_get_is_indistinguishable_from_missing(client: TestClient, idp: IdP) -> None:
     """无权限与不存在返回完全相同的 404（状态码与响应体）。"""
-    h = bearer(idp.token(ALICE, roles=("sales",)))
-    denied = client.post("/tools/ticket.get", json={"id": "T-1006"}, headers=h)  # 存在，但与 alice 无关
-    missing = client.post("/tools/ticket.get", json={"id": "T-9999"}, headers=h)
+    token = idp.token(ALICE, roles=("sales",))
+    denied = client.post("/tools/ticket.get", json={"id": "T-1006"}, headers=bearer(token))  # 存在，但与 alice 无关
+    missing = client.post("/tools/ticket.get", json={"id": "T-9999"}, headers=bearer(token))
     assert denied.status_code == missing.status_code == 404
     assert denied.json() == missing.json() == NOT_FOUND
     assert denied.headers.get("content-length") == missing.headers.get("content-length")
@@ -122,7 +126,7 @@ def test_jwks_unreachable_is_503(client: TestClient, idp: IdP) -> None:
     assert r.status_code == 503
 
 
-# ---------------- X-AI-Act 与开发头 ----------------
+# ---------------- act 断言、X-AI-Act 与开发头 ----------------
 
 
 def _close_by(client: TestClient, headers: dict[str, str]) -> str:
@@ -131,20 +135,61 @@ def _close_by(client: TestClient, headers: dict[str, str]) -> str:
     return r.json()["by"]
 
 
-def test_x_ai_act_honored_only_for_trusted_azp(client: TestClient, idp: IdP) -> None:
-    act = {"X-AI-Act": "agent:ticket-summary@1"}
-    assert _close_by(client, bearer(idp.token(ALICE, azp="capability-gateway")) | act) == "agent:ticket-summary@1"
+def test_act_assertion_adopts_agent(client: TestClient, idp: IdP) -> None:
+    assert _close_by(client, bearer(idp.token(ALICE), agent="agent:ticket-summary@2")) == "agent:ticket-summary@2"
 
 
-def test_x_ai_act_ignored_for_untrusted_azp(client: TestClient, idp: IdP) -> None:
+def test_production_requires_act_assertion(client: TestClient, idp: IdP) -> None:
+    """生产态：缺断言 401（即使带了可信 azp 的令牌与裸 X-AI-Act）。"""
+    r = client.post("/tools/ticket.search", json={}, headers=bearer(idp.token(ALICE), assertion=False) | {"X-AI-Act": "agent:x@1"})
+    assert r.status_code == 401 and "assertion" in r.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("claims", "status"),
+    [
+        ({"aud": "mcp-other"}, 401),
+        ({"iss": "evil"}, 401),
+        ({"ttl": 300}, 401),
+        ({"drop": ("jti",)}, 401),
+        ({"sub": BOB}, 403),
+        ({"obo_hash": "0" * 64}, 403),
+    ],
+    ids=["wrong-aud", "wrong-iss", "ttl-over-60", "no-jti", "sub-mismatch", "obo-hash-mismatch"],
+)
+def test_invalid_act_assertion(client: TestClient, idp: IdP, claims: dict, status: int) -> None:
+    token = idp.token(ALICE)
+    claims = dict(claims)
+    aud = claims.pop("aud", AUDIENCE)
+    headers = {"Authorization": f"Bearer {token}", "X-AI-Act-Assertion": GATEWAY.assertion(token, aud=aud, **claims)}
+    assert client.post("/tools/ticket.search", json={}, headers=headers).status_code == status
+
+
+def test_act_assertion_replay_is_401(client: TestClient, idp: IdP) -> None:
+    headers = bearer(idp.token(ALICE))
+    assert client.post("/tools/ticket.search", json={}, headers=headers).status_code == 200
+    assert client.post("/tools/ticket.search", json={}, headers=headers).status_code == 401
+
+
+def test_gateway_jwks_unreachable_is_503(client: TestClient, idp: IdP) -> None:
+    jwks.set_transport_for_tests(httpx.MockTransport(lambda _req: httpx.Response(503)))
+    assert client.post("/tools/ticket.search", json={}, headers=bearer(idp.token(ALICE))).status_code == 503
+
+
+def test_bare_x_ai_act_in_dev_mode_only_for_trusted_azp(client: TestClient, idp: IdP, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_TICKET_DEV_AUTH", "true")
     act = {"X-AI-Act": "agent:ticket-summary@1"}
-    assert _close_by(client, bearer(idp.token(ALICE, azp="some-other-app")) | act) == ALICE
+    trusted = bearer(idp.token(ALICE, azp="capability-gateway"), assertion=False) | act
+    assert _close_by(client, trusted) == "agent:ticket-summary@1"
+    untrusted = bearer(idp.token(BOB, roles=("aftersales",), azp="some-other-app"), assertion=False) | act
+    assert _close_by(client, untrusted) == BOB
 
 
 def test_trusted_azp_is_configurable(client: TestClient, idp: IdP, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_TICKET_DEV_AUTH", "true")
     monkeypatch.setenv("MCP_TICKET_TRUSTED_AZP", "gw-a, gw-b")
     act = {"X-AI-Act": "agent:x@1"}
-    assert _close_by(client, bearer(idp.token(ALICE, azp="gw-b")) | act) == "agent:x@1"
+    assert _close_by(client, bearer(idp.token(ALICE, azp="gw-b"), assertion=False) | act) == "agent:x@1"
 
 
 def test_dev_headers_ignored_unless_dev_mode(client: TestClient, idp: IdP, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,14 +212,21 @@ def test_dev_mode_defaults_tenant_and_still_checks_tokens_without_dev_sub(
     assert r.status_code == 200 and r.json()["total"] == 6  # 租户默认 default，无角色
     assert client.post("/tools/ticket.search", json={}).status_code == 401  # 开发模式下没有开发头也没有令牌
     assert client.post("/tools/ticket.search", json={}, headers=bearer(idp.token())).status_code == 200  # 令牌照常可用
+    assert client.post("/tools/ticket.search", json={}, headers=bearer(idp.token(), assertion=False)).status_code == 200  # 开发态可缺断言
 
 
 def test_healthz_and_manifest_need_no_auth(client: TestClient) -> None:
     assert client.get("/healthz").json() == {"status": "ok"}
-    manifest = {t["name"]: t for t in client.get("/tools").json()}
-    assert set(manifest) == {"ticket.search", "ticket.get", "ticket.close_batch"}
+    raw = client.get("/tools").json()
+    assert validate_manifest(raw) == []  # 写规范 S8.5：幂等、dry-run、补偿工具在同一 manifest、schema 不暴露控制字段
+    manifest = {t["name"]: t for t in raw}
+    assert set(manifest) == {"ticket.search", "ticket.get", "ticket.close_batch", "ticket.reopen_batch"}
     assert manifest["ticket.search"]["risk_level"] == manifest["ticket.get"]["risk_level"] == "read"
-    close = manifest["ticket.close_batch"]
-    assert close["risk_level"] == "write_high"
-    assert close["supports_dry_run"] and close["requires_idempotency_key"] and close["compensate_tool"]
+    close, reopen = manifest["ticket.close_batch"], manifest["ticket.reopen_batch"]
+    assert close["risk_level"] == reopen["risk_level"] == "write_high"
+    assert close["compensate_tool"] == "ticket.reopen_batch" and reopen["compensate_tool"] == "ticket.close_batch"
+    for t in (close, reopen):
+        assert t["idempotency"]["required"] and t["dry_run"]["supported"]
+        assert t["supports_dry_run"] and t["requires_idempotency_key"]
+        assert set(t["input_schema"]["properties"]) == {"ids"}
     assert all(t["description"] and t["input_schema"] for t in manifest.values())

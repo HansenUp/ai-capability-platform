@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """S2 本机出口验证：身份（Keycloak JWT）、统一审计、Vault 密钥注入、Prompt Cache 命中统计。
 
-前置：compose 已启动 keycloak、vault（含 vault-init）、litellm 与 observe profile（OTel Collector、Langfuse）。
+前置：compose 已启动 keycloak、vault（含 vault-init）、litellm 与 observe profile（OTel Collector、Langfuse）；已 `make cedar-build`
+（闸口经真实策略栈判定：本脚本以子进程启动 Cedar 引擎 + 策略服务）。
 Runtime 以 AUTH_REQUIRED=true 运行在本进程内（临时 SQLite），网关 Key 只从 Vault 读取（不设环境变量）。
 
 出口标准与对应检查：
@@ -23,9 +24,13 @@ import os
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import devkit  # noqa: E402
 
 KEYCLOAK = os.environ.get("KEYCLOAK_URL", "http://localhost:8180")
 REALM = f"{KEYCLOAK}/realms/ai-platform"
@@ -35,7 +40,7 @@ os.environ.update(
         "DATABASE_URL": f"sqlite+aiosqlite:///{_tmp}/runtime.db",
         "WORKSPACE_DIR": f"{_tmp}/ws",
         "HARNESS": "litellm",
-        "POLICY_URL": "http://127.0.0.1:1",  # 策略服务不可达 → 闸口回退基线规则（echo 为只读工具，放行）
+        "POLICY_URL": devkit.start_policy_stack(Path(_tmp)),  # 真实策略栈（Cedar）；echo 为只读工具，同租户放行
         "CAPABILITY_GATEWAY_URL": "http://127.0.0.1:1",
         "AUTH_REQUIRED": "true",
         "JWKS_URL": f"{REALM}/protocol/openid-connect/certs",

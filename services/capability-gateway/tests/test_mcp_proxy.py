@@ -8,7 +8,7 @@ import json
 import socket
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -20,7 +20,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from capability_gateway import main, mcp_proxy
+from capability_gateway import config, main, mcp_proxy, state
+from capability_gateway.catalog import ConnectorVersion
 
 c = TestClient(main.app)
 MCP_URL = "http://mcp.test/mcp"
@@ -55,11 +56,14 @@ class Fake:
         if request.url.path.endswith("/token"):
             self.token_calls += 1
             return httpx.Response(200, json={"access_token": OBO, "expires_in": 300})
-        if request.url.path == "/authz/check":
+        if request.url.path == "/authz/check-batch":
             if self.decision is None:
                 raise httpx.ConnectError("policy down", request=request)
-            self.policy.append(json.loads(request.content))
-            return httpx.Response(200, json={"decision": self.decision, "decision_id": "d1", "matched": "x"})
+            reqs = json.loads(request.content)["requests"]
+            self.policy += reqs
+            return httpx.Response(
+                200, json={"results": [{"decision": self.decision, "policy_ids": ["x"]} for _ in reqs], "engine": "cedar"}
+            )
         self.mcp.append(request)
         headers = {"Mcp-Session-Id": SESSION, "X-Upstream": "1", "Connection": "keep-alive"}
         if self.stream is not None:
@@ -77,11 +81,11 @@ async def _chunks(body: bytes) -> AsyncIterator[bytes]:
 
 
 @pytest.fixture
-def fake(monkeypatch: pytest.MonkeyPatch) -> Iterator[Fake]:
+async def fake(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Fake]:
     f = Fake()
-    monkeypatch.setattr(main, "KEYCLOAK_TOKEN_URL", "http://idp.test/token")
-    monkeypatch.setattr(main, "POLICY_URL", "http://policy.test")
-    monkeypatch.setitem(main.MCP_SERVERS, "mcp-ticket", main.MCP_SERVERS["mcp-ticket"] | {"endpoint": MCP_URL})
+    monkeypatch.setattr(config, "KEYCLOAK_TOKEN_URL", "http://idp.test/token")
+    monkeypatch.setattr(config, "POLICY_URL", "http://policy.test")
+    await state.catalog.put_connector(ConnectorVersion(name="mcp-ticket", endpoint=MCP_URL, protocol="mcp", system="ticket"))
     main.set_invoke_transport_for_tests(httpx.MockTransport(f))
     yield f
     main.set_invoke_transport_for_tests(None)
@@ -127,8 +131,12 @@ def test_tools_call_authorized_with_token_identity(fake: Fake) -> None:
     assert r.status_code == 200 and r.headers["content-type"] == "text/event-stream"
     assert r.content.startswith(b"event: message\ndata: ")  # SSE 原样转发
     (req,) = fake.policy
-    assert req["capability"] == "cap.ticket.search" and req["subject"] == "user-1" and req["agent"] == "ticket-summary@1"
-    assert req["principal"] == {"tenant": "default"}  # 主体租户取自令牌，不取自能力
+    assert req["resource"]["id"] == "cap.ticket.search" and req["context"]["agent"] == {
+        "id": "ticket-summary",
+        "version": "1",
+        "tenant": "default",
+    }
+    assert req["principal"] == {"sub": "user-1", "tenant": "default", "roles": []}  # 主体租户取自令牌，不取自能力
     assert len(fake.mcp) == 1
 
 
@@ -151,7 +159,7 @@ def test_denied_or_policy_down_never_reaches_upstream(fake: Fake, decision: str 
 
 def test_policy_error_status_fails_closed(fake: Fake, monkeypatch: pytest.MonkeyPatch) -> None:
     def broken(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500) if request.url.path == "/authz/check" else fake(request)
+        return httpx.Response(500) if request.url.path == "/authz/check-batch" else fake(request)
 
     main.set_invoke_transport_for_tests(httpx.MockTransport(broken))
     r = c.post("/mcp/mcp-ticket", json=rpc("tools/call", name="ticket.search", arguments={}), headers=HDRS)
@@ -172,7 +180,8 @@ def test_rejections(fake: Fake, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mcp_proxy, "BODY_LIMIT", 10)
     assert c.post("/mcp/mcp-ticket", json=rpc("initialize"), headers=HDRS).status_code == 413
     assert fake.mcp == []
-    assert c.get("/mcp/servers").status_code == 200  # 登记列表路由不被代理路由遮蔽
+    monkeypatch.setattr(config, "GATEWAY_ADMIN_TOKEN", "adm")
+    assert c.get("/mcp/servers", headers={"X-Gateway-Admin-Token": "adm"}).status_code == 200  # 登记列表路由不被代理路由遮蔽
 
 
 def test_get_and_delete_are_proxied(fake: Fake) -> None:
@@ -193,16 +202,18 @@ def test_upstream_unreachable_is_502(fake: Fake) -> None:
 
 
 def test_dev_mode_forwards_subject_not_client_token(fake: Fake, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(main, "KEYCLOAK_TOKEN_URL", None)
+    monkeypatch.setattr(config, "KEYCLOAK_TOKEN_URL", None)
     c.post("/mcp/mcp-ticket", json=rpc("initialize"), headers=HDRS | {"X-AI-Subject": "human:u1"})
     h = fake.mcp[0].headers
     assert h["x-ai-dev-sub"] == "u1" and "authorization" not in h and fake.token_calls == 0
 
 
 @pytest.fixture
-def hr_server(monkeypatch: pytest.MonkeyPatch) -> str:
+async def hr_server() -> str:
     """另一个业务系统（hr）的 MCP Server；能力目录里没有 hr 的工具。"""
-    monkeypatch.setitem(main.MCP_SERVERS, "mcp-hr", {"name": "mcp-hr", "endpoint": "http://hr.test/mcp", "system": "hr"})
+    await state.catalog.put_connector(
+        ConnectorVersion(name="mcp-hr", endpoint="http://hr.test/mcp", protocol="mcp", system="hr", status="active")
+    )
     return "mcp-hr"
 
 
@@ -259,7 +270,7 @@ def test_whitelisted_methods_are_forwarded(fake: Fake, msg: Any) -> None:
 def test_mcp_check_endpoint(fake: Fake, hr_server: str) -> None:
     body = {"server": "mcp-ticket", "tool": "ticket.search", "subject": "user-1", "tenant": "t2", "agent": "a@1"}
     assert c.post("/authz/mcp-check", json=body).json() == {"decision": "allow"}
-    assert fake.policy[-1]["principal"] == {"tenant": "t2"}
+    assert fake.policy[-1]["principal"]["tenant"] == "t2" and fake.policy[-1]["principal"]["sub"] == "user-1"
     fake.decision = "deny"
     assert c.post("/authz/mcp-check", json=body).status_code == 403
     fake.decision = None
@@ -276,7 +287,7 @@ def test_mcp_check_endpoint(fake: Fake, hr_server: str) -> None:
 
 
 def test_mcp_check_requires_shared_token_when_configured(fake: Fake, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(main, "GATEWAY_AUTHZ_TOKEN", "authz-secret")
+    monkeypatch.setattr(config, "GATEWAY_AUTHZ_TOKEN", "authz-secret")
     body = {"server": "mcp-ticket", "tool": "ticket.search", "subject": "user-1"}
     assert c.post("/authz/mcp-check", json=body).status_code == 401
     assert c.post("/authz/mcp-check", json=body, headers={"X-Gateway-Authz-Token": "wrong"}).status_code == 401

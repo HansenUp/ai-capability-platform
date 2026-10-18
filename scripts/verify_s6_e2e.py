@@ -40,7 +40,7 @@ import tempfile
 import time
 import traceback
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -387,7 +387,8 @@ def preflight() -> dict[str, Any]:
 # ---------------- 环境 ----------------
 
 
-def env_stack() -> dict[str, dict[str, str]]:
+def env_stack(policy: str) -> dict[str, dict[str, str]]:
+    """policy：真实策略栈（devkit.policy_stack：Cedar 引擎 + 策略服务）的基址，Runtime 闸口与网关共用。"""
     certs = f"{devkit.REALM}/protocol/openid-connect/certs"
     return {
         "mcp": {
@@ -395,18 +396,19 @@ def env_stack() -> dict[str, dict[str, str]]:
             "MCP_TICKET_ISSUER": devkit.REALM,
             "MCP_TICKET_AUDIENCE": "mcp-ticket",
             "MCP_TICKET_DB": str(TMP / "mcp-ticket.db"),
+            "MCP_TICKET_ACT_JWKS_URL": f"http://127.0.0.1:{PORTS['gateway']}/.well-known/jwks.json",  # 网关 act 断言的公钥
         },
         "gateway": {
             "KEYCLOAK_TOKEN_URL": devkit.TOKEN_URL,
             "GATEWAY_CLIENT_SECRET": "capability-gateway-dev-secret",
             "MCP_TICKET_URL": f"http://127.0.0.1:{PORTS['mcp']}",
-            "POLICY_URL": "http://127.0.0.1:1",
+            "POLICY_URL": policy,
         },
         "runtime": {
             "DATABASE_URL": f"sqlite+aiosqlite:///{TMP}/runtime.db",
             "WORKSPACE_DIR": str(TMP / "ws"),
             "HARNESS": "litellm",
-            "POLICY_URL": "http://127.0.0.1:1",
+            "POLICY_URL": policy,
             "CAPABILITY_GATEWAY_URL": f"http://127.0.0.1:{PORTS['gateway']}",
             "TOOL_DISPATCH": "gateway",
             "AUTH_REQUIRED": "true",
@@ -418,7 +420,8 @@ def env_stack() -> dict[str, dict[str, str]]:
             "HARNESS_POOL_MAX_WORKERS": "4",
             "MODEL_GATEWAY_URL": GATEWAY,
             "OTEL_EXPORTER_OTLP_ENDPOINT": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"),
-        },
+        }
+        | devkit.runtime_svc_env(),  # 以服务客户端 ai-runtime-svc 调用网关（契约 3）
     }
 
 
@@ -825,9 +828,11 @@ def main() -> int:
         "notes": [],
     }
     seen_acp: set[int] = set()
-    e = env_stack()
+    stack = ExitStack()
     try:
+        e = env_stack(stack.enter_context(devkit.policy_stack(TMP)))
         with (
+            stack,
             service("mcp-ticket", "mcp_ticket.main:app", "mcp-servers/ticket/src", PORTS["mcp"], e["mcp"]),
             service("gateway", "capability_gateway.main:app", "services/capability-gateway/src", PORTS["gateway"], e["gateway"]),
             service("runtime", "runtime.main:app", "services/runtime/src", PORTS["runtime"], e["runtime"]) as (runtime, rt_pid),

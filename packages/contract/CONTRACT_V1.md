@@ -1,6 +1,6 @@
 # Runtime Contract V1（冻结说明）
 
-- 版本：`ai_contract.CONTRACT_VERSION = "1.2.0"`（1.0.0 冻结；1.1.0、1.2.0 为非破坏性变更，见第 3 节）
+- 版本：`ai_contract.CONTRACT_VERSION = "1.3.0"`（1.0.0 冻结；1.1.0、1.2.0、1.3.0 为非破坏性变更，见第 3 节）
 - 对应计划项：实施计划 P0-2.2 / Phase0 收尾 A5
 - 权威来源：`packages/contract/src/ai_contract/`（本文只是摘要，字段以代码为准）
 
@@ -47,7 +47,7 @@
 
 ### 1.5 Run 事件日志类型（`RunEventType`）
 
-`run.created`、`run.state_changed`、`context.assembled`、`model.request`、`model.response`、`tool.requested`、`tool.decision`、`tool.approved`、`tool.rejected`、`tool.executing`、`tool.executed`、`tool.result`、`context.compacted`、`input.requested`（**V1 新增**）、`input.provided`（**V1 新增**）、`run.error`、`run.done`。
+`run.created`、`run.state_changed`、`context.assembled`、`model.request`、`model.response`、`tool.requested`、`tool.decision`、`tool.approved`、`tool.rejected`、`tool.executing`、`tool.executed`、`tool.result`、`context.compacted`、`input.requested`（**V1 新增**）、`input.provided`（**V1 新增**）、`run.error`、`run.done`、`capabilities.discovered`（**V1.3 新增**，见 CR-1.3）。
 
 `RunEvent` 的主键为 `(run_id, seq)`，`seq` 在同一 Run 内严格递增；`idempotency_key` 用于写操作去重。
 
@@ -119,3 +119,15 @@
 - 不变：`TurnInput` / `SessionSpec` / `HarnessCapabilities` 字段不变（`supports_vision` 早已存在，现由 litellm 与 claude-sdk 声明为 true）；`Event` 判别联合、`RunEventType`、`RunState` 与 `capability_tier()` 不变；`TurnInput.attachments` 语义不变。
 - 兼容性：不含图片附件的请求，历史形状与 1.1.0 完全一致（只有文本附件时附件说明消息仍为字符串）；`supports_vision=False` 的适配器（mock / stdio）不会收到 `image_ref`。
 - 契约测试：`packages/contract/tests/test_contract.py` 新增 `test_image_ref_load_and_validation`（导出、读取与 base64、文件头识别、格式 / 路径穿越 / 缺失 / 指纹 / 类型不符失败关闭）。
+
+### CR-1.3（Contract 1.2.0 → 1.3.0，S8 两级发现事件化与统一错误体）
+
+- 关联：S8 实施方案 §1 S8.2、§2 S7 #4，决策 D125（发现结果事件化、范围快照冻结）、D135（统一错误体）。
+- 性质：非破坏性（按第 2 节规则 2 递增次版本号，可在阶段内合并）。
+- 变更内容：
+  1. `RunEventType` 新增 `CAPABILITIES_DISCOVERED = "capabilities.discovered"`：Agent 版本配置 `discovery.enabled=true` 时，`search_capabilities` 元工具由工具代理在闸口前拦截，经能力网关 `POST /capabilities/search` 检索，把新加入本 Run 的工具写入该事件。payload：`call_id`、`query`、`scope`（版本快照冻结的检索范围）、`tools`（`ToolSpec` 的 JSON 形式列表）、`resources`（工具名 → `{system, tenant}`，闸口策略请求的资源属性）、`tools_hmac`（`tools` 与 `resources` 规范化 JSON 的 HMAC-SHA256，密钥为 Runtime 的 `HOOK_DIGEST_KEY`；S8 评审修复前写入的事件为裸 sha256 的 `tools_hash`，重放时仍按旧算法校验以兼容）、`degraded`，以及超出 `discovery.max_tools` 被丢弃的工具名 `dropped`（有时才写）。重放 / 接管按该事件恢复已发现工具（指纹不符的事件不恢复，失败关闭），不重新检索；发现的工具调用照常过闸口。
+  2. 新增模块 `errors.py`，从包入口导出 `ErrorDetail{detail: str, code: str}`：平台 HTTP 接口业务拒绝的统一响应体（400 请求内容不被接受、409 与当前状态冲突；422 只保留给参数校验 `HTTPValidationError`）。
+  3. `CONTRACT_VERSION` 由 `1.2.0` 改为 `1.3.0`。
+- 不变：`Event` 判别联合、`EventType`、`RunState` 与迁移表、`ToolSpec`、`HarnessAdapter` 协议与 `capability_tier()` 不变。
+- 兼容性：未开启 `discovery` 的版本不会产生新事件、不注入元工具；忽略未知事件类型的消费方不受影响。`ErrorDetail` 在 `detail` 之外只多一个 `code` 字段，只读 `detail` 的客户端不受影响。
+- 契约测试：`packages/contract/tests/test_contract.py` 新增 `test_v13_capabilities_discovered_and_error_detail`。

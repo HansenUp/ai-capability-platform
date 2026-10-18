@@ -1,4 +1,6 @@
-"""工具实现：ticket.search / ticket.get（只读）与 ticket.close_batch（高风险写，dry-run + 幂等 + 补偿声明）。
+"""工具实现：ticket.search / ticket.get（只读）与 ticket.close_batch / ticket.reopen_batch（高风险写，互为补偿，dry-run + 幂等）。
+
+manifest 按写规范（S8.5，见 ``mcp_template.spec``）声明 idempotency / dry_run / compensate_tool，input_schema 不含控制字段。
 
 出入参遵循 docs/decisions/2026-10-16-首个垂直切片场景确认.md §3。所有读写都先过行级权限（见 data.py），
 工单叠加 SQLite 里的状态覆盖，因此关闭结果能立即在 search / get 中看到。
@@ -14,8 +16,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
+from mcp_template.spec import WriteControl, read_tool, write_tool
 from mcp_ticket import store
 from mcp_ticket.auth import Identity
 from mcp_ticket.config import get_settings
@@ -69,19 +72,18 @@ class GetIn(BaseModel):
     id: str
 
 
-class CloseBatchIn(BaseModel):
-    """ticket.close_batch 入参。"""
+class BatchArgs(BaseModel):
+    """批量关闭 / 重开的业务参数（manifest 只暴露这部分给模型）。"""
 
-    ids: list[str] = Field(..., min_length=1, max_length=100)  # 待关闭的工单号
-    idempotency_key: str | None = Field(default=None, min_length=8)  # 幂等键，重复请求以此去重；只有 dry_run 时可省略
-    dry_run: bool = False  # 为真时只返回影响预演，不写任何数据
+    ids: list[str] = Field(..., min_length=1, max_length=100)  # 工单号列表
 
-    @model_validator(mode="after")
-    def _key_required_for_writes(self) -> CloseBatchIn:
-        """真正执行（非 dry_run）必须带幂等键；影响预演不写数据，不需要。"""
-        if not self.dry_run and not self.idempotency_key:
-            raise ValueError("idempotency_key is required unless dry_run")
-        return self
+
+class CloseBatchIn(BatchArgs, WriteControl):
+    """ticket.close_batch 入参：业务参数 + 网关注入的 idempotency_key（只有 dry_run 时可省略）/ dry_run。"""
+
+
+class ReopenBatchIn(BatchArgs, WriteControl):
+    """ticket.reopen_batch 入参（close_batch 的补偿），与 close_batch 对称。"""
 
 
 def _effective(ticket: Ticket, overrides: dict[str, dict[str, Any]]) -> Ticket:
@@ -201,26 +203,63 @@ def ticket_close_batch(ident: Identity, body: CloseBatchIn) -> dict[str, Any]:
     return result | {"deduplicated": replay}
 
 
+def ticket_reopen_batch(ident: Identity, body: ReopenBatchIn) -> dict[str, Any]:
+    """批量重开（close_batch 的补偿）：权限规则与 close_batch 相同（任一工单不可见整体 404 且不写入）；
+    dry_run 只返回影响预演；否则按（租户, 用户, 幂等键）去重，状态恢复与幂等记录同事务提交。
+    只重开经本连接器关闭的工单，源系统里本就关闭或当前未关闭的记入 not_reopened。"""
+    cfg = get_settings()
+    ids = list(dict.fromkeys(body.ids))
+    tickets = {t["id"]: t for t in load_tickets(cfg.data_path)}
+    if any(i not in tickets or not can_view(ident, tickets[i]) for i in ids):
+        raise _not_found()
+    if body.dry_run:
+        closed_here = {i for i, o in store.load_overrides(cfg.db_path).items() if o["status"] == "closed"}
+        to_reopen = [i for i in ids if i in closed_here]
+        return {
+            "dry_run": True,
+            "impact_preview": {
+                "tickets": len(to_reopen),
+                "notifications": len(to_reopen),
+                "ids": to_reopen,
+                "not_reopened": [i for i in ids if i not in closed_here],
+            },
+            "card": {"card_type": "impact_preview"},
+        }
+    # 请求指纹带工具名：同一幂等键先用于 close_batch 再用于 reopen_batch 视为不同请求（409），不会误回放关闭结果
+    request_hash = hashlib.sha256(json.dumps({"tool": store.COMPENSATE_TOOL, "ids": sorted(ids)}).encode()).hexdigest()
+    try:
+        result, replay = store.reopen_tickets(
+            cfg.db_path,
+            tenant=ident.tenant,
+            sub=ident.sub,
+            act=ident.act,
+            key=str(body.idempotency_key),
+            request_hash=request_hash,
+            ids=ids,
+        )
+    except store.IdempotencyConflict:
+        raise HTTPException(409, "idempotency key reused with a different request") from None
+    return result | {"deduplicated": replay}
+
+
 TOOL_MANIFEST: list[dict[str, Any]] = [
-    {
-        "name": "ticket.search",
-        "description": "按关键字 / 状态 / 创建时间范围搜索工单，返回调用者有权查看的工单摘要（游标分页）",
-        "risk_level": "read",
-        "input_schema": SearchIn.model_json_schema(),
-    },
-    {
-        "name": "ticket.get",
-        "description": "按工单号获取工单详情（含处理记录与客户反馈）；无权限与不存在返回同一 404",
-        "risk_level": "read",
-        "input_schema": GetIn.model_json_schema(),
-    },
-    {
-        "name": "ticket.close_batch",
-        "description": "批量关闭工单（高风险写操作）：支持 dry_run 影响预演，必须带幂等键",
-        "risk_level": "write_high",
-        "supports_dry_run": True,
-        "requires_idempotency_key": True,
-        "compensate_tool": store.COMPENSATE_TOOL,
-        "input_schema": CloseBatchIn.model_json_schema(),
-    },
+    read_tool(
+        "ticket.search",
+        "按关键字 / 状态 / 创建时间范围搜索工单，返回调用者有权查看的工单摘要（游标分页）",
+        SearchIn.model_json_schema(),
+    ),
+    read_tool("ticket.get", "按工单号获取工单详情（含处理记录与客户反馈）；无权限与不存在返回同一 404", GetIn.model_json_schema()),
+    write_tool(
+        store.CLOSE_TOOL,
+        "批量关闭工单（高风险写操作）：支持 dry_run 影响预演，执行必须带幂等键；补偿工具 ticket.reopen_batch",
+        BatchArgs.model_json_schema(),
+        compensate_tool=store.COMPENSATE_TOOL,
+    ),
+    write_tool(
+        store.COMPENSATE_TOOL,
+        "批量重开经本系统关闭的工单（close_batch 的补偿，高风险写）：支持 dry_run 影响预演，执行必须带幂等键",
+        BatchArgs.model_json_schema(),
+        compensate_tool=store.CLOSE_TOOL,
+        compensates=store.CLOSE_TOOL,
+    ),
 ]

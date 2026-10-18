@@ -3,10 +3,12 @@
 - 默认只接受 ``Authorization: Bearer <JWT>``。令牌在本地按 JWKS 验签（不回调 IdP），校验签名算法、
   签发者（``MCP_TICKET_ISSUER``）、受众（``MCP_TICKET_AUDIENCE``，令牌 aud 可为列表）与 exp / iat，再解析身份：
   ``sub``（终端用户）、``tenant`` 声明（缺失一律 403，不回退默认租户）、``realm_access.roles``、``azp``。
-- 执行方 Agent 来自请求头 ``X-AI-Act``，但只有令牌的 ``azp`` 属于 ``MCP_TICKET_TRUSTED_AZP``
-  （默认仅能力网关）时才采信，否则 act 记为 None，避免任意客户端冒充 Agent。
+- 执行方 Agent 来自能力网关签发的 ``X-AI-Act-Assertion``（S8.4，校验见 ``mcp_template.act``）：ES256 经网关 JWKS
+  （``MCP_TICKET_ACT_JWKS_URL``）验签，iss / aud / exp≤60 s / jti 防重放，sub 与 OBO 令牌一致、obo_hash 绑定本令牌，
+  通过后采信 act 链。生产态（未开开发模式）缺断言 401，断言无效 401，断言不属于本请求 403。
 - ``MCP_TICKET_DEV_AUTH=true``（仅本机开发）：接受 ``X-AI-Dev-Sub`` / ``X-AI-Dev-Tenant`` / ``X-AI-Dev-Roles``
-  代替令牌（此时 ``X-AI-Act`` 也直接采信）；关闭时这些头一律忽略，缺失或无效令牌返回 401。
+  代替令牌（此时 ``X-AI-Act`` 也直接采信）；Bearer 请求未带断言时，裸 ``X-AI-Act`` 仅在令牌 ``azp`` 属于
+  ``MCP_TICKET_TRUSTED_AZP``（默认仅能力网关）时采信。关闭时开发头一律忽略，缺失或无效令牌返回 401。
 
 JWKS 按 TTL 缓存；遇到未知 kid（IdP 轮换密钥）时提前刷新，但两次刷新至少间隔 ``JWKS_MIN_REFRESH_S``，
 防止伪造 kid 的请求把 IdP 打满。IdP 不可达且缓存中没有该 kid 时返回 503。
@@ -16,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
@@ -25,6 +27,7 @@ from fastapi import Header, HTTPException
 from jwt import PyJWK
 from jwt.types import Options
 
+from mcp_template.act import ActConfig, resolve_act
 from mcp_ticket.config import Settings, get_settings
 
 # 只接受非对称签名算法：拒绝 none 与 HS*（HS* 会让公开的 JWKS 公钥变成可伪造签名的共享密钥）
@@ -43,6 +46,10 @@ class Identity:
     roles: frozenset[str] = frozenset()
     azp: str | None = None  # 签发令牌的 OIDC 客户端
     act: str | None = None  # 执行的 Agent，例如 agent:ticket-summary@1
+    act_chain: tuple[str, ...] = ()  # 完整委托链，例如 (agent:ticket-summary@1, client:ai-runtime-svc)
+    run_id: str | None = None
+    call_id: str | None = None
+    act_verified: bool = False  # act 是否来自已验签的网关断言
 
 
 def _unauthorized(detail: str) -> HTTPException:
@@ -151,8 +158,8 @@ async def verify_jwt(token: str, cfg: Settings) -> dict[str, Any]:
     return claims
 
 
-def identity_from_claims(claims: dict[str, Any], cfg: Settings, x_ai_act: str | None) -> Identity:
-    """把已验签的 claims 映射为 Identity；X-AI-Act 仅在令牌 azp 可信时采信。"""
+def identity_from_claims(claims: dict[str, Any]) -> Identity:
+    """把已验签的 claims 映射为 Identity（act 另由 act 断言确定）。"""
     tenant = claims.get("tenant")
     if not isinstance(tenant, str) or not tenant:
         raise HTTPException(403, "token has no 'tenant' claim")
@@ -164,13 +171,13 @@ def identity_from_claims(claims: dict[str, Any], cfg: Settings, x_ai_act: str | 
     roles = frozenset(str(r) for r in raw_roles) if isinstance(raw_roles, list) else frozenset()
     azp = claims.get("azp")
     azp = azp if isinstance(azp, str) and azp else None
-    act = x_ai_act.strip() if x_ai_act and azp in cfg.trusted_azp else None
-    return Identity(sub=sub, tenant=tenant, roles=roles, azp=azp, act=act or None)
+    return Identity(sub=sub, tenant=tenant, roles=roles, azp=azp)
 
 
 async def identity(
     authorization: str | None = Header(default=None),
     x_ai_act: str | None = Header(default=None),
+    x_ai_act_assertion: str | None = Header(default=None),
     x_ai_dev_sub: str | None = Header(default=None),
     x_ai_dev_tenant: str | None = Header(default=None),
     x_ai_dev_roles: str | None = Header(default=None),
@@ -179,8 +186,22 @@ async def identity(
     cfg = get_settings()
     if cfg.dev_auth and x_ai_dev_sub:
         roles = frozenset(r.strip() for r in (x_ai_dev_roles or "").split(",") if r.strip())
-        return Identity(sub=x_ai_dev_sub, tenant=x_ai_dev_tenant or "default", roles=roles, act=(x_ai_act or "").strip() or None)
+        act = (x_ai_act or "").strip() or None
+        return Identity(sub=x_ai_dev_sub, tenant=x_ai_dev_tenant or "default", roles=roles, act=act, act_chain=(act,) if act else ())
     if not authorization or not authorization.lower().startswith("bearer "):
         raise _unauthorized("missing bearer token")
-    claims = await verify_jwt(authorization.split(" ", 1)[1].strip(), cfg)
-    return identity_from_claims(claims, cfg, x_ai_act)
+    token = authorization.split(" ", 1)[1].strip()
+    ident = identity_from_claims(await verify_jwt(token, cfg))
+    ctx = await resolve_act(
+        assertion=x_ai_act_assertion,
+        bare_act=x_ai_act,
+        obo_token=token,
+        obo_sub=ident.sub,
+        azp=ident.azp,
+        trusted_azp=cfg.trusted_azp,
+        dev_auth=cfg.dev_auth,
+        cfg=ActConfig(
+            jwks_url=cfg.act_jwks_url, issuer=cfg.act_issuer, audience=cfg.act_audience, replay_redis_url=cfg.act_replay_redis_url
+        ),
+    )
+    return replace(ident, act=ctx.act, act_chain=ctx.chain, run_id=ctx.run_id, call_id=ctx.call_id, act_verified=ctx.verified)

@@ -37,12 +37,12 @@ from ai_contract import (
     ToolSpec,
     ToolUseEvent,
 )
-from runtime import credentials
+from runtime import credentials, gateway_client
 from runtime.config import settings
 from runtime.context import budget as ctx
-from runtime.guard.gate import GateContext, evaluate, params_hash
+from runtime.guard.gate import GateContext, _approval_valid, evaluate, params_hash
 from runtime.guard.hooks import HookChain
-from runtime.loop import user_input
+from runtime.loop import discovery, user_input
 from runtime.observe import audit
 from runtime.state.db import AgentVersion, SessionLocal
 from runtime.state.eventlog import EventLog, OperationExists
@@ -96,7 +96,7 @@ async def execute_tool(
 async def _dispatch_via_gateway(
     tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool, rc: RunCtx | None, call_id: str | None, idempotency_key: str | None
 ) -> Any:
-    body = {
+    body: dict[str, Any] = {
         "tool": tool.name,
         "input": tool_input,
         "subject": rc.gate.subject if rc else "",
@@ -107,10 +107,17 @@ async def _dispatch_via_gateway(
         "idempotency_key": idempotency_key,
         "dry_run": dry_run,
     }
-    headers = {"Authorization": f"Bearer {rc.credential}"} if rc and rc.credential else {}
+    if rc is not None:
+        # 网关第二道防线（评审 #3）：闸口对本次调用的审批结论（参数指纹一致且未过期）、本 Run 的数据污点与 Agent 所属租户
+        # 一并交给网关，网关据此重新判定（未审批的 require_approval 非预演调用、污点外发、Agent 跨租户在网关同样被拒绝）
+        body["approved"] = _approval_valid(rc.gate.approved_call_ids.get(call_id or ""), params_hash(tool_input))
+        body["taint"] = sorted(rc.gate.taint)
+        body["agent_tenant"] = rc.agent.tenant_id
     try:
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_s, transport=_gateway_transport) as c:
-            r = await c.post(f"{settings.capability_gateway_url.rstrip('/')}/invoke", json=body, headers=headers)
+        # 经网关客户端（契约 3）：服务态带 ai-runtime-svc 服务令牌 + X-AI-User-Token，开发态沿用用户令牌 Bearer 头
+        r = await gateway_client.request(
+            "POST", "/invoke", user_token=rc.credential if rc else None, timeout_s=settings.llm_timeout_s, json=body
+        )
     except httpx.HTTPError as e:
         raise GatewayToolError(f"capability gateway unreachable: {type(e).__name__}") from e
     if r.status_code != 200:
@@ -142,12 +149,9 @@ def read_artifact(workspace: str, ref: str) -> Any:
         return {"ref": ref, "content": f.read()}
 
 
-_gateway_transport: httpx.AsyncBaseTransport | None = None  # 测试注入
-
-
 def set_gateway_transport_for_tests(transport: httpx.AsyncBaseTransport | None) -> None:
-    global _gateway_transport
-    _gateway_transport = transport
+    """测试注入（沿用旧入口）：所有能力网关请求（/invoke、/capabilities、/capabilities/search）改经该 transport。"""
+    gateway_client.set_transport_for_tests(transport)
 
 
 async def _dev_execute(tool: ToolSpec, tool_input: dict[str, Any], dry_run: bool = False) -> Any:
@@ -254,6 +258,8 @@ class RunCtx:
     # 经 API 不再出现不同的值；机制保留（直接调用 drive 时仍按此记录）
     credential_subject: str | None = None
     hooks: HookChain = field(default_factory=HookChain)  # 本 Agent 版本的 hook 链；空链时事件日志与此前逐字节一致
+    # 两级发现（S8.2）：search_capabilities 动态加入本 Run 的工具（按加入顺序，供 harness 的工具列表追加；未开启发现时恒为空）
+    discovered: list[ToolSpec] = field(default_factory=list)
     hook_records: list[dict[str, Any]] = field(default_factory=list)  # 最近一次 handle_tool 的 hook 结论（供工具 span 记录）
 
     def foreign_credential_subject(self) -> str | None:
@@ -363,6 +369,20 @@ async def handle_tool(rc: RunCtx, call: ToolUseEvent, already_logged: bool = Fal
             rc.suspended = True
             yield asked
             yield DoneEvent(run_id=rc.run_id, stop_reason="awaiting")
+            return
+        if tool is not None and tool.name == discovery.TOOL_NAME and discovery.enabled(rc.agent):
+            # 元工具 search_capabilities（S8.2）：闸口前拦截，不进闸口——经能力网关检索，新工具加入本 Run 并写
+            # CAPABILITIES_DISCOVERED（重放 / 接管据此恢复，不重新检索）；发现的工具此后调用照常过闸口。
+            await s.commit()  # TOOL_REQUESTED 先提交：检索期间不持有写事务（检索失败 / 崩溃时续跑重新检索，此前无任何记录）
+            found = await discovery.search(rc, effective)
+            if found.event is not None:
+                await log.append(rc.run_id, RunEventType.CAPABILITIES_DISCOVERED, {"call_id": call.call_id} | found.event)
+            status_d: Literal["ok", "error"] = "error" if "error" in found.result else "ok"
+            await log.append(rc.run_id, RunEventType.TOOL_RESULT, {"call_id": call.call_id, "status": status_d, "output": found.result})
+            await s.commit()
+            discovery.apply(rc, found)  # 提交成功后才加入本 Run（与事件日志一致）
+            rc.history.append({"role": "tool", "call_id": call.call_id, "content": found.result})
+            yield ToolResultEvent(call_id=call.call_id, status=status_d, output=found.result)
             return
         if tool is None:
             # 模型请求了一个未在本次组装工具集中出现的工具名：直接记为错误结果，不进入闸口判定。

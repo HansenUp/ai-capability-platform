@@ -10,7 +10,8 @@
 进程级段（marker ``failover``，默认跳过；``pytest services/runtime/tests/test_failover.py -m failover``）：需要
 ``FAILOVER_REDIS_URL``（专用逻辑库，会被 FLUSHDB）与 ``FAILOVER_DATABASE_URL``（MySQL，库名须含 test，会被清空）。
 起 API×1（RUNTIME_ROLE=api）+ Worker×2（``python -m runtime.worker``，mock harness ``MOCK_TURN_DELAY_S``），按 t_run.lease_owner
-找到宿主 Worker 进程 SIGKILL，断言 60 s 内由另一个 Worker 完成并输出实际耗时。
+找到宿主 Worker 进程 SIGKILL，断言 60 s 内由另一个 Worker 完成并输出实际耗时。闸口判定走真实策略栈（Cedar 引擎 sidecar +
+策略服务子进程，``scripts/devkit.py``；先 ``make cedar-build``）——策略不可达时闸口失败关闭，工具调用会被拒绝。
 """
 
 from __future__ import annotations
@@ -335,6 +336,11 @@ async def test_process_level_sigkill_takeover_within_60s(request: pytest.Fixture
     await r.flushdb()  # 只清本用例专用的逻辑库
     await r.aclose()
     tmp = Path(tempfile.mkdtemp(prefix="s7-failover-"))
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import devkit  # 本机 / CI 共用的策略栈启停（Cedar 引擎 + 策略服务子进程）
+
+    stack = contextlib.ExitStack()
+    policy_url = stack.enter_context(devkit.policy_stack(tmp, policy_port=_free_port(), cedar_port=_free_port()))
     port = _free_port()
     base_env = os.environ.copy() | {
         "DATABASE_URL": db_url,
@@ -343,7 +349,7 @@ async def test_process_level_sigkill_takeover_within_60s(request: pytest.Fixture
         "HARNESS": "mock",
         "AUTH_REQUIRED": "false",
         "MOCK_TURN_DELAY_S": os.environ.get("FAILOVER_TURN_DELAY_S", "4"),
-        "POLICY_URL": "http://127.0.0.1:1",
+        "POLICY_URL": policy_url,
         "CAPABILITY_GATEWAY_URL": "http://127.0.0.1:1",
         "REAPER_S": "10",  # conftest 为进程内用例调大了 REAPER_S；子进程恢复默认
     }
@@ -411,7 +417,10 @@ async def test_process_level_sigkill_takeover_within_60s(request: pytest.Fixture
             assert seqs == list(range(1, len(seqs) + 1))
             _, owner_after, epoch_after, _ = await _lease_row(db_url, run_id)
             assert owner_after is None and epoch_after >= 2
+            decisions = [e["payload"]["decision"] for e in log if e["type"] == "tool.decision"]
+            assert decisions and set(decisions) == {"allow"}, decisions  # 经真实策略栈放行（而非策略不可达被拒）
     finally:
+        stack.close()
         for p in procs:
             if p.poll() is None:
                 p.terminate()

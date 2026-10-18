@@ -242,8 +242,8 @@ def test_input_answer_validation_and_resume(client: Any) -> None:
     url = f"/v1/runs/{run_id}/input"
     other = {"X-AI-Subject": "human:s7-other"}
     assert client.post(url, json={"kind": "answer", "call_id": call_id, "value": {"id": "T-1"}}, headers=other).status_code == 403
-    assert client.post(url, json={"kind": "answer", "call_id": call_id, "value": {"x": 1}}, headers=DEV).status_code == 422
-    assert client.post(url, json={"kind": "answer", "call_id": call_id, "value": {"id": "T"}}, headers=DEV).status_code == 422
+    assert client.post(url, json={"kind": "answer", "call_id": call_id, "value": {"x": 1}}, headers=DEV).status_code == 400
+    assert client.post(url, json={"kind": "answer", "call_id": call_id, "value": {"id": "T"}}, headers=DEV).status_code == 400
     assert client.post(url, json={"kind": "answer", "call_id": "nope", "value": {"id": "T-1"}}, headers=DEV).status_code == 409
     assert client.post(url, json={"kind": "reconcile", "call_id": call_id, "action": "done"}, headers=DEV).status_code == 409
     assert client.post(url, json={"kind": "bogus"}, headers=DEV).status_code == 422
@@ -276,7 +276,7 @@ def test_input_reconcile_after_unknown_result(client: Any, monkeypatch: pytest.M
     url = f"/v1/runs/{run_id}/input"
     assert client.post(url, json={"kind": "reconcile", "call_id": call_id, "action": "redo"}, headers=DEV).status_code == 422
     r = client.post(url, json={"kind": "reconcile", "call_id": call_id, "action": "retry"}, headers=DEV)
-    assert r.status_code == 422 and "idempotency" in r.json()["detail"]
+    assert r.status_code == 400 and "idempotency" in r.json()["detail"] and r.json()["code"] == "INPUT_INVALID"
     r = client.post(url, json={"kind": "reconcile", "call_id": call_id, "action": "done", "value": {"sent": True}}, headers=DEV)
     assert r.status_code == 200 and r.json()["kind"] == "reconcile"
     _wait(client, run_id, DEV, "completed")
@@ -286,7 +286,7 @@ def test_input_reconcile_after_unknown_result(client: Any, monkeypatch: pytest.M
 
 
 async def test_input_credential_refresh(client: Any, idp: IdP) -> None:
-    """发起人令牌剩余有效期不足：Worker 挂起为 input-required{credential}；他人令牌 403、仍将过期的令牌 422，
+    """发起人令牌剩余有效期不足：Worker 挂起为 input-required{credential}；他人令牌 403、仍将过期的令牌 400，
     发起人新令牌刷新后入队完成。"""
     expiring = bearer(idp.token({"sub": "u-alice-k", "exp": int(time.time()) + 30}))
     fresh, bob = _user(idp, "alice-k"), _user(idp, "bob-k")
@@ -296,7 +296,7 @@ async def test_input_credential_refresh(client: Any, idp: IdP) -> None:
     assert req["payload"] == {"kind": "credential", "call_id": None, "reason": "expiring"}
     url = f"/v1/runs/{run_id}/input"
     assert client.post(url, json={"kind": "credential"}, headers=bob).status_code == 403
-    assert client.post(url, json={"kind": "credential"}, headers=expiring).status_code == 422
+    assert client.post(url, json={"kind": "credential"}, headers=expiring).status_code == 400
     r = client.post(url, json={"kind": "credential", "value": "ignored-token"}, headers=fresh)
     assert r.status_code == 200 and r.json()["kind"] == "credential"
     _wait(client, run_id, fresh, "completed")
@@ -311,7 +311,7 @@ def test_input_error_mapping(client: Any, monkeypatch: pytest.MonkeyPatch) -> No
     for exc, code in (
         (SeqConflict("x"), 409),
         (RunNotFound(run_id), 404),
-        (ValueError("bad"), 422),
+        (ValueError("bad"), 400),
         (user_input.InputForbidden("no"), 403),
     ):
 

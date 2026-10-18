@@ -8,6 +8,7 @@ tool injection、中断 interrupt、hooks、checkpoint）的唯一权威来源�
 这些类型，以保证跨服务的契约一致性。
 """
 
+from .errors import ErrorDetail
 from .events import (
     CardEvent,
     CardType,
@@ -39,13 +40,14 @@ from .run import TRANSITIONS, RunEvent, RunEventType, RunState, can_transition
 from .tools import RiskLevel, SandboxLevel, SkillDir, ToolSpec
 
 # 契约版本号：Contract V1 冻结后，任何变更须走接口变更单或 ADR，破坏性变更只在阶段边界合并（见 CONTRACT_V1.md）。
-CONTRACT_VERSION = "1.2.0"
+CONTRACT_VERSION = "1.3.0"
 
 __all__ = [
     "CONTRACT_VERSION",
     "CardEvent",
     "CardType",
     "DoneEvent",
+    "ErrorDetail",
     "ErrorEvent",
     "Event",
     "EventType",

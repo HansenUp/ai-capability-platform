@@ -4,7 +4,9 @@
 快照不是手写的：本脚本在进程内跑真实的 Runtime 流程（FastAPI 应用 + /v1/messages + runner + 工具代理 + 事件日志，
 临时 SQLite 库，与 services/runtime/tests/conftest.py 的方式一致），只把"模型"换成按脚本产出事件的 harness。
 工具调用走真实链路：Runtime 工具代理（TOOL_DISPATCH=gateway）→ 能力网关 /invoke（ASGI 进程内调用，开发态身份）
-→ mcp-ticket（ASGI 进程内调用，开发身份 + 包内 mock 数据）。因此事件日志的形态（context.assembled、
+→ mcp-ticket（ASGI 进程内调用，开发身份 + 包内 mock 数据）。Runtime 闸口与网关的授权判定都经策略服务
+``/authz/check-batch``（ASGI 进程内调用，``POLICY_ENGINE=baseline``：与 Cedar 策略同一套规则的 Python 镜像，
+policy_version 固定，快照里的 policy_decision_id 不随策略文件内容变化）。因此事件日志的形态（context.assembled、
 model.request 的 messages_hash、tool.decision / tool.executing / tool.executed、错误结果的 status 与 status_code）
 与线上 Runtime 写出的完全一致；全程不调用任何模型、不需要启动任何服务。
 
@@ -24,12 +26,10 @@ evals/test_snapshots.py 校验每次 model.request 记录的 messages_hash 能�
 
 from __future__ import annotations
 
-import functools
 import json
 import os
 import sys
 import tempfile
-import types
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,7 +55,8 @@ os.environ |= {
     "DATABASE_URL": f"sqlite+aiosqlite:///{_TMP}/runtime.db",
     "WORKSPACE_DIR": str(_TMP / "ws"),
     "HARNESS": "mock",
-    "POLICY_URL": "http://127.0.0.1:1",  # Runtime 闸口与网关策略都回退到基线规则（与 runtime 测试一致）
+    "POLICY_URL": "http://policy-service",  # 主机名无意义：Runtime 闸口与网关的判定请求经下面注入的 ASGI transport
+    "POLICY_ENGINE": "baseline",  # 进程内策略服务用基线引擎（不依赖 Cedar sidecar 二进制）
     "CAPABILITY_GATEWAY_URL": "http://capability-gateway",  # 主机名无意义：请求经下面注入的 ASGI transport
     "TOOL_DISPATCH": "gateway",
     "TOOL_RESULT_OFFLOAD_TOKENS": "8000",  # 生产默认值
@@ -87,7 +88,8 @@ from ai_contract import (  # noqa: E402
 )
 from capability_gateway import main as gateway  # noqa: E402
 from mcp_ticket import main as mcp_ticket  # noqa: E402
-from runtime.assemble import assembler  # noqa: E402
+from policy_service import main as policy_service  # noqa: E402
+from runtime.guard import gate  # noqa: E402
 from runtime.harness import registry  # noqa: E402
 from runtime.loop import toolbroker  # noqa: E402
 
@@ -284,6 +286,16 @@ SCENARIOS = [
 ]
 
 
+class HostRouter(httpx.AsyncBaseTransport):
+    """按请求主机名分发到进程内 ASGI 应用（网关发出的请求既有策略判定也有连接器调用）。"""
+
+    def __init__(self, routes: dict[str, httpx.AsyncBaseTransport]) -> None:
+        self.routes = routes
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return await self.routes[request.url.host].handle_async_request(request)
+
+
 def normalize(name: str, event: dict[str, Any]) -> dict[str, Any]:
     """去掉不确定的字段：run_id 归一化、丢弃 ts；idempotency_key 为空时省略。"""
     out = {"run_id": f"snap-{name}", "seq": event["seq"], "type": event["type"], "payload": event["payload"]}
@@ -316,13 +328,12 @@ def main(argv: list[str]) -> int:
     unknown = wanted - {sc.name for sc in SCENARIOS}
     if unknown:
         raise SystemExit(f"未知场景：{sorted(unknown)}")
-    # 进程内串起真实链路：Runtime 能力发现与工具分发 → 网关（ASGI）→ mcp-ticket（ASGI）
-    gateway_transport = httpx.ASGITransport(app=gateway.app)
-    toolbroker.set_gateway_transport_for_tests(gateway_transport)
-    gateway.set_invoke_transport_for_tests(httpx.ASGITransport(app=mcp_ticket.app))
-    # 能力发现（assembler.discover_core_tools）自建 httpx 客户端且无注入点：只在本进程内替换该模块看到的 httpx
-    assembler.httpx = types.SimpleNamespace(  # type: ignore[assignment]
-        AsyncClient=functools.partial(httpx.AsyncClient, transport=gateway_transport), HTTPError=httpx.HTTPError
+    # 进程内串起真实链路：Runtime 能力发现与工具分发 → 网关（ASGI）→ mcp-ticket（ASGI）；闸口与网关判定 → 策略服务（ASGI）
+    policy_transport = httpx.ASGITransport(app=policy_service.app)
+    gate.set_policy_transport_for_tests(policy_transport)
+    toolbroker.set_gateway_transport_for_tests(httpx.ASGITransport(app=gateway.app))  # 能力发现与 /invoke 共用网关客户端
+    gateway.set_invoke_transport_for_tests(
+        HostRouter({"policy-service": policy_transport, "mcp-ticket": httpx.ASGITransport(app=mcp_ticket.app)})
     )
     harness = ScriptedHarness()
     registry.register(HARNESS, harness)

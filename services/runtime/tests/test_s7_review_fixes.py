@@ -8,7 +8,7 @@
 - #8 心跳续期卡住超过 TTL：主动置 lost 并中断。
 - #9 毒消息收尾须先抢到租约，并删除存储的凭据；快照缺失失败同样删凭据。
 - #10 写操作幂等键（operation_id）以 Run 限定作用域。
-- #11 request_user_input 的 schema 大小 / 深度上限，回答嵌套过深 422。
+- #11 request_user_input 的 schema 大小 / 深度上限，回答嵌套过深 400。
 - #12 /v1/messages 创建 Run 即同事务持租。
 """
 
@@ -459,7 +459,7 @@ def test_request_user_input_schema_limits_and_deep_answer() -> None:
     assert user_input.json_depth(value) == 5000  # 迭代实现，不触发 RecursionError
 
 
-def test_deeply_nested_answer_is_422(client: Any) -> None:
+def test_deeply_nested_answer_is_400(client: Any) -> None:
     from runtime.api import messages as api_messages  # noqa: F401 —— 确保路由已加载
 
     agent_cfg = {"tools": ["echo"], "user_input": True}
@@ -475,7 +475,7 @@ def test_deeply_nested_answer_is_422(client: Any) -> None:
     for _ in range(40):
         value = {"a": value}
     r2 = client.post(f"/v1/runs/{run_id}/input", json={"kind": "answer", "call_id": call_id, "value": value})
-    assert r2.status_code == 422 and "nested" in r2.json()["detail"]
+    assert r2.status_code == 400 and "nested" in r2.json()["detail"]
 
 
 # ---------------- #12 /v1/messages 创建即持租 ----------------

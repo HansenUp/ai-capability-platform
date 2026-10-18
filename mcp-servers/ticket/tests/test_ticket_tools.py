@@ -1,4 +1,5 @@
-"""工具行为：搜索过滤与游标分页、详情与记录截断、批量关闭（dry-run、幂等重放、键冲突、整体 404 不部分写入、事务原子性）。
+"""工具行为：搜索过滤与游标分页、详情与记录截断、批量关闭（dry-run、幂等重放、键冲突、整体 404 不部分写入、事务原子性）、
+批量重开（close_batch 的补偿：恢复关闭前状态、对称的 dry-run / 幂等 / 权限）。
 
 身份用开发头（MCP_TICKET_DEV_AUTH=true）指定，验签与权限矩阵见 test_ticket_auth.py。
 """
@@ -184,3 +185,58 @@ def test_status_update_and_idempotency_record_commit_together(client: TestClient
             close(client, ALICE_H, ["T-1002"])
     assert store.load_overrides(get_settings().db_path) == {}
     assert close(client, ALICE_H, ["T-1002"]).json()["deduplicated"] is False
+
+
+# ---------------- 批量重开（close_batch 的补偿） ----------------
+
+
+def reopen(client: TestClient, headers: dict[str, str], ids: list[str], key: str = "key-reopen-01", dry_run: bool = False) -> Any:
+    return client.post("/tools/ticket.reopen_batch", json={"ids": ids, "idempotency_key": key, "dry_run": dry_run}, headers=headers)
+
+
+def _status(client: TestClient, tid: str) -> str:
+    return client.post("/tools/ticket.get", json={"id": tid}, headers=BOB_H).json()["status"]
+
+
+def test_reopen_restores_pre_close_status(client: TestClient) -> None:
+    assert _status(client, "T-1002") == "open" and _status(client, "T-1003") == "processing"
+    closed = close(client, ALICE_H, ["T-1002", "T-1003"]).json()
+    assert closed["compensate_tool"] == "ticket.reopen_batch"
+    r = reopen(client, ALICE_H, ["T-1003", "T-1002", "T-1001"])  # T-1001 在源系统里就是关闭的：不在补偿范围
+    body = r.json()
+    assert r.status_code == 200 and body["reopened"] == ["T-1003", "T-1002"] and body["not_reopened"] == ["T-1001"]
+    assert body["compensate_tool"] == "ticket.close_batch" and body["deduplicated"] is False and body["by"] == ALICE
+    assert _status(client, "T-1002") == "open" and _status(client, "T-1003") == "processing"
+    assert client.post("/tools/ticket.get", json={"id": "T-1002"}, headers=BOB_H).json()["closed_at"] is None
+    assert close(client, ALICE_H, ["T-1002"], key="key-close-02").json()["closed"] == ["T-1002"]  # 重开后可再次关闭
+
+
+def test_reopen_dry_run_previews_without_writing(client: TestClient) -> None:
+    close(client, ALICE_H, ["T-1002"])
+    body = reopen(client, ALICE_H, ["T-1002", "T-1003"], dry_run=True).json()
+    assert body["dry_run"] is True and body["card"] == {"card_type": "impact_preview"}
+    assert body["impact_preview"]["ids"] == ["T-1002"] and body["impact_preview"]["not_reopened"] == ["T-1003"]
+    assert _status(client, "T-1002") == "closed"
+    no_key = client.post("/tools/ticket.reopen_batch", json={"ids": ["T-1002"], "dry_run": True}, headers=ALICE_H)
+    assert no_key.status_code == 200  # dry-run 不需要幂等键
+    assert client.post("/tools/ticket.reopen_batch", json={"ids": ["T-1002"]}, headers=ALICE_H).status_code == 422
+
+
+def test_reopen_idempotent_replay_and_conflicts(client: TestClient) -> None:
+    close(client, ALICE_H, ["T-1002", "T-1003"])
+    first = reopen(client, ALICE_H, ["T-1002"]).json()
+    again = reopen(client, ALICE_H, ["T-1002"]).json()
+    assert again["deduplicated"] is True and again["reopened"] == first["reopened"] == ["T-1002"]
+    assert reopen(client, ALICE_H, ["T-1003"]).status_code == 409  # 同键不同请求
+    assert reopen(client, ALICE_H, ["T-1002", "T-1003"], key="key-0000001").status_code == 409  # 与 close_batch 的键冲突
+    assert _status(client, "T-1003") == "closed"
+
+
+def test_reopen_scoped_per_caller_and_row_permissions(client: TestClient) -> None:
+    close(client, ALICE_H, ["T-1002"])
+    assert reopen(client, BOB_H, ["T-1002"]).json()["deduplicated"] is False  # 同键不同调用者：各自独立
+    assert _status(client, "T-1002") == "open"
+    close(client, BOB_H, ["T-1006"], key="key-bob-0001")
+    r = reopen(client, ALICE_H, ["T-1006"], key="key-reopen-02")  # T-1006 与 alice 无关：整体 404，不写入
+    assert r.status_code == 404 and r.json() == NOT_FOUND
+    assert _status(client, "T-1006") == "closed"

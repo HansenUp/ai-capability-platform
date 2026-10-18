@@ -69,6 +69,9 @@ class RunEventType(StrEnum):
     CONTEXT_COMPACTED = "context.compacted"  # 上下文历史被压缩/摘要
     INPUT_REQUESTED = "input.requested"  # Run 请求用户补充输入（与 InputRequiredEvent 对应）
     INPUT_PROVIDED = "input.provided"  # 用户已补充输入，Run 可由 input-required 续跑
+    # V1.3 新增（S8 两级发现）：search_capabilities 元工具检索到并动态加入本 Run 的工具（规格 + 哈希）；重放 / 接管据此恢复，
+    # 不重新检索
+    CAPABILITIES_DISCOVERED = "capabilities.discovered"
     RUN_ERROR = "run.error"  # Run 出现错误
     RUN_DONE = "run.done"  # Run 正常结束
 

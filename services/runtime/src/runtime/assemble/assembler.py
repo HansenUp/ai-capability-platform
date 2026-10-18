@@ -1,8 +1,8 @@
 """Capability assembly: agent snapshot → system prompt, core tools (agent-declared ∪ skill-declared),
-skill dirs, and the built-in `search_capabilities` meta-tool for second-level discovery.
+skill dirs, and — when the snapshot enables discovery — the `search_capabilities` meta-tool.
 （能力组装：把一个 Agent 版本快照组装为可直接注入 harness 的系统提示词、核心工具集
-（agent 声明 ∪ skill 声明的并集）、技能目录列表，以及内置的 `search_capabilities`
-元工具——用于两级能力发现中的第二级（按意图检索）。）
+（agent 声明 ∪ skill 声明的并集）、技能目录列表；版本快照开启 `discovery.enabled` 时再注入
+`search_capabilities` 元工具——两级能力发现中的第二级（按意图检索，见 runtime.loop.discovery）。）
 """
 
 from __future__ import annotations
@@ -13,17 +13,13 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from ai_contract import RiskLevel, SkillDir, ToolSpec
-from runtime.config import settings
+from runtime import gateway_client
 from runtime.state.db import AgentVersion
 
-# 第二级能力发现的元工具：始终注入给 harness，供模型按需检索核心工具集之外的更多企业能力。
-SEARCH_CAPABILITIES_TOOL = ToolSpec(
-    name="search_capabilities",
-    description="按意图检索当前身份可用的企业能力（第二级发现）。输入 intent 文本，返回候选工具。",
-    input_schema={"type": "object", "properties": {"intent": {"type": "string"}}, "required": ["intent"]},
-)
+_TOOLSPEC_FIELDS = frozenset(ToolSpec.model_fields)
 
 # 用于读取被外置到工作区的大体积工具结果（配合 context.budget.offload_if_large 使用）。
 READ_ARTIFACT_TOOL = ToolSpec(
@@ -108,27 +104,41 @@ class Assembled:
     skills: list[SkillDir]  # 已加载的技能目录集合
     core_tool_limit: int = 20  # 核心工具数量上限
     report: dict[str, Any] = field(default_factory=dict)  # 组装报告，写入 CONTEXT_ASSEMBLED 事件
+    resources: dict[str, dict[str, Any]] = field(default_factory=dict)  # 工具名 → 目录资源属性 {system, tenant}（闸口策略请求用）
 
 
-async def discover_core_tools(subject: str, agent_id: str, declared: list[str]) -> list[ToolSpec]:
+async def discover_core_tools(
+    subject: str, agent_id: str, declared: list[str], resources: dict[str, dict[str, Any]] | None = None, user_token: str | None = None
+) -> list[ToolSpec]:
     """按 Agent 版本快照声明的工具白名单组装工具集（S4.8 固定白名单）：
 
-    向能力网关查询白名单中已登记、已发布的能力（取网关上的权威元数据：风险等级、数据分级、入参 schema）；
-    只在进程内执行的开发工具（echo）取本地定义；白名单之外的工具一律不暴露，网关侧的 core_for_agents 不能额外加工具。
+    经网关客户端（契约 3）向能力网关查询白名单中已登记、已发布的能力（取网关上的权威元数据：风险等级、数据分级、入参
+    schema）；目录项附带的资源属性（system、tenant）写入 resources（闸口策略请求用），不进 ToolSpec。只在进程内执行的
+    开发工具（echo）取本地定义；白名单之外的工具一律不暴露，网关侧的 core_for_agents 不能额外加工具。
     网关不可达时回退到本地工具注册表（同样只取白名单内的部分）。"""
     names = [n for n in declared if n]
+    remote: dict[str, ToolSpec] = {}
+    meta: dict[str, dict[str, Any]] = {}
     try:
-        async with httpx.AsyncClient(timeout=2.0) as c:
-            params = {"subject": subject, "agent": agent_id, "names": ",".join(names)}
-            r = await c.get(f"{settings.capability_gateway_url}/capabilities", params=params)
-            r.raise_for_status()
-            remote = {t["name"]: ToolSpec(**t) for t in r.json().get("tools", []) if t.get("name") in names}
+        params = {"subject": subject, "agent": agent_id, "names": ",".join(names)}
+        r = await gateway_client.request("GET", "/capabilities", user_token=user_token, timeout_s=2.0, params=params)
+        r.raise_for_status()
+        for t in r.json().get("tools", []):
+            if not isinstance(t, dict) or t.get("name") not in names:
+                continue
+            try:
+                remote[t["name"]] = ToolSpec(**{k: v for k, v in t.items() if k in _TOOLSPEC_FIELDS})
+            except ValidationError:
+                continue  # 目录项不合规：不暴露（失败关闭）
+            meta[t["name"]] = {k: str(t[k]) for k in ("system", "tenant") if t.get(k)}
     except httpx.HTTPError:
-        remote = {}
+        remote, meta = {}, {}
     out: list[ToolSpec] = []
     for n in names:
         if n in remote:
             out.append(remote[n])
+            if resources is not None and meta.get(n):
+                resources[n] = meta[n]
         elif n in LOCAL_TOOLS and (not remote or n == "echo"):
             out.append(LOCAL_TOOLS[n])
     return out
@@ -158,24 +168,33 @@ def skills_digest(skills: list[SkillDir]) -> str:
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
-async def assemble(agent: AgentVersion, subject: str) -> Assembled:
+async def assemble(agent: AgentVersion, subject: str, user_token: str | None = None) -> Assembled:
     """按 agent 版本快照与调用主体组装最终的系统提示词/工具集/技能集：
-    先发现核心工具（agent 声明 ∪ 可用能力），截断到 core_tool_limit，再补上恒定存在的两个元工具。
+    先发现核心工具（agent 声明 ∪ 可用能力），截断到 core_tool_limit，再补上元工具 read_artifact；
+    版本快照开启 discovery 时在其前注入 search_capabilities，并在组装报告中记录冻结的检索范围与上限。
 
     技能提示词内联（S5，D84）：快照 `skills_inline=true` 时把各技能的 SKILL.md 内容内联进系统提示词（供不支持
     原生技能目录的 harness 使用）；默认关闭，系统提示词与组装报告与此前完全一致。
     """
+    # 延迟导入：runtime.loop 包初始化会导入 runner，而 runner 依赖本模块
+    from runtime.loop import discovery
+
     cfg = agent.config or {}
-    tools = await discover_core_tools(subject, agent.agent_id, cfg.get("tools", ["echo"]))
+    resources: dict[str, dict[str, Any]] = {}
+    tools = await discover_core_tools(subject, agent.agent_id, cfg.get("tools", ["echo"]), resources, user_token)
     skills = load_skills(cfg.get("skills", []))
     limit = int(cfg.get("core_tool_limit", 20))
-    tools = tools[:limit] + [SEARCH_CAPABILITIES_TOOL, READ_ARTIFACT_TOOL]
+    # 第二级能力发现的元工具：仅在版本快照开启 discovery 时注入（拦截与检索见 runtime.loop.discovery）
+    meta_tools = [discovery.TOOL, READ_ARTIFACT_TOOL] if discovery.enabled(agent) else [READ_ARTIFACT_TOOL]
+    tools = tools[:limit] + meta_tools
     report: dict[str, Any] = {"tools": [t.name for t in tools], "skills": [s.name for s in skills]}
+    if discovery.enabled(agent):
+        report["discovery"] = {"scope": discovery.scope(agent), "max_tools": discovery.max_tools(agent)}
     system_prompt = agent.system_prompt
     if cfg.get("skills_inline") is True and skills:
         system_prompt = inline_skills(system_prompt, skills)
         report["skills_inline"] = True
-    return Assembled(system_prompt, tools, skills, limit, report)
+    return Assembled(system_prompt, tools, skills, limit, report, {n: m for n, m in resources.items() if any(t.name == n for t in tools)})
 
 
 def inline_skills(system_prompt: str, skills: list[SkillDir]) -> str:

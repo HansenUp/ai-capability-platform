@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """S4 本机出口验证（M1 垂直切片：工单总结 Agent）。
 
-前置：compose 已启动 keycloak（26.3，标准 Token Exchange）、litellm、observe profile（Langfuse）。
-本脚本以子进程启动整条链路：mcp-ticket(18091) ← 能力网关(18082，换取 OBO 令牌) ← Runtime(18090，强制鉴权、
-工具经网关分发、litellm 真实模型) ← Console(18081，评测闸门 langfuse 模式)。然后：
+前置：compose 已启动 keycloak（26.3，标准 Token Exchange）、litellm、observe profile（Langfuse）；已 make cedar-build。
+本脚本以子进程启动整条链路：策略栈（Cedar 引擎 18183 + 策略服务 18083）、mcp-ticket(18091，生产态：OBO + act 断言验签)
+← 能力网关(18082，只接受 ai-runtime-svc 服务令牌，换取 OBO 令牌并签发 act 断言) ← Runtime(18090，强制鉴权、
+以服务客户端调用网关、litellm 真实模型) ← Console(18081，评测闸门 langfuse 模式，EVAL_DATASETS 登记评测集)。然后：
 
 1. Console 以 0% 灰度 + 白名单（alice、bob）预发布 ticket-summary@1；未附评测直接全量发布被闸门拒绝；
 2. 30 条评测集逐条以 alice / bob 身份对话、规则打分、写回 Langfuse（数据集运行 + eval_pass 评分）；
 3. 以评测运行引用放量到 100%，闸门到 Langfuse 读取通过率后放行；
 4. 四类安全测试中的端到端部分：跨用户访问（行级权限经 OBO 令牌落到 MCP Server，返回 404）、非白名单工具
-   （组装给模型的工具不含 close_batch，网关把它登记为该 Agent 的核心工具也加不进去）、附件越权，以及跨租户不可见；
+   （组装给模型的工具不含 close_batch，网关把它绑定为该 Agent 的核心工具也加不进去）、附件越权，以及跨租户不可见；
    机密数据外发 / 检索 / 模型阻断见 services/runtime/tests/test_s4_security.py；
 5. 审计与 Trace：工具判定入审计，Langfuse 中可见 execute_tool 与 eval_pass 评分。
 
@@ -21,6 +22,8 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +49,7 @@ SYSTEM = (
 )
 
 
-def env_stack() -> dict[str, dict[str, str]]:
+def env_stack(policy: str) -> dict[str, dict[str, str]]:
     certs = f"{devkit.REALM}/protocol/openid-connect/certs"
     return {
         "mcp": {
@@ -54,19 +57,20 @@ def env_stack() -> dict[str, dict[str, str]]:
             "MCP_TICKET_ISSUER": devkit.REALM,
             "MCP_TICKET_AUDIENCE": "mcp-ticket",
             "MCP_TICKET_DB": str(TMP / "mcp-ticket.db"),
+            "MCP_TICKET_ACT_JWKS_URL": "http://127.0.0.1:18082/.well-known/jwks.json",  # 网关 act 断言的公钥
         },
         "gateway": {
             "KEYCLOAK_TOKEN_URL": devkit.TOKEN_URL,
             "GATEWAY_CLIENT_SECRET": "capability-gateway-dev-secret",
             "MCP_TICKET_URL": "http://127.0.0.1:18091",
-            "POLICY_URL": "http://127.0.0.1:1",
+            "POLICY_URL": policy,
             "GATEWAY_ADMIN_TOKEN": GATEWAY_ADMIN_TOKEN,
         },
         "runtime": {
             "DATABASE_URL": f"sqlite+aiosqlite:///{TMP}/runtime.db",
             "WORKSPACE_DIR": str(TMP / "ws"),
             "HARNESS": "litellm",
-            "POLICY_URL": "http://127.0.0.1:1",
+            "POLICY_URL": policy,
             "CAPABILITY_GATEWAY_URL": "http://127.0.0.1:18082",
             "TOOL_DISPATCH": "gateway",
             "TOOL_RESULT_OFFLOAD_TOKENS": "300",
@@ -75,7 +79,8 @@ def env_stack() -> dict[str, dict[str, str]]:
             "JWT_ISSUER": devkit.REALM,
             "JWT_AUDIENCE": "ai-runtime",
             "OTEL_EXPORTER_OTLP_ENDPOINT": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"),
-        },
+        }
+        | devkit.runtime_svc_env(),  # 以服务客户端 ai-runtime-svc 调用网关（契约 3）
         "console": {
             "CONSOLE_DATABASE_URL": f"sqlite+aiosqlite:///{TMP}/console.db",
             "RUNTIME_ADMIN_URL": "http://127.0.0.1:18090",
@@ -85,6 +90,7 @@ def env_stack() -> dict[str, dict[str, str]]:
             "LANGFUSE_HOST": devkit.LANGFUSE,
             "LANGFUSE_PUBLIC_KEY": devkit.LF_PK,
             "LANGFUSE_SECRET_KEY": devkit.LF_SK,
+            "EVAL_DATASETS": '{"ticket-summary": ["ticket-summary"]}',  # 闸门只认为该 Agent 登记的评测数据集
         },
     }
 
@@ -104,8 +110,10 @@ def chat(rt: httpx.Client, token: str, text: str, **extra: Any) -> httpx.Respons
 
 
 def main() -> int:
-    e = env_stack()
+    stack = ExitStack()
+    e = env_stack(stack.enter_context(devkit.policy_stack(TMP)))
     with (
+        stack,
         service("mcp-ticket", "mcp_ticket.main:app", "mcp-servers/ticket/src", 18091, e["mcp"]),
         service("gateway", "capability_gateway.main:app", "services/capability-gateway/src", 18082, e["gateway"]) as gateway,
         service("runtime", "runtime.main:app", "services/runtime/src", 18090, e["runtime"]) as runtime,
@@ -138,8 +146,15 @@ def main() -> int:
         mismatch = summary["version_mismatch"]
         check(mismatch == 0, f"评测各条均由 ticket-summary@1 执行（按 run_id 核对，不符 {mismatch} 条）")
         check(summary["gate_passed"], "评测通过率达到闸门阈值（80%）")
-        r = con.put("/agents/ticket-summary/versions/1/canary", json={"percent": 100, "eval_run_ref": summary["eval_run_ref"]})
-        check(r.status_code == 200, f"附评测运行引用放量到 100%（闸门读取 Langfuse 通过率）→ HTTP {r.status_code}")
+        # 闸门不信任运行 metadata 的通过率（S8 D134）：按运行项与各 Trace 的 eval_pass 评分重算；Langfuse 异步摄取评分，
+        # 刚写入时可能尚不可见（重算为未通过）——在 90 s 内重试，闸门本身的判定口径不变
+        deadline = time.monotonic() + 90
+        while True:
+            r = con.put("/agents/ticket-summary/versions/1/canary", json={"percent": 100, "eval_run_ref": summary["eval_run_ref"]})
+            if r.status_code != 409 or time.monotonic() > deadline:
+                break
+            time.sleep(5)
+        check(r.status_code == 200, f"附评测运行引用放量到 100%（闸门按 eval_pass 评分重算通过率）→ HTTP {r.status_code} {r.text[:200]}")
 
         print("== 安全：跨用户访问 / 非白名单工具 / 附件越权")
         alice, bob = devkit.user_token("alice"), devkit.user_token("bob")
@@ -167,22 +182,21 @@ def main() -> int:
         r = chat(rt, alice, "把 T-1002 关闭。")
         tools = assembled_tools(events(rt, alice, r.json()["run_id"]))
         check(bool(tools) and all(CLOSE not in t for t in tools), f"非白名单：组装给模型的工具不含 {CLOSE}（{tools}）")
-        # 网关侧登记的 core_for_agents 不能给 Agent 加工具：临时把 close_batch 登记为 ticket-summary 的核心工具，结束后恢复
-        original = gw.get("/capabilities/cap.ticket.close_batch").json()
-        tampered = original | {"core_for_agents": [*original["core_for_agents"], "ticket-summary"]}
+        # 网关侧的 Agent 绑定不能给 Agent 加工具：临时把 close_batch 绑定为 ticket-summary 的核心工具（bindings API），结束后解绑
+        binding = "/agents/ticket-summary/bindings/cap.ticket.close_batch"
         try:
-            r = gw.post("/capabilities", json=tampered, headers=GW_ADMIN)
-            check(r.status_code == 201, f"网关登记：close_batch 的 core_for_agents 加上 ticket-summary → HTTP {r.status_code}")
-            core = gw.get("/capabilities", params={"subject": f"human:{devkit.USER_IDS['alice']}", "agent": "ticket-summary"}).json()
+            r = gw.put(binding, params={"kind": "core"}, headers=GW_ADMIN)
+            check(r.status_code == 200, f"网关绑定：close_batch 绑定为 ticket-summary 的核心能力 → HTTP {r.status_code}")
+            svc = {"Authorization": f"Bearer {devkit.client_token('ai-runtime-svc')}", "X-AI-User-Token": alice}
+            params = {"subject": f"human:{devkit.USER_IDS['alice']}", "agent": "ticket-summary"}
+            core = gw.get("/capabilities", params=params, headers=svc).json()
             check(any(t["name"] == CLOSE for t in core["tools"]), "网关第一级发现（不带白名单）已把 close_batch 列为核心工具")
             r = chat(rt, alice, "把 T-1002 关闭。")
             tools = assembled_tools(events(rt, alice, r.json()["run_id"]))
-            check(
-                bool(tools) and all(CLOSE not in t for t in tools), f"非白名单：网关 core_for_agents 加不进工具，仍不含 {CLOSE}（{tools}）"
-            )
+            check(bool(tools) and all(CLOSE not in t for t in tools), f"非白名单：网关绑定加不进工具，仍不含 {CLOSE}（{tools}）")
         finally:
-            r = gw.post("/capabilities", json=original, headers=GW_ADMIN)
-            check(r.status_code == 201, "恢复 close_batch 的原登记")
+            r = gw.delete(binding, params={"kind": "core"}, headers=GW_ADMIN)
+            check(r.status_code == 204, f"解除 close_batch 的临时绑定 → HTTP {r.status_code}")
         r = chat(rt, bob, "请给出工单 T-1001 的全部处理记录。")
         refs = [
             x["payload"].get("output_ref")

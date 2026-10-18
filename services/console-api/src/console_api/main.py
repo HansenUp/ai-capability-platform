@@ -29,7 +29,8 @@ from console_api.db import Agent, AgentVersion, Audit, SessionLocal, UserAgent, 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """启动时把 Console 库升级到最新迁移版本。"""
+    """启动时校验生产基线（CONSOLE_ENV=prod 要求 langfuse 评测闸门），再把 Console 库升级到最新迁移版本。"""
+    eval_gate.validate_for_production()
     await init_db()
     yield
 
@@ -147,7 +148,7 @@ async def publish(agent_id: str, version: str, body: PublishIn, op: Operator = D
         v = await _version(s, op, agent_id, version)
         # 评测闸门：对外放量（比例大于 0）必须通过；0% + 白名单为预发布，只供评测账号使用，不经闸门
         if body.canary_percent > 0:
-            reason = await eval_gate.check(agent_id, version, body.eval_run_ref, body.eval_passed)
+            reason = await eval_gate.check(agent_id, version, body.eval_run_ref, body.eval_passed, op.tenant)
             if reason:
                 raise HTTPException(409, f"publish gate: {reason}")  # 业务规则拒绝统一用 409
         elif not body.canary_allowlist:
@@ -186,7 +187,7 @@ async def set_canary(agent_id: str, version: str, body: CanaryIn, op: Operator =
         if v.status != "published":
             raise HTTPException(409, f"version status is {v.status}")
         if v.canary_percent == 0 and body.percent > 0:  # 预发布 → 对外放量：过评测闸门
-            reason = await eval_gate.check(agent_id, version, body.eval_run_ref or v.eval_run_ref, body.eval_passed)
+            reason = await eval_gate.check(agent_id, version, body.eval_run_ref or v.eval_run_ref, body.eval_passed, op.tenant)
             if reason:
                 raise HTTPException(409, f"publish gate: {reason}")
             v.eval_run_ref = body.eval_run_ref or v.eval_run_ref

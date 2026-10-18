@@ -1,20 +1,54 @@
 """Runtime HTTP API 的响应视图模型（只用于 OpenAPI 文档与响应序列化，不进入 ai_contract）。
 
-约定：业务规则拒绝统一返回 409，响应体为 ErrorDetail；422 只保留给 FastAPI 的参数校验（HTTPValidationError）。
-各视图字段与原先返回的字典保持一致，挂上 response_model 不改变返回内容。
+约定（S8 D135，Contract V1.3 统一错误体）：业务规则拒绝统一返回 400（请求内容不被接受）或 409（与当前状态冲突），
+所有 HTTPException 的响应体都是 ai_contract.ErrorDetail{detail, code}（由 main 的异常处理器统一生成）；422 只保留给
+FastAPI 的参数校验（HTTPValidationError）。各视图字段与原先返回的字典保持一致，挂上 response_model 不改变返回内容。
 """
 
 from __future__ import annotations
 
+import re
+from typing import Any
+
+from fastapi import HTTPException
 from pydantic import BaseModel, RootModel
 
-from ai_contract import RunEvent, RunState
+from ai_contract import ErrorDetail, RunEvent, RunState
+
+__all__ = ["ErrorDetail", "ApiError", "error_code"]
+
+# 未显式给出错误码时按状态码取默认值
+DEFAULT_CODES = {
+    400: "BAD_REQUEST",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    405: "METHOD_NOT_ALLOWED",
+    409: "CONFLICT",
+    413: "PAYLOAD_TOO_LARGE",
+    500: "INTERNAL_ERROR",
+    502: "BAD_GATEWAY",
+    503: "SERVICE_UNAVAILABLE",
+}
+_CODE_PREFIX = re.compile(r"^([A-Z][A-Z0-9_]{2,}): ")  # 说明以 "CODE: " 开头时（如 ATTACHMENT_TOO_MANY: ...）取其为错误码
 
 
-class ErrorDetail(BaseModel):
-    """HTTPException 的响应体：detail 为可读的错误说明。"""
+class ApiError(HTTPException):
+    """带稳定错误码的 HTTPException：响应体为 ErrorDetail{detail, code}。"""
 
-    detail: str
+    def __init__(self, status_code: int, code: str, detail: str, headers: dict[str, str] | None = None) -> None:
+        super().__init__(status_code, detail, headers)
+        self.code = code
+
+
+def error_code(status_code: int, detail: Any, explicit: str | None = None) -> str:
+    """错误码：显式给出 > 说明里的 "CODE: " 前缀 > 按状态码的默认值。"""
+    if explicit:
+        return explicit
+    m = _CODE_PREFIX.match(detail) if isinstance(detail, str) else None
+    if m:
+        return m.group(1)
+    return DEFAULT_CODES.get(status_code, f"HTTP_{status_code}")
 
 
 class RunView(BaseModel):

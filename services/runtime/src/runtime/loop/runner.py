@@ -62,10 +62,10 @@ from runtime import credentials
 from runtime.assemble.assembler import assemble
 from runtime.config import settings
 from runtime.context import budget as ctx
-from runtime.guard.gate import GateContext
+from runtime.guard.gate import GateContext, principal_attrs
 from runtime.guard.hooks import HookChain, HookConfigError, HookOutcome
 from runtime.harness import registry
-from runtime.loop import active, user_input
+from runtime.loop import active, discovery, user_input
 from runtime.loop.toolbroker import RunCtx, handle_tool, hmac_json, operation_view, record_unknown_result, taint_of
 from runtime.observe import tracing
 from runtime.run import invariant
@@ -487,7 +487,7 @@ async def _drive(
     对 claude-sdk 而言这一步会结束后台 CLI 子进程，避免会话泄漏。
     """
     harness = registry.get(agent.harness)
-    assembled = await assemble(agent, subject)
+    assembled = await assemble(agent, subject, credential)
     if user_input.enabled(agent):
         # 平台工具 request_user_input（S7 §3）：按版本配置 user_input:true 注入（不改组装器），由工具代理在闸口前拦截
         assembled.tools.append(user_input.TOOL)
@@ -504,6 +504,7 @@ async def _drive(
     )
     initial_messages = list(messages)
     visibility = thinking_visibility(agent)
+    p_sub, p_tenant, p_roles = principal_attrs(subject, credential, agent.tenant_id)
     rc = RunCtx(
         credential=credential,  # 终端用户令牌：工具经能力网关执行时换取 OBO 令牌，只在内存中
         credential_subject=credential_subject,
@@ -520,6 +521,11 @@ async def _drive(
             tenant_id=agent.tenant_id,
             run_id=run_id,
             deny_tools=set((agent.config or {}).get("redlines", {}).get("deny_tools", [])),
+            agent_version=agent.version,
+            principal_sub=p_sub,
+            principal_tenant=p_tenant,
+            roles=p_roles,
+            resources=dict(assembled.resources),
         ),
         history=list(messages),
         workspace=spec.workspace_dir or ".",
@@ -599,6 +605,8 @@ async def _drive(
                 for e in prior
                 if e.type == RunEventType.TOOL_APPROVED
             }
+            # 两级发现（S8.2）：已发现的工具随重放一并恢复（按 CAPABILITIES_DISCOVERED，不重新检索）
+            discovery.restore(rc, prior)
             # 污点随重放一并恢复（ADR-0010）：否则续跑后的模型轮次会把机密内容原文写进 Trace，
             # 外发类工具也不再因 confidential 污点被收紧为需审批。
             rc.gate.taint |= _replayed_taint(prior, rc.tools_by_name)
@@ -750,7 +758,7 @@ async def _drive(
                     harness.run_turn(
                         session,
                         TurnInput(messages=rc.history, tool_statuses=_tool_statuses(prior_log, rc.history)),
-                        assembled.tools,
+                        [*assembled.tools, *rc.discovered],  # 两级发现动态加入的工具追加在后（未开启发现时为空）
                         assembled.skills,
                         hooks,
                     ),

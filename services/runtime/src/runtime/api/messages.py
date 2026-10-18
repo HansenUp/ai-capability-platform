@@ -40,7 +40,7 @@ from ai_contract import (
 from runtime import credentials
 from runtime.api import rollout
 from runtime.api.auth import Principal, approver_denial, check_approver, current_principal, is_admin
-from runtime.api.views import ApprovalView, ErrorDetail, InputView, RunEventsView, RunStateView, RunView
+from runtime.api.views import ApiError, ApprovalView, ErrorDetail, InputView, RunEventsView, RunStateView, RunView
 from runtime.config import settings
 from runtime.harness import registry
 from runtime.loop import runner, user_input
@@ -197,7 +197,7 @@ async def _attachment_sources(refs: list[str], principal: Principal) -> list[tup
 IMAGE_EXTS = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
 ATTACHMENT_EXTS = (".txt", *IMAGE_EXTS)
 # 客户端消息内容块的白名单：列表形式的 content 只允许纯文本块 {"type": "text", "text": str}。图片、文件、音频、文档、
-# image_ref 等其他块一律 422——非文本内容只能经 attachments 引用传入（否则绕过归属、大小、类型与 vision 校验），
+# image_ref 等其他块一律 400——非文本内容只能经 attachments 引用传入（否则绕过归属、大小、类型与 vision 校验），
 # image_ref 只由服务端生成（_with_attachment_note）。
 TEXT_PART_KEYS = frozenset({"type", "text"})
 
@@ -265,28 +265,28 @@ def _is_text_part(p: Any) -> bool:
 
 def _reject_inline_content(messages: list[dict[str, Any]]) -> None:
     """客户端消息的 content 只能是字符串或纯文本块列表（白名单）；其他形态（图片 / 文件 / 音频 / 文档 / 伪造的
-    image_ref / 未知类型的块，或非字符串非列表的 content）一律 422 INLINE_CONTENT_UNSUPPORTED。"""
+    image_ref / 未知类型的块，或非字符串非列表的 content）一律 400 INLINE_CONTENT_UNSUPPORTED。"""
     for m in messages:
         if "content" not in m or isinstance(m["content"], str):
             continue
         content = m["content"]
         if not isinstance(content, list) or not all(_is_text_part(p) for p in content):
             raise HTTPException(
-                422,
+                400,
                 "INLINE_CONTENT_UNSUPPORTED: message content must be a string or a list of text parts "
                 '({"type": "text", "text": ...}); images and files must be passed as attachments (artifact:// references)',
             )
 
 
 def _check_vision(agent: AgentVersion) -> None:
-    """带图片附件时：Agent 的 harness 须声明 supports_vision，且模型别名在 VISION_MODEL_ALIASES 内，否则 422。"""
+    """带图片附件时：Agent 的 harness 须声明 supports_vision，且模型别名在 VISION_MODEL_ALIASES 内，否则 400。"""
     try:
         vision = registry.get(agent.harness).capabilities().supports_vision
     except Exception:  # harness 不可用：按不支持处理（失败关闭），驱动时还会以 harness 错误收尾
         vision = False
     if not vision or agent.model_alias not in settings.vision_model_aliases:
         raise HTTPException(
-            422,
+            400,
             f"ATTACHMENT_MODALITY_UNSUPPORTED: model alias '{agent.model_alias}' on harness "
             f"'{agent.harness or settings.harness}' does not accept image attachments",
         )
@@ -295,12 +295,12 @@ def _check_vision(agent: AgentVersion) -> None:
 def _image_parts(sources: list[tuple[str, str]]) -> dict[str, dict[str, Any]]:
     """校验图片附件并生成平台历史里的引用块（文件系统操作，放在线程里执行）：源文件路径 → image_ref 块。
 
-    张数超过 ATTACHMENT_IMAGE_MAX_COUNT → 422 ATTACHMENT_TOO_MANY；单张超过 ATTACHMENT_IMAGE_MAX_BYTES → 413
-    ATTACHMENT_TOO_LARGE；文件头不是 png / jpeg / webp / gif → 422 ATTACHMENT_TYPE_UNSUPPORTED（不信任扩展名）。
+    张数超过 ATTACHMENT_IMAGE_MAX_COUNT → 400 ATTACHMENT_TOO_MANY；单张超过 ATTACHMENT_IMAGE_MAX_BYTES → 413
+    ATTACHMENT_TOO_LARGE；文件头不是 png / jpeg / webp / gif → 400 ATTACHMENT_TYPE_UNSUPPORTED（不信任扩展名）。
     引用块只含引用与元数据（类型、字节数、sha256），图片内容由适配器发送时再从本 Run 工作区读取。"""
     images = [(ref, src) for ref, src in sources if _is_image(src)]
     if len(images) > settings.attachment_image_max_count:
-        raise HTTPException(422, f"ATTACHMENT_TOO_MANY: {len(images)} image attachments (limit {settings.attachment_image_max_count})")
+        raise HTTPException(400, f"ATTACHMENT_TOO_MANY: {len(images)} image attachments (limit {settings.attachment_image_max_count})")
     out: dict[str, dict[str, Any]] = {}
     for ref, src in images:
         size = os.path.getsize(src)
@@ -310,7 +310,7 @@ def _image_parts(sources: list[tuple[str, str]]) -> dict[str, dict[str, Any]]:
             data = f.read()
         media_type = sniff_media_type(data[:16])
         if media_type is None:
-            raise HTTPException(422, f"ATTACHMENT_TYPE_UNSUPPORTED: {ref[:80]} is not a png / jpeg / webp / gif image")
+            raise HTTPException(400, f"ATTACHMENT_TYPE_UNSUPPORTED: {ref[:80]} is not a png / jpeg / webp / gif image")
         artifact_id = os.path.splitext(os.path.basename(src))[0]
         out[src] = {
             "type": IMAGE_REF_TYPE,
@@ -550,16 +550,22 @@ async def _prepare_input(
 
 @router.post(
     "/v1/messages",
-    responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 413: {"model": ErrorDetail}, 503: {"model": ErrorDetail}},
+    responses={
+        400: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        413: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
+    },
 )
 async def messages(req: MessagesRequest, request: Request, principal: Principal = Depends(current_principal)) -> Any:
     """对话式入口：创建 Run 并驱动一次执行；支持流式（SSE）与非流式（聚合后一次性返回）两种模式。
 
     图片附件（S6，D102）：attachments 中的工件是 png / jpeg / webp / gif 图片时作为图片输入交给模型——历史里只记引用
     （image_ref），适配器发送时再从本 Run 工作区读取。归属与分级继承规则与其他附件相同（他人工件 403）。错误：
-    Agent 的 harness 或模型别名不支持图片 → 422 `ATTACHMENT_MODALITY_UNSUPPORTED`；图片张数超限 → 422
-    `ATTACHMENT_TOO_MANY`；文件头不是允许的类型 → 422 `ATTACHMENT_TYPE_UNSUPPORTED`；单张超限 → 413
-    `ATTACHMENT_TOO_LARGE`；messages 的 content 只能是字符串或纯文本块列表，其他内容块（图片、文件、音频等）→ 422
+    Agent 的 harness 或模型别名不支持图片 → 400 `ATTACHMENT_MODALITY_UNSUPPORTED`；图片张数超限 → 400
+    `ATTACHMENT_TOO_MANY`；文件头不是允许的类型 → 400 `ATTACHMENT_TYPE_UNSUPPORTED`；单张超限 → 413
+    `ATTACHMENT_TOO_LARGE`；messages 的 content 只能是字符串或纯文本块列表，其他内容块（图片、文件、音频等）→ 400
     `INLINE_CONTENT_UNSUPPORTED`（detail 以错误码开头）。
 
     harness 进程池已满（goose / dsh，S6）：可重试——非流式返回 503 `POOL_EXHAUSTED`；流式（响应头已发出）下发
@@ -647,12 +653,17 @@ class RunCreate(BaseModel):
     mode: str = "async"  # 执行模式（固定为经队列由 Worker 异步执行）
 
 
-@router.post("/v1/runs", status_code=202, response_model=RunStateView, responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})
+@router.post(
+    "/v1/runs",
+    status_code=202,
+    response_model=RunStateView,
+    responses={400: {"model": ErrorDetail}, 403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 413: {"model": ErrorDetail}},
+)
 async def create_run(req: RunCreate, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """创建一个持久化 Run 并入队，立即返回 202（已接受），由 Worker 抢租约后执行（S7，D105）。
     t_run（durable=1、session_id）、t_run_input（初始消息，附件只存规范化引用）与发起人令牌（加密）同一事务写入后才入队；
     入队失败（如 Redis 暂不可用）仍返回 202，由 reaper 兜底重投。
-    input 的 content 与 attachments 规则同 /v1/messages：content 只能是字符串或纯文本块列表，否则 422
+    input 的 content 与 attachments 规则同 /v1/messages：content 只能是字符串或纯文本块列表，否则 400
     `INLINE_CONTENT_UNSUPPORTED`；他人的工件 403。"""
     agent, reason = await _load_agent(req.agent_id, req.agent_version, principal.tenant_id, principal.subject)
     messages, sources, images, attachments = await _prepare_input(agent, req.input, req.attachments, principal)
@@ -969,7 +980,7 @@ async def cancel(run_id: str, request: Request, access: Annotated[RunAccess, Dep
 class InputBody(BaseModel):
     """补充输入（S7 §3，D112）。
 
-    - answer：回答 request_user_input，call_id 为该调用，value 为回答（按其 schema 校验，不符 422）；
+    - answer：回答 request_user_input，call_id 为该调用，value 为回答（按其 schema 校验，不符 400）；
     - reconcile：结果未知的写工具对账，call_id 为该调用，action ∈ done / skip / retry（retry 只允许下游声明幂等的工具），
       done 时 value 可选，作为补记的结果；
     - credential：用本次请求的令牌（须为发起人）刷新存储的凭据，不从请求体取令牌。"""
@@ -983,7 +994,7 @@ class InputBody(BaseModel):
 @router.post(
     "/v1/runs/{run_id}/input",
     response_model=InputView,
-    responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
+    responses={400: {"model": ErrorDetail}, 403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
     dependencies=[Depends(run_in_tenant)],
 )
 async def provide_input(
@@ -993,10 +1004,12 @@ async def provide_input(
     working，随后入队由 Worker 续跑（S7 之前创建的非持久化 Run 不入队，由发起人 /resume）。
 
     错误：其他租户 / 不存在 404；非发起人或令牌主体不是发起人 403；Run 不在 input-required 或没有匹配的待补充输入 409；
-    回答不符 schema、action 不合规、令牌剩余有效期不足 422；并发写冲突 409（可重试）。"""
+    回答不符 schema、action 不合规、令牌剩余有效期不足 400（INPUT_INVALID）；并发写冲突 409（可重试）。"""
     value = principal.token if body.kind == user_input.KIND_CREDENTIAL else body.value
     try:
-        out = await user_input.provide_input(run_id, principal.subject, body.kind, call_id=body.call_id, value=value, action=body.action)
+        out = await user_input.provide_input(
+            run_id, principal.subject, body.kind, call_id=body.call_id, value=value, action=body.action, user_token=principal.token
+        )
     except RunNotFound as e:
         raise HTTPException(404, f"run '{run_id}' not found") from e
     except (user_input.InputForbidden, credentials.CredentialSubjectMismatch) as e:
@@ -1006,9 +1019,9 @@ async def provide_input(
     except StaleWriter as e:
         raise HTTPException(409, f"run was updated concurrently; retry: {e}") from e
     except RecursionError as e:  # 回答嵌套过深
-        raise HTTPException(422, "input value is nested too deeply") from e
+        raise ApiError(400, "INPUT_INVALID", "input value is nested too deeply") from e
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise ApiError(400, "INPUT_INVALID", str(e)) from e
     async with SessionLocal() as s:
         run = await s.get(Run, run_id)
         durable = run is not None and bool(run.durable)

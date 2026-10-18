@@ -1,0 +1,115 @@
+[
+ {
+  "id": "K-001",
+  "tenant": "default",
+  "title": "GW-200 智能网关退换货政策",
+  "data_class": "public",
+  "acl": [
+   "*"
+  ],
+  "updated_at": "2026-09-01",
+  "body": "GW-200 智能网关自签收起 15 天内到货破损或无法开机可申请换货，需提供外观照片与订单号；30 天内非人为故障可退货。换货寄回运费由我方承担，审核通过后 2 个工作日内发出新机。"
+ },
+ {
+  "id": "K-002",
+  "tenant": "default",
+  "title": "售后工单处理 SLA 与升级流程",
+  "data_class": "internal",
+  "acl": [
+   "role:aftersales",
+   "role:sales"
+  ],
+  "updated_at": "2026-08-20",
+  "body": "高优先级工单 2 小时内首次响应、24 小时内给出处理方案；超过 48 小时未关闭的工单自动升级到售后主管。关闭工单前需确认客户反馈并记录处理结论。"
+ },
+ {
+  "id": "K-003",
+  "tenant": "default",
+  "title": "GW-200 固件 2.3 已知问题与规避方法",
+  "data_class": "internal",
+  "acl": [
+   "*"
+  ],
+  "updated_at": "2026-10-02",
+  "body": "固件 2.3 在高并发 Modbus 轮询下偶发重启，规避方法：将轮询间隔调到 200 毫秒以上，或升级到 2.3.1 补丁版本。升级前请备份网关配置。"
+ },
+ {
+  "id": "K-004",
+  "tenant": "default",
+  "title": "2026 年第四季度渠道价格与折扣审批权限",
+  "data_class": "confidential",
+  "acl": [
+   "role:sales",
+   "role:finance"
+  ],
+  "updated_at": "2026-10-08",
+  "body": "GW-200 渠道底价 3,200 元；单笔折扣 10% 以内由销售经理审批，10% 至 20% 需销售总监审批，超过 20% 需财务与总经理双签。"
+ },
+ {
+  "id": "K-005",
+  "tenant": "default",
+  "title": "售后备件库存与调拨规则",
+  "data_class": "internal",
+  "acl": [
+   "role:aftersales"
+  ],
+  "updated_at": "2026-09-15",
+  "body": "华东、华南两个备件库各保留 GW-200 整机 20 台、电源模块 50 个；跨库调拨需在工单中注明原因，次日发货。"
+ },
+ {
+  "id": "K-006",
+  "tenant": "default",
+  "title": "华东某制造企业大客户回访纪要",
+  "data_class": "confidential",
+  "acl": [
+   "user:00000000-0000-4000-8000-0000000a11ce"
+  ],
+  "updated_at": "2026-10-10",
+  "body": "客户对 GW-200 外壳破损事件处理速度表示满意，计划第四季度追加 300 台批量替换，希望获得年度框架价格并延长质保至 3 年。"
+ },
+ {
+  "id": "K-007",
+  "tenant": "default",
+  "title": "发票开具与红冲流程",
+  "data_class": "internal",
+  "acl": [
+   "role:finance",
+   "role:aftersales"
+  ],
+  "updated_at": "2026-07-30",
+  "body": "开票信息有误需红冲时，先在财务系统提交红字信息表，审核通过后重新开具；退货订单的发票须在退款前完成红冲。"
+ },
+ {
+  "id": "K-008",
+  "tenant": "default",
+  "title": "平台管理员运维手册",
+  "data_class": "internal",
+  "acl": [
+   "role:platform-admin"
+  ],
+  "updated_at": "2026-10-01",
+  "body": "平台组件巡检、密钥轮换与审计日志导出步骤；能力网关签名密钥每 90 天轮换一次。"
+ },
+ {
+  "id": "K-101",
+  "tenant": "t2",
+  "title": "GW-200 退换货政策（t2 定制版）",
+  "data_class": "public",
+  "acl": [
+   "*"
+  ],
+  "updated_at": "2026-09-05",
+  "body": "t2 租户客户的 GW-200 到货破损 7 天内可换货，需经 t2 售后专员确认。"
+ },
+ {
+  "id": "K-102",
+  "tenant": "t2",
+  "title": "t2 销售激励方案",
+  "data_class": "confidential",
+  "acl": [
+   "role:sales"
+  ],
+  "updated_at": "2026-09-28",
+  "body": "t2 租户第四季度 GW-200 销售额超过 200 万元的销售可获得额外 2% 提成。"
+ }
+]

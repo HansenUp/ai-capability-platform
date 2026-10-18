@@ -62,13 +62,13 @@ class Settings:
         default_factory=lambda: tuple(x for x in _env("CONFIDENTIAL_MODEL_ALIASES", "").split(",") if x)
     )
     # 支持图片输入的模型别名（S6 多模态，D102）：带图片附件的请求只允许发给这里列出的别名，且 Agent 的 harness 须声明
-    # supports_vision，否则 422 ATTACHMENT_MODALITY_UNSUPPORTED。空表示一律拒绝（失败关闭）。逗号分隔。
+    # supports_vision，否则 400 ATTACHMENT_MODALITY_UNSUPPORTED。空表示一律拒绝（失败关闭）。逗号分隔。
     # 不按网关 /model/info 的 supports_vision 自动判定：那是 LiteLLM 价目表的推断值，且请求期多一次网关依赖；
     # 也不放进 default-chat 这类带回退链的别名——回退目标（如 deepseek）不支持图片。
     vision_model_aliases: tuple[str, ...] = field(
         default_factory=lambda: tuple(x for x in _env("VISION_MODEL_ALIASES", "").split(",") if x)
     )
-    # 图片附件限制：单张字节上限（超限 413，默认 5 MiB，与 Anthropic 单图上限一致）与单次请求张数上限（超限 422）
+    # 图片附件限制：单张字节上限（超限 413，默认 5 MiB，与 Anthropic 单图上限一致）与单次请求张数上限（超限 400）
     attachment_image_max_bytes: int = field(default_factory=lambda: int(_env("ATTACHMENT_IMAGE_MAX_BYTES", str(5 * 1024 * 1024))))
     attachment_image_max_count: int = field(default_factory=lambda: int(_env("ATTACHMENT_IMAGE_MAX_COUNT", "5")))
     # harness 持有循环（loop_owner=harness）的适配器上，允许声明高风险写工具的 Agent 白名单（S5 §4-1，逗号分隔 agent_id）；
@@ -86,6 +86,13 @@ class Settings:
     tool_dispatch: str = field(default_factory=lambda: _env("TOOL_DISPATCH", "local"))
     capability_gateway_url: str = field(default_factory=lambda: _env("CAPABILITY_GATEWAY_URL", "http://localhost:8082"))  # 能力网关地址
     policy_url: str = field(default_factory=lambda: _env("POLICY_URL", "http://localhost:8083"))  # 策略服务（Cedar）地址
+    # 策略服务的服务间共享令牌（X-Policy-Service-Token，与策略服务 POLICY_SERVICE_TOKEN 同值）；开发态可不配，生产必配
+    policy_service_token: str | None = field(default_factory=lambda: secret_store.get("POLICY_SERVICE_TOKEN"), repr=False)
+    # 服务间鉴权（S8，契约 3）：Runtime 以服务客户端 ai-runtime-svc 的 client credentials 令牌调用能力网关
+    # （Authorization: Bearer <服务令牌>，终端用户令牌放 X-AI-User-Token）。未配置令牌端点时为开发态，沿用旧的 dev 头。
+    gateway_token_url: str | None = field(default_factory=lambda: os.environ.get("RUNTIME_GATEWAY_TOKEN_URL") or None)
+    gateway_client_id: str = field(default_factory=lambda: _env("RUNTIME_GATEWAY_CLIENT_ID", "ai-runtime-svc"))
+    gateway_client_secret: str | None = field(default_factory=lambda: secret_store.get("RUNTIME_GATEWAY_CLIENT_SECRET"), repr=False)
     # 观测适配器（S3.5 反馈写 Langfuse score 的落点）；只在内网可达
     observe_adapter_url: str = field(default_factory=lambda: _env("OBSERVE_ADAPTER_URL", "http://localhost:8084"))
     langfuse_host: str | None = field(default_factory=lambda: os.environ.get("LANGFUSE_HOST"))  # 可观测性 Langfuse 主机
@@ -115,7 +122,8 @@ def production_problems(s: Settings) -> list[str]:
 
     - 必须强制 JWT 验签，且 JWKS 地址、签发者、受众齐全；
     - 不得使用开发网关主密钥、开发 hook 指纹密钥与开发凭据加密密钥；数据库连接必须经 Vault / 挂载文件注入且不是 SQLite；
-    - 密钥项不得来自明文环境变量（只能经 Vault 或挂载文件注入）。
+    - 密钥项不得来自明文环境变量（只能经 Vault 或挂载文件注入）；
+    - 调用能力网关须带服务客户端 ai-runtime-svc 的令牌（S8）：令牌端点与服务客户端密钥齐全；调用策略服务须带服务间令牌。
     """
     problems: list[str] = []
     if not s.auth_required:
@@ -133,6 +141,12 @@ def production_problems(s: Settings) -> list[str]:
         problems.append("DATABASE_URL 未经 Vault / DATABASE_URL_FILE 注入，或仍指向 SQLite")
     if s.tool_dispatch != "gateway":
         problems.append("TOOL_DISPATCH 必须为 gateway（进程内开发执行器只返回模拟结果）")
+    if not s.gateway_token_url:
+        problems.append("缺少 RUNTIME_GATEWAY_TOKEN_URL（调用能力网关须带 ai-runtime-svc 服务令牌）")
+    if not s.gateway_client_secret:
+        problems.append("RUNTIME_GATEWAY_CLIENT_SECRET 未配置（服务客户端 ai-runtime-svc 的密钥）")
+    if not s.policy_service_token:
+        problems.append("POLICY_SERVICE_TOKEN 未配置（调用策略服务的服务间令牌）")
     for name in secret_store.SECRET_NAMES:
         if secret_store.source(name) == "env":
             problems.append(f"{name} 来自明文环境变量，生产须经 Vault 或 {name}_FILE 注入")

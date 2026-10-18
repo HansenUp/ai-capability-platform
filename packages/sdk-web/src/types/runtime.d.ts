@@ -51,7 +51,9 @@ export interface paths {
          *        声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）；
          *     5) budget / user_input 配置闸门（S7）——budget 须为合规的双预算对象（DEF-1），user_input 须为布尔值；
          *     6) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
-         *        harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值。
+         *        harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值；
+         *     7) discovery 配置闸门（S8.2）——{enabled, scope?, max_tools?} 须合规；开启后运行期可能动态加入高风险写工具，
+         *        按声明了高风险写处理（须 L2，harness 持有循环的还须在白名单内）。
          *
          *     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
          */
@@ -178,9 +180,9 @@ export interface paths {
          *
          *     图片附件（S6，D102）：attachments 中的工件是 png / jpeg / webp / gif 图片时作为图片输入交给模型——历史里只记引用
          *     （image_ref），适配器发送时再从本 Run 工作区读取。归属与分级继承规则与其他附件相同（他人工件 403）。错误：
-         *     Agent 的 harness 或模型别名不支持图片 → 422 `ATTACHMENT_MODALITY_UNSUPPORTED`；图片张数超限 → 422
-         *     `ATTACHMENT_TOO_MANY`；文件头不是允许的类型 → 422 `ATTACHMENT_TYPE_UNSUPPORTED`；单张超限 → 413
-         *     `ATTACHMENT_TOO_LARGE`；messages 的 content 只能是字符串或纯文本块列表，其他内容块（图片、文件、音频等）→ 422
+         *     Agent 的 harness 或模型别名不支持图片 → 400 `ATTACHMENT_MODALITY_UNSUPPORTED`；图片张数超限 → 400
+         *     `ATTACHMENT_TOO_MANY`；文件头不是允许的类型 → 400 `ATTACHMENT_TYPE_UNSUPPORTED`；单张超限 → 413
+         *     `ATTACHMENT_TOO_LARGE`；messages 的 content 只能是字符串或纯文本块列表，其他内容块（图片、文件、音频等）→ 400
          *     `INLINE_CONTENT_UNSUPPORTED`（detail 以错误码开头）。
          *
          *     harness 进程池已满（goose / dsh，S6）：可重试——非流式返回 503 `POOL_EXHAUSTED`；流式（响应头已发出）下发
@@ -216,7 +218,7 @@ export interface paths {
          * @description 创建一个持久化 Run 并入队，立即返回 202（已接受），由 Worker 抢租约后执行（S7，D105）。
          *     t_run（durable=1、session_id）、t_run_input（初始消息，附件只存规范化引用）与发起人令牌（加密）同一事务写入后才入队；
          *     入队失败（如 Redis 暂不可用）仍返回 202，由 reaper 兜底重投。
-         *     input 的 content 与 attachments 规则同 /v1/messages：content 只能是字符串或纯文本块列表，否则 422
+         *     input 的 content 与 attachments 规则同 /v1/messages：content 只能是字符串或纯文本块列表，否则 400
          *     `INLINE_CONTENT_UNSUPPORTED`；他人的工件 403。
          */
         post: operations["create_run_v1_runs_post"];
@@ -357,7 +359,7 @@ export interface paths {
          *     working，随后入队由 Worker 续跑（S7 之前创建的非持久化 Run 不入队，由发起人 /resume）。
          *
          *     错误：其他租户 / 不存在 404；非发起人或令牌主体不是发起人 403；Run 不在 input-required 或没有匹配的待补充输入 409；
-         *     回答不符 schema、action 不合规、令牌剩余有效期不足 422；并发写冲突 409（可重试）。
+         *     回答不符 schema、action 不合规、令牌剩余有效期不足 400（INPUT_INVALID）；并发写冲突 409（可重试）。
          */
         post: operations["provide_input_v1_runs__run_id__input_post"];
         delete?: never;
@@ -563,9 +565,11 @@ export interface components {
         };
         /**
          * ErrorDetail
-         * @description HTTPException 的响应体：detail 为可读的错误说明。
+         * @description 业务拒绝的响应体：``{"detail": 说明, "code": 机器码}``。
          */
         ErrorDetail: {
+            /** Code */
+            code: string;
             /** Detail */
             detail: string;
         };
@@ -615,7 +619,7 @@ export interface components {
          * InputBody
          * @description 补充输入（S7 §3，D112）。
          *
-         *     - answer：回答 request_user_input，call_id 为该调用，value 为回答（按其 schema 校验，不符 422）；
+         *     - answer：回答 request_user_input，call_id 为该调用，value 为回答（按其 schema 校验，不符 400）；
          *     - reconcile：结果未知的写工具对账，call_id 为该调用，action ∈ done / skip / retry（retry 只允许下游声明幂等的工具），
          *       done 时 value 可选，作为补记的结果；
          *     - credential：用本次请求的令牌（须为发起人）刷新存储的凭据，不从请求体取令牌。
@@ -795,7 +799,7 @@ export interface components {
          * @description Run 事件日志中每一行记录的事件类型，覆盖 Run 生命周期的全部关键节点。
          * @enum {string}
          */
-        RunEventType: "run.created" | "run.state_changed" | "context.assembled" | "model.request" | "model.response" | "tool.requested" | "tool.decision" | "tool.approved" | "tool.rejected" | "tool.executing" | "tool.executed" | "tool.result" | "context.compacted" | "input.requested" | "input.provided" | "run.error" | "run.done";
+        RunEventType: "run.created" | "run.state_changed" | "context.assembled" | "model.request" | "model.response" | "tool.requested" | "tool.decision" | "tool.approved" | "tool.rejected" | "tool.executing" | "tool.executed" | "tool.result" | "context.compacted" | "input.requested" | "input.provided" | "capabilities.discovered" | "run.error" | "run.done";
         /**
          * RunEventView
          * @description 事件日志中的一行，字段与契约 RunEvent 完全相同。
@@ -1422,6 +1426,15 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
             /** @description Forbidden */
             403: {
                 headers: {
@@ -1544,6 +1557,15 @@ export interface operations {
                     "application/json": components["schemas"]["RunStateView"];
                 };
             };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
             /** @description Forbidden */
             403: {
                 headers: {
@@ -1555,6 +1577,15 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1903,6 +1934,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InputView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
                 };
             };
             /** @description Forbidden */

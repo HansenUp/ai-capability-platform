@@ -24,7 +24,11 @@ import sys
 import tempfile
 import time
 import uuid
+from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import devkit  # noqa: E402
 
 # 必须在导入 runtime 之前设置：Settings 在模块导入时读取环境变量。
 _tmp = tempfile.mkdtemp(prefix="verify-langfuse-")
@@ -32,7 +36,8 @@ os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_tmp}/runtime.db"
 os.environ["WORKSPACE_DIR"] = f"{_tmp}/ws"
 os.environ["HARNESS"] = "mock"
 os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
-os.environ.setdefault("POLICY_URL", "http://127.0.0.1:1")  # 不可达 → 闸口走基线策略（echo 为只读工具，直接放行）
+if "POLICY_URL" not in os.environ:  # 未指定时启动真实策略栈（Cedar 引擎 + 策略服务子进程，需 make cedar-build）；echo 只读放行
+    os.environ["POLICY_URL"] = devkit.start_policy_stack(Path(_tmp))
 os.environ.setdefault("CAPABILITY_GATEWAY_URL", "http://127.0.0.1:1")
 # 本机若配置了 HTTP(S)_PROXY，OTLP 导出（requests）与下面的 httpx 访问 localhost 时需绕过代理。
 os.environ["NO_PROXY"] = ",".join(x for x in (os.environ.get("NO_PROXY", ""), "localhost,127.0.0.1") if x)

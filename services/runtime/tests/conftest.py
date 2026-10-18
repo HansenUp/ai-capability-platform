@@ -50,7 +50,8 @@ else:
     os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_tmp}/runtime.db"
 os.environ["WORKSPACE_DIR"] = f"{_tmp}/ws"
 os.environ["HARNESS"] = "mock"
-os.environ["POLICY_URL"] = "http://127.0.0.1:1"  # unreachable → gate uses baseline fallback（不可达，闸口回退到基线策略）
+# 策略服务地址不可达：闸口失败关闭（S8，不再回退放行）。测试经 runtime_policy_stub 注入按契约 1 实现的基线策略桩（见 _policy_stub）
+os.environ["POLICY_URL"] = "http://127.0.0.1:1"
 os.environ["CAPABILITY_GATEWAY_URL"] = "http://127.0.0.1:1"
 os.environ["TOOL_RESULT_OFFLOAD_TOKENS"] = "20"
 # 会话级 TestClient 的进程内 Worker（InMemory）也运行 reaper（S7 评审 #1）；周期扫描会接走其他用例故意留在 working 的
@@ -70,6 +71,18 @@ if _external_db:
 
     _db.engine = create_async_engine(_db.normalize_database_url(_external_db), poolclass=NullPool)
     _db.SessionLocal.configure(bind=_db.engine)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _policy_stub():
+    """会话级：闸口的策略请求经基线策略桩（tests/runtime_policy_stub.py）处理；专测失败关闭的用例临时替换后须还原。"""
+    import runtime_policy_stub as policy_stub
+
+    from runtime.guard import gate
+
+    gate.set_policy_transport_for_tests(policy_stub.transport())
+    yield
+    gate.set_policy_transport_for_tests(None)
 
 
 @pytest.fixture(scope="session")

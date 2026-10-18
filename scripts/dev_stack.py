@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """本机联调用的应用进程启停（compose 中的基础设施另行 `make compose-up`）。
 
-启动 7 个进程，日志写到 .dev/logs/，进程号记在 .dev/pids.json：
-- mcp-ticket     :8091  工单系统只读 MCP Server（mock 数据，按 OBO 令牌做行级权限）
-- gateway        :8082  能力网关（Token Exchange 换取 OBO 令牌后分发工具调用）
-- runtime        :8080  强制鉴权（Keycloak JWT）、litellm 真实模型、MySQL、网关 Key 来自 Vault、反馈经观测适配器
+启动 12 个进程，日志写到 .dev/logs/，进程号记在 .dev/pids.json：
+- cedar-engine   :8183  Cedar 判定引擎 sidecar（宿主机二进制，先 make cedar-build；策略文件改动 5 s 内热加载）
+- policy         :8083  策略服务（POLICY_ENGINE=cedar，/authz/check-batch；引擎不可达一律 deny）
+- mcp-ticket     :8091  工单系统 MCP Server（mock 数据；生产态：OBO 令牌 JWKS 验签 + 网关 act 断言验签，行级权限）
+- mock-knowledge :8092  知识库 mock 连接器（文档 ACL 与分级）      ┐ 生产态鉴权（OBO + act 断言），
+- mock-crm       :8093  CRM mock 连接器（商机，confidential）        │ /_mock/calls 审计上游收到的身份，
+- mock-mail      :8094  邮件 mock 连接器（mail.send 幂等 + dry-run） ┘ /_mock/outbox 发件箱计数
+- gateway        :8082  能力网关：目录 MySQL（库 ai_gateway，启动前自动建库、导入种子并重建 ES 索引）+ ES 混合检索
+                        （fastembed bge-small-zh）、服务间鉴权（只接受 ai-runtime-svc 服务令牌）、OBO + act 断言、经策略服务判定
+- runtime        :8080  强制鉴权（Keycloak JWT）、litellm 真实模型、MySQL、网关 Key 来自 Vault、反馈经观测适配器；
+                        以服务客户端 ai-runtime-svc 调用网关，闸口经策略服务判定（失败关闭）
 - console-api    :8081  MySQL；同步 Runtime 时用 console-api 的 Client Credentials 令牌
 - observe-adapter:8084  反馈转发 Langfuse
 - portal-web     :5173  门户（Keycloak PKCE 登录）
@@ -29,18 +36,29 @@ from pathlib import Path
 
 import httpx
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import devkit  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 DEV = ROOT / ".dev"
 PIDS = DEV / "pids.json"
 VENV = ROOT / ".venv" / "bin"
 REALM = "http://localhost:8180/realms/ai-platform"
 DB = "mysql+asyncmy://root:root@localhost:3316/ai_platform"
+GATEWAY_DB = "mysql+asyncmy://root:root@localhost:3316/ai_gateway"
+CERTS = f"{REALM}/protocol/openid-connect/certs"
+ACT_JWKS = "http://127.0.0.1:8082/.well-known/jwks.json"  # 网关签发 act 断言的公钥
+# 本机网关的登记管理令牌（启用 Keycloak 时不配置则登记接口关闭）；仅本机开发值
+GATEWAY_ADMIN_TOKEN = "dev-gateway-admin"  # noqa: S105
+
+CEDAR_ENV = {"CEDAR_LISTEN": "127.0.0.1:8183"}
+POLICY_ENV = {"POLICY_ENGINE": "cedar", "CEDAR_URL": "http://127.0.0.1:8183"}
 
 RUNTIME_ENV = {
     "DATABASE_URL": DB,
     "WORKSPACE_DIR": str(ROOT / "runtime-workspace"),
     "HARNESS": "litellm",
-    "POLICY_URL": "http://127.0.0.1:1",  # 策略服务尚未接入 → 闸口回退基线规则
+    "POLICY_URL": "http://127.0.0.1:8083",  # 闸口经策略服务判定，不可达即拒绝
     "CAPABILITY_GATEWAY_URL": "http://127.0.0.1:8082",
     "TOOL_DISPATCH": "gateway",  # 工具经能力网关分发到 MCP Server（S4.3）
     "AUTH_REQUIRED": "true",
@@ -51,7 +69,7 @@ RUNTIME_ENV = {
     "VAULT_TOKEN": "dev-root",
     "OBSERVE_ADAPTER_URL": "http://127.0.0.1:8084",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
-}
+} | devkit.runtime_svc_env()
 CONSOLE_ENV = {
     "CONSOLE_DATABASE_URL": DB,
     "RUNTIME_ADMIN_URL": "http://127.0.0.1:8080",
@@ -63,12 +81,33 @@ MCP_TICKET_ENV = {
     "MCP_TICKET_ISSUER": REALM,
     "MCP_TICKET_AUDIENCE": "mcp-ticket",
     "MCP_TICKET_DB": str(DEV / "mcp-ticket.db"),
+    "MCP_TICKET_ACT_JWKS_URL": ACT_JWKS,
 }
+
+
+def mock_env(name: str) -> dict[str, str]:
+    """mock 连接器的生产态鉴权：OBO 令牌经 Keycloak JWKS 验签（aud=mcp-<name>），act 断言经网关 JWKS 验签。"""
+    prefix = f"MCP_{name.upper()}"
+    env = {f"{prefix}_JWKS_URL": CERTS, f"{prefix}_ISSUER": REALM, f"{prefix}_ACT_JWKS_URL": ACT_JWKS}
+    return env | ({"MCP_MAIL_DB": str(DEV / "mcp-mail.db")} if name == "mail" else {})
+
+
 GATEWAY_ENV = {
     "KEYCLOAK_TOKEN_URL": f"{REALM}/protocol/openid-connect/token",
     "GATEWAY_CLIENT_SECRET": "capability-gateway-dev-secret",
+    "GATEWAY_ADMIN_TOKEN": GATEWAY_ADMIN_TOKEN,
+    "GATEWAY_TRUSTED_CALLERS": "ai-runtime-svc",
+    "GATEWAY_USER_AUDIENCE": "capability-gateway",
+    "GATEWAY_ACT_SIGNING_KEY_FILE": str(DEV / "act-signing-key.pem"),
+    "CATALOG_BACKEND": "mysql",
+    "GATEWAY_DATABASE_URL": GATEWAY_DB,
+    "ES_URL": "http://localhost:9200",
+    "EMBED_PROVIDER": "fastembed",
+    "POLICY_URL": "http://127.0.0.1:8083",
     "MCP_TICKET_URL": "http://127.0.0.1:8091",
-    "POLICY_URL": "http://127.0.0.1:1",
+    "MCP_KNOWLEDGE_URL": "http://127.0.0.1:8092",
+    "MCP_CRM_URL": "http://127.0.0.1:8093",
+    "MCP_MAIL_URL": "http://127.0.0.1:8094",
 }
 OBSERVE_ENV = {"LANGFUSE_HOST": "http://localhost:3000", "LANGFUSE_PUBLIC_KEY": "pk-lf-dev", "LANGFUSE_SECRET_KEY": "sk-lf-dev"}
 
@@ -78,6 +117,12 @@ def uvicorn(app: str, app_dir: str, port: int) -> list[str]:
 
 
 SERVICES: list[tuple[str, list[str], dict[str, str], str]] = [
+    ("cedar-engine", [str(devkit.CEDAR_BIN)], CEDAR_ENV, "http://127.0.0.1:8183/healthz"),
+    ("policy", uvicorn("policy_service.main:app", "services/policy/src", 8083), POLICY_ENV, "http://127.0.0.1:8083/healthz"),
+    *(
+        (f"mock-{n}", [str(VENV / "python"), "-m", "mcp_mocks", n], mock_env(n), f"http://127.0.0.1:{p}/healthz")
+        for n, p in (("knowledge", 8092), ("crm", 8093), ("mail", 8094))
+    ),
     ("mcp-ticket", uvicorn("mcp_ticket.main:app", "mcp-servers/ticket/src", 8091), MCP_TICKET_ENV, "http://127.0.0.1:8091/healthz"),
     (
         "gateway",
@@ -113,13 +158,27 @@ def _up(url: str) -> bool:
         return False
 
 
+def prepare_gateway() -> None:
+    """网关启动前：建目录库 ai_gateway、导入开发种子（只补缺失项）、按当前 EMBED_PROVIDER 重建 ES 索引并切别名。"""
+    devkit.act_key_file(DEV / "act-signing-key.pem")
+    devkit.ensure_mysql_db(GATEWAY_DB)
+    env = os.environ | GATEWAY_ENV
+    for mod in ("capability_gateway.seed", "capability_gateway.reindex"):
+        subprocess.run([str(VENV / "python"), "-m", mod], cwd=ROOT, env=env, check=True)  # noqa: S603
+
+
 def start() -> int:
     (DEV / "logs").mkdir(parents=True, exist_ok=True)
+    if not devkit.CEDAR_BIN.is_file():
+        print(f"未找到 Cedar 引擎 {devkit.CEDAR_BIN}：先执行 make cedar-build")
+        return 1
     pids = json.loads(PIDS.read_text()) if PIDS.exists() else {}
     for name, cmd, env, url in SERVICES:
         if _up(url):
             print(f"{name:16} 已在运行（{url}）")
             continue
+        if name == "gateway":
+            prepare_gateway()
         log = open(DEV / "logs" / f"{name}.log", "a")  # noqa: SIM115 —— 由子进程持有
         proc = subprocess.Popen(cmd, cwd=ROOT, env=os.environ | env, stdout=log, stderr=log, start_new_session=True)  # noqa: S603
         pids[name] = proc.pid

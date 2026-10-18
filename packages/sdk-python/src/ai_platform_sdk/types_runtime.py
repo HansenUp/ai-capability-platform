@@ -73,9 +73,10 @@ class DoneEvent(BaseModel):
 
 class ErrorDetail(BaseModel):
     """
-    HTTPException 的响应体：detail 为可读的错误说明。
+    业务拒绝的响应体：``{"detail": 说明, "code": 机器码}``。
     """
 
+    code: str = Field(..., title="Code")
     detail: str = Field(..., title="Detail")
 
 
@@ -119,7 +120,7 @@ class InputBody(BaseModel):
     """
     补充输入（S7 §3，D112）。
 
-    - answer：回答 request_user_input，call_id 为该调用，value 为回答（按其 schema 校验，不符 422）；
+    - answer：回答 request_user_input，call_id 为该调用，value 为回答（按其 schema 校验，不符 400）；
     - reconcile：结果未知的写工具对账，call_id 为该调用，action ∈ done / skip / retry（retry 只允许下游声明幂等的工具），
       done 时 value 可选，作为补记的结果；
     - credential：用本次请求的令牌（须为发起人）刷新存储的凭据，不从请求体取令牌。
@@ -233,6 +234,7 @@ class RunEventType(StrEnum):
     context_compacted = "context.compacted"
     input_requested = "input.requested"
     input_provided = "input.provided"
+    capabilities_discovered = "capabilities.discovered"
     run_error = "run.error"
     run_done = "run.done"
 

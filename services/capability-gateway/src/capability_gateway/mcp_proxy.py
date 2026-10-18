@@ -1,7 +1,7 @@
 """MCP 数据面（ADR-0005 自研候选，S6.6）：`/mcp/{server}` 以 MCP streamable-http 流式透传到已登记的 MCP Server。
 
 转发规则：
-- 地址：`MCP_SERVERS[server]["endpoint"]` 即上游 streamable-http 端点（原样拼接，不追加路径）；未登记 → 404。
+- 地址：连接器 server 的 active 版本 endpoint 即上游 streamable-http 端点（原样拼接，不追加路径）；未登记 → 404。
 - 身份：客户端的 `Authorization` 与全部 `X-AI-*` 头一律不转发。配置了 KEYCLOAK_TOKEN_URL 时必须带终端用户令牌，
   网关以 RFC 8693 换取受众为该 Server 的 OBO 令牌（复用 main._obo_token 的 LRU 缓存）后放入 `Authorization`；
   未配置时为开发态，以 `X-AI-Subject` 的值转发为 `X-AI-Dev-Sub`（与 /invoke 的开发态一致）。
@@ -10,7 +10,7 @@
 - 策略：POST 体按 JSON-RPC 解析（单条或批量）。方法白名单：initialize、ping、tools/list、tools/call、notifications/*
   与客户端对服务端请求的应答（无 method、带 result / error）；resources/*、prompts/*、completion/* 等其他方法与
   畸形消息一律拒绝。每个 `tools/call` 在转发前同步做授权判定；工具必须属于目标 Server 的业务系统（能力的 system 与
-  `MCP_SERVERS[server]["system"]` 一致，否则按未登记处理），未登记的工具、`deny`、策略服务不可达或应答异常都拒绝
+  该连接器登记的 system 一致，否则按未登记处理），未登记的工具、`deny`、策略服务不可达或应答异常都拒绝
   （失败关闭）。批量请求中任一条被拒即整批拒绝（对其中每个带 id 的请求返回 JSON-RPC 错误），请求不到达上游。
   `require_approval` 放行：审批由 Runtime 闸口完成，与 /invoke 的语义一致（网关是第二道防线，只拦 deny）。
   请求体无法解析为 JSON 时 400。
@@ -41,6 +41,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from capability_gateway import config, policy, state
+from capability_gateway.policy import AgentRef, Principal
+
 try:  # OTel 为软依赖：未安装时不产生 Span，traceparent 原样透传
     from opentelemetry import propagate, trace
     from opentelemetry.trace import SpanKind, Status, StatusCode
@@ -50,7 +53,6 @@ except ImportError:  # pragma: no cover
 router = APIRouter()
 
 BODY_LIMIT = int(os.environ.get("MCP_PROXY_BODY_LIMIT", str(4 * 1024 * 1024)))  # 单个 POST 体上限（字节）
-POLICY_TIMEOUT_S = float(os.environ.get("MCP_PROXY_POLICY_TIMEOUT_S", "2"))  # 授权判定超时，超时即拒绝
 RPC_DENIED = -32001  # JSON-RPC 错误码：策略拒绝
 RPC_POLICY_UNAVAILABLE = -32002  # JSON-RPC 错误码：策略服务不可达（失败关闭）
 RPC_METHOD_NOT_ALLOWED = -32601  # JSON-RPC 错误码：方法不在网关白名单内（或消息畸形）
@@ -86,12 +88,11 @@ def _gw() -> Any:
 
 def _http() -> httpx.AsyncClient:
     """进程内共享的上游连接池（保持长连接）；测试经 main.set_invoke_transport_for_tests 注入 transport。"""
-    gw = _gw()
-    transport = gw._invoke_transport
+    transport = config.transport
     key = (id(asyncio.get_running_loop()), id(transport))
     client = _clients.get(key)
     if client is None:
-        timeout = httpx.Timeout(gw.INVOKE_TIMEOUT_S, connect=5.0)
+        timeout = httpx.Timeout(config.INVOKE_TIMEOUT_S, connect=5.0)
         limits = httpx.Limits(max_connections=512, max_keepalive_connections=256)
         client = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
         _clients[key] = client
@@ -134,28 +135,15 @@ async def authorize(tool: str, subject: str, tenant: str, agent: str | None, *, 
 
     system 为请求实际要转发到的 MCP Server 所属业务系统：工具名必须对应该系统的能力，否则 deny——防止对
     Server A 调用 Server B 的同名工具时按 B 的能力判 allow、请求却转发到 A。
-    与 main._authz 组装同样的策略请求，区别在于：主体租户取自令牌而不是能力本身；策略服务不可达或应答异常时
-    返回 error（调用方据此拒绝），不回退到 Python 基线。"""
-    gw = _gw()
-    cap = gw.registry.by_name(tool)
+    与 /invoke 走同一个策略客户端（契约 1 的 /authz/check-batch）：主体租户取自令牌而不是能力本身；
+    策略服务不可达或应答异常时返回 error（调用方据此拒绝），不回退任何本地基线。"""
+    cap = await state.catalog.by_name(tool)
     if cap is None or not system or cap.system != system:
         return "deny"  # 未登记的工具、或工具不属于目标 Server 的业务系统，一律拒绝
-    body = {
-        "subject": subject,
-        "agent": agent,
-        "capability": cap.id,
-        "action": "invoke",
-        "principal": {"tenant": tenant},
-        "resource": {"system": cap.system, "risk_level": cap.risk_level, "data_class": cap.data_class, "tenant": cap.tenant},
-        "context": {"approved": False, "taint": []},
-    }
-    try:
-        r = await _http().post(f"{gw.POLICY_URL}/authz/check", json=body, timeout=POLICY_TIMEOUT_S)
-        r.raise_for_status()
-        decision = r.json()["decision"]
-    except (httpx.HTTPError, ValueError, KeyError, TypeError):
-        return "error"
-    return decision if decision in ("allow", "require_approval", "deny") else "error"
+    agent_id, _, agent_version = (agent or "").partition("@")
+    req = policy.build_request(Principal(sub=subject, tenant=tenant), cap, AgentRef(agent_id, agent_version, tenant))
+    (d,) = await policy.check_batch([req])
+    return "error" if d.reason == policy.UNAVAILABLE else d.decision
 
 
 def _allowed_message(m: Any) -> bool:
@@ -229,8 +217,7 @@ def _end(span: Any, status_code: int | None = None, error: str | None = None) ->
 @router.api_route("/mcp/{server}", methods=["GET", "POST", "DELETE"], include_in_schema=False)
 async def mcp_proxy(server: str, request: Request) -> Response:
     """MCP streamable-http 透传（协议端点，不进 OpenAPI 契约）。"""
-    gw = _gw()
-    entry = gw.MCP_SERVERS.get(server)
+    entry = await state.catalog.active_connector(server)
     if entry is None:
         return JSONResponse({"detail": "unknown MCP server"}, status_code=404)
     body = b""
@@ -261,12 +248,12 @@ async def mcp_proxy(server: str, request: Request) -> Response:
     try:
         client = _http()
         out = {k: v for k, v in request.headers.items() if k.lower() not in _DROP_REQUEST and not k.lower().startswith("x-ai-")}
-        if gw.KEYCLOAK_TOKEN_URL:
+        if config.keycloak_enabled():
             auth = request.headers.get("authorization", "")
             if not auth.lower().startswith("bearer "):
                 _end(span, 401, "missing end-user token")
                 return JSONResponse({"detail": "end-user token required"}, status_code=401)
-            token, _ = await gw._obo_token(client, auth.split(" ", 1)[1].strip(), entry["name"])
+            token, _ = await _gw()._obo_token(client, auth.split(" ", 1)[1].strip(), entry.name)
             claims = _claims(token)
             subject, tenant = str(claims.get("sub") or ""), str(claims.get("tenant") or "")
             out["Authorization"] = f"Bearer {token}"
@@ -286,7 +273,7 @@ async def mcp_proxy(server: str, request: Request) -> Response:
             return _rpc_error(body, RPC_METHOD_NOT_ALLOWED, "method not allowed by gateway", "deny")
         decisions: list[str] = []
         for _, tool in calls:
-            decision = await authorize(tool, subject, tenant, agent, system=str(entry.get("system") or ""))
+            decision = await authorize(tool, subject, tenant, agent, system=entry.system)
             decisions.append(decision)
             if decision in ("deny", "error"):
                 break
@@ -306,8 +293,8 @@ async def mcp_proxy(server: str, request: Request) -> Response:
                 if name in request.headers:
                     out[name] = request.headers[name]
         # GET 是服务端推送的长连接 SSE 流，可以长时间无数据：不设读超时
-        timeout = httpx.Timeout(gw.INVOKE_TIMEOUT_S, connect=5.0, read=None) if request.method == "GET" else client.timeout
-        upstream_req = client.build_request(request.method, entry["endpoint"], headers=out, content=body or None, timeout=timeout)
+        timeout = httpx.Timeout(config.INVOKE_TIMEOUT_S, connect=5.0, read=None) if request.method == "GET" else client.timeout
+        upstream_req = client.build_request(request.method, entry.endpoint, headers=out, content=body or None, timeout=timeout)
         try:
             resp = await client.send(upstream_req, stream=True)
         except httpx.HTTPError as e:
@@ -334,7 +321,7 @@ async def mcp_proxy(server: str, request: Request) -> Response:
 class McpAuthzIn(BaseModel):
     """第三方数据面的转发前判定请求（主体与租户取自该数据面已校验的令牌）。"""
 
-    server: str = Field(max_length=128)  # 目标 MCP Server 的登记名（MCP_SERVERS 的键），据此校验工具归属
+    server: str = Field(max_length=128)  # 目标连接器的登记名，据此校验工具归属
     tool: str = Field(max_length=128)
     subject: str = Field(max_length=128)
     tenant: str = Field(default="", max_length=64)
@@ -344,7 +331,7 @@ class McpAuthzIn(BaseModel):
 def require_authz_token(x_gateway_authz_token: Annotated[str | None, Header()] = None) -> None:
     """判定端点的服务间鉴权：配置了 GATEWAY_AUTHZ_TOKEN 时必须带相同的 X-Gateway-Authz-Token（常量时间比较），
     否则 401；未配置时为开发态，不检查（GATEWAY_ENV=prod 未配置时网关拒绝启动）。"""
-    expected = _gw().GATEWAY_AUTHZ_TOKEN
+    expected = config.GATEWAY_AUTHZ_TOKEN
     if expected and (not x_gateway_authz_token or not hmac.compare_digest(x_gateway_authz_token.encode(), expected.encode())):
         raise HTTPException(401, "gateway authz token required")
 
@@ -353,9 +340,9 @@ def require_authz_token(x_gateway_authz_token: Annotated[str | None, Header()] =
 async def mcp_authz_check(body: McpAuthzIn) -> JSONResponse:
     """ext_authz / 插件回调：allow 与 require_approval → 200，deny → 403，策略不可达 → 503（调用方均按拒绝处理非 2xx）。
     目标 Server 未登记或工具不属于其业务系统 → deny。"""
-    entry = _gw().MCP_SERVERS.get(body.server)
+    entry = await state.catalog.active_connector(body.server)
     if entry is None:
         return JSONResponse({"decision": "deny"}, status_code=403)
-    decision = await authorize(body.tool, body.subject, body.tenant, body.agent, system=str(entry.get("system") or ""))
+    decision = await authorize(body.tool, body.subject, body.tenant, body.agent, system=entry.system)
     status = {"allow": 200, "require_approval": 200, "deny": 403}.get(decision, 503)
     return JSONResponse({"decision": decision}, status_code=status)

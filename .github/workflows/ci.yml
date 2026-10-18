@@ -2,16 +2,23 @@
 name: ci
 on: [push, pull_request]
 jobs:
-  python:                                 # Python：安装全部包 → ruff 静态检查 → OpenAPI 一致性 → pytest（含契约测试）
+  python:                                 # Python：安装全部包 → ruff 静态检查 → OpenAPI 一致性 → Cedar 引擎 → pytest（含契约测试）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable   # Cedar 判定引擎 sidecar 从源码编译（官方 crates.io，Cargo.lock 锁定）
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "services/policy/cedar-engine -> target" }
       - run: make setup CLAUDE_SDK_EXTRAS=dev,sdk   # 一次性安装全部本地包；test_probe_gate 要求 claude-sdk 探针工厂可导入（需 SDK）
       - run: .venv/bin/ruff check .
       - run: make openapi-check             # docs/api 下的 OpenAPI 必须与代码一致
+      - run: make cedar-build CEDAR_CARGO=cargo
+      - run: cargo test --release --locked --manifest-path services/policy/cedar-engine/Cargo.toml
+      # 策略服务对真实 Cedar 引擎的用例：引擎二进制缺失即失败（不跳过）
       - run: .venv/bin/python -m pytest -q
+        env: { CEDAR_ENGINE_REQUIRED: "1" }
   failover:                               # S7 进程级故障注入：API×1 + Worker×2 子进程，kill -9 持租约 Worker 后 60 s 内接管完成
     runs-on: ubuntu-latest
     services:
@@ -31,6 +38,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable   # 闸口判定走真实策略栈（Cedar 引擎 + 策略服务子进程，scripts/devkit.py）
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "services/policy/cedar-engine -> target" }
+      - run: make cedar-build CEDAR_CARGO=cargo
       - run: make setup RUNTIME_EXTRAS=dev,probe,mysql   # asyncmy：进程级用例的 API / Worker 子进程连 MySQL
       - run: .venv/bin/python -c "import asyncmy"
       - run: .venv/bin/python -m pytest services/runtime/tests/test_failover.py -m failover -q -s
