@@ -1,6 +1,7 @@
 """能力目录的 MySQL 实现（``CATALOG_BACKEND=mysql``，D122：MySQL 权威 + 同事务 outbox）。
 
-表：cg_capability / cg_agent_binding / cg_connector / cg_connector_tool / cg_outbox；schema 只来自网关自带的 Alembic
+表：cg_capability / cg_agent_binding / cg_connector / cg_connector_tool / cg_outbox，Skill 商店 cg_skill / cg_skill_version /
+cg_skill_event（SqlSkillRepo，与目录共用引擎）；schema 只来自网关自带的 Alembic
 迁移（``services/capability-gateway/migrations``，version_table ``cg_alembic_version``，可与其他服务共用一个库）。
 MySQL 下迁移包在 ``GET_LOCK('cg_migrate')`` 里，多副本并发启动只迁移一次。也兼容 SQLite（aiosqlite，测试用）。
 """
@@ -38,6 +39,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from capability_gateway.catalog import Catalog, CatalogConflict, ConnectorTool, ConnectorVersion, OutboxEvent
 from capability_gateway.registry import Binding, Capability
+from capability_gateway.skill_repo import SkillConflict, SkillEvent, SkillRepo, SkillVersion
 
 VERSION_TABLE = "cg_alembic_version"
 MIGRATE_LOCK = "cg_migrate"
@@ -130,7 +132,68 @@ class OutboxRow(Base):
     created_at: Mapped[float] = mapped_column(Float)
 
 
+class SkillRow(Base):
+    """Skill 名称归属：名称全局唯一，属于首次上传者的租户。"""
+
+    __tablename__ = "cg_skill"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String(64), index=True)
+    created_by: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class SkillVersionRow(Base):
+    """Skill 版本（不可变内容 + 状态机）。"""
+
+    __tablename__ = "cg_skill_version"
+    __table_args__ = (Index("ix_cg_skill_version_status", "status"),)
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16))
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSON)
+    manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_key: Mapped[str] = mapped_column(String(512))
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    package_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    package_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scan_report: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    rules_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    eval_run_ref: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    eval_pass_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eval_items: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    submitted_by: Mapped[str] = mapped_column(String(256))
+    reviewed_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    signature: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    kid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    listed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoke_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class SkillEventRow(Base):
+    """Skill 版本的状态事件（审计：谁在何时做了什么）。"""
+
+    __tablename__ = "cg_skill_event"
+    __table_args__ = (Index("ix_cg_skill_event_skill", "name", "version"),)
+
+    id: Mapped[int] = mapped_column(_ID, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64))
+    version: Mapped[str] = mapped_column(String(32))
+    event: Mapped[str] = mapped_column(String(32))
+    actor: Mapped[str] = mapped_column(String(256), default="")
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 _CAP_FIELDS = tuple(f for f in Capability.model_fields if f != "row_version")
+_SV_FIELDS = tuple(SkillVersion.model_fields)
+_SV_TIMES = ("listed_at", "revoked_at", "created_at", "updated_at")
 
 
 def _cap(row: CapabilityRow) -> Capability:
@@ -359,5 +422,98 @@ class SqlCatalog(Catalog):
             rows = (await s.execute(q.order_by(ConnectorToolRow.name))).scalars().all()
             return [
                 ConnectorTool(connector=r.connector, version=r.version, name=r.name, spec=r.spec, read_only=r.read_only, errors=r.errors)
+                for r in rows
+            ]
+
+
+def _naive(dt: datetime | None) -> datetime | None:
+    return dt.astimezone(UTC).replace(tzinfo=None) if dt is not None and dt.tzinfo is not None else dt
+
+
+def _sv(row: SkillVersionRow) -> SkillVersion:
+    values = {f: getattr(row, f) for f in _SV_FIELDS}
+    for f in _SV_TIMES:
+        if values[f] is not None:
+            values[f] = values[f].replace(tzinfo=UTC)
+    return SkillVersion.model_validate(values)
+
+
+def _sv_values(rec: SkillVersion) -> dict[str, Any]:
+    values = rec.model_dump()
+    for f in _SV_TIMES:
+        values[f] = _naive(values[f])
+    return values
+
+
+def _event_row(e: SkillEvent) -> SkillEventRow:
+    return SkillEventRow(name=e.name, version=e.version, event=e.event, actor=e.actor, detail=e.detail, created_at=_naive(e.at))
+
+
+class SqlSkillRepo(SkillRepo):
+    """Skill 仓储的 SQLAlchemy 实现（与 SqlCatalog 共用连接池）。"""
+
+    def __init__(self, session: async_sessionmaker[AsyncSession]) -> None:
+        self.session = session
+
+    async def create(self, rec: SkillVersion, event: SkillEvent) -> None:
+        try:
+            async with self.session.begin() as s:
+                owner = await s.get(SkillRow, rec.name, with_for_update=True)
+                if owner is None:
+                    s.add(SkillRow(name=rec.name, tenant=rec.tenant, created_by=rec.submitted_by))
+                elif owner.tenant != rec.tenant:
+                    raise SkillConflict("name_taken", f"skill name '{rec.name}' belongs to another tenant")
+                if await s.get(SkillVersionRow, (rec.name, rec.version)) is not None:
+                    raise SkillConflict("version_exists", f"{rec.name}@{rec.version} already exists (versions are immutable)")
+                s.add(SkillVersionRow(**_sv_values(rec)))
+                s.add(_event_row(event))
+        except IntegrityError as e:  # 并发首次上传同名 / 同版本
+            raise SkillConflict("version_exists", f"{rec.name}@{rec.version} already exists") from e
+
+    async def get(self, name: str, version: str) -> SkillVersion | None:
+        async with self.session() as s:
+            row = await s.get(SkillVersionRow, (name, version))
+            return _sv(row) if row else None
+
+    async def save(self, rec: SkillVersion, events: list[SkillEvent]) -> SkillVersion:
+        values = _sv_values(rec) | {"row_version": rec.row_version + 1, "updated_at": _now()}
+        for k in ("name", "version", "created_at"):
+            values.pop(k)
+        async with self.session.begin() as s:
+            res = await s.execute(
+                update(SkillVersionRow)
+                .where(
+                    SkillVersionRow.name == rec.name,
+                    SkillVersionRow.version == rec.version,
+                    SkillVersionRow.row_version == rec.row_version,
+                )
+                .values(**values)
+            )
+            if res.rowcount != 1:  # type: ignore[attr-defined]
+                raise SkillConflict("concurrent_update", f"{rec.name}@{rec.version} was modified concurrently")
+            for e in events:
+                s.add(_event_row(e))
+        saved = await self.get(rec.name, rec.version)
+        assert saved is not None
+        return saved
+
+    async def list(self, *, statuses: list[str] | None = None, tenant: str | None = None) -> list[SkillVersion]:
+        q = select(SkillVersionRow)
+        if statuses is not None:
+            q = q.where(SkillVersionRow.status.in_(statuses))
+        if tenant is not None:
+            q = q.where(SkillVersionRow.tenant == tenant)
+        async with self.session() as s:
+            rows = (await s.execute(q.order_by(SkillVersionRow.name, SkillVersionRow.version))).scalars().all()
+            return [_sv(r) for r in rows]
+
+    async def events(self, name: str, version: str) -> list[SkillEvent]:
+        q = select(SkillEventRow).where(SkillEventRow.name == name, SkillEventRow.version == version).order_by(SkillEventRow.id)
+        async with self.session() as s:
+            rows = (await s.execute(q)).scalars().all()
+            return [
+                SkillEvent(
+                    name=r.name, version=r.version, event=r.event, actor=r.actor, detail=r.detail, at=r.created_at.replace(tzinfo=UTC)
+                )
                 for r in rows
             ]

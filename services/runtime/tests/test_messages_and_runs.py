@@ -99,18 +99,21 @@ def _wait_for(client, run_id, predicate, timeout=5.0):
     pytest.fail(f"timeout waiting for run {run_id}; log={client.get(f'/v1/runs/{run_id}/events').json()}")
 
 
-def test_unknown_tool_result_window_requires_reconciliation(client, monkeypatch):
-    """结果未知窗口：工具已写下 TOOL_EXECUTING 但执行过程中进程崩溃（此处以抛异常模拟），
-    续跑时不得重新执行，而应把 Run 迁到 input-required 并推一张对账卡片。"""
+def test_unknown_read_tool_result_is_reexecuted_on_resume(client, monkeypatch):
+    """结果未知窗口（只读）：工具已写下 TOOL_EXECUTING 但执行过程中进程崩溃（此处以抛异常模拟）。S9（D149）起只读调用
+    没有副作用，续跑时直接重执行（不转人工对账）；写调用的结果未知仍走对账（见 test_s4_security / test_p05_closure /
+    test_s9_parallel）。"""
     from runtime.loop import toolbroker
 
     called = []
 
-    async def _crash(tool, tool_input, dry_run=False, **_):
+    async def _crash_once(tool, tool_input, dry_run=False, **_):
         called.append(tool.name)
-        raise RuntimeError("simulated crash after write-ahead log")  # 模拟"执行中崩溃，结果未知"
+        if len(called) == 1:
+            raise RuntimeError("simulated crash after write-ahead log")  # 模拟"执行中崩溃，结果未知"
+        return {"tickets": []}
 
-    monkeypatch.setattr(toolbroker, "execute_tool", _crash)
+    monkeypatch.setattr(toolbroker, "execute_tool", _crash_once)
     body = {"agent_id": "demo", "input": [{"role": "user", "content": '!tool ticket.search {"q":"all"}'}]}
     run_id = client.post("/v1/runs", json=body).json()["run_id"]
     log = _wait_for(client, run_id, lambda log: called and any(e["type"] == "tool.executing" for e in log))
@@ -120,16 +123,12 @@ def test_unknown_tool_result_window_requires_reconciliation(client, monkeypatch)
 
     with client.stream("POST", f"/v1/runs/{run_id}/resume", json={"messages": body["input"]}) as r:
         evs = _events(r)
-    card = next(e for e in evs if e["type"] == "card")
-    assert card["card_type"] == "reconciliation_required"
-    assert card["payload"]["call_id"] == executing["payload"]["call_id"] and card["payload"]["tool"] == "ticket.search"
-    assert evs[-1]["stop_reason"] == "awaiting"
-    assert client.get(f"/v1/runs/{run_id}").json()["state"] == "input-required"
-
+    assert not any(e["type"] == "card" for e in evs) and evs[-1]["stop_reason"] == "end_turn"
+    assert client.get(f"/v1/runs/{run_id}").json()["state"] == "completed"
     log = client.get(f"/v1/runs/{run_id}/events").json()
-    assert called == ["ticket.search"]  # 结果未知的调用没有被重放执行第二次
-    assert not any(e["type"] in ("tool.executed", "tool.result") for e in log)
-    assert [e["payload"]["code"] for e in log if e["type"] == "run.error"] == ["UNKNOWN_TOOL_RESULT"]
+    assert called == ["ticket.search", "ticket.search"]  # 只读孤儿调用续跑时重执行了一次
+    assert [e["type"] for e in log].count("tool.executing") == 2 and [e["type"] for e in log].count("tool.result") == 1
+    assert not [e for e in log if e["type"] == "run.error"]
 
 
 def test_publish_blocked_when_harness_tier_too_low(client):

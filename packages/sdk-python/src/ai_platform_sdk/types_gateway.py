@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, conint, constr
+from pydantic import BaseModel, Field, confloat, conint, constr
 
 
 class AuthzIn(BaseModel):
@@ -49,6 +50,10 @@ class Binding(BaseModel):
     agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
     capability_id: constr(min_length=1, max_length=128) = Field(..., title="Capability Id")
     kind: Kind | None = Field("core", title="Kind")
+
+
+class BodySubmitSkillSkillsPost(BaseModel):
+    package: str = Field(..., json_schema_extra={"contentMediaType": "application/octet-stream"}, title="Package")
 
 
 class DataClass(StrEnum):
@@ -182,6 +187,28 @@ class ErrorDetail(BaseModel):
     detail: str = Field(..., title="Detail")
 
 
+class EvalItem(BaseModel):
+    id: constr(min_length=1, max_length=128) = Field(..., title="Id")
+    passed: bool = Field(..., title="Passed")
+
+
+class EvalOut(BaseModel):
+    pass_rate: float | None = Field(..., title="Pass Rate")
+    run_ref: str | None = Field(..., title="Run Ref")
+
+
+class EvalResultIn(BaseModel):
+    items: list[EvalItem] = Field(..., max_length=1000, title="Items")
+    pass_rate: confloat(ge=0.0, le=1.0) = Field(..., title="Pass Rate")
+    run_ref: constr(min_length=1, max_length=256) = Field(..., title="Run Ref")
+    tenant: constr(min_length=1, max_length=64) | None = Field(None, title="Tenant")
+
+
+class EvalSummary(BaseModel):
+    items: int | None = Field(..., title="Items")
+    pass_rate: float | None = Field(..., title="Pass Rate")
+
+
 class ExchangeIn(BaseModel):
     """
     令牌交换请求。执行者身份不在此声明：请求体里即使混入 actor 等字段也会被忽略。
@@ -213,6 +240,12 @@ class InvokeIn(BaseModel):
     tool: constr(max_length=128) = Field(..., title="Tool")
 
 
+class LockEntry(BaseModel):
+    manifest_sha256: str = Field(..., title="Manifest Sha256")
+    name: str = Field(..., title="Name")
+    version: str = Field(..., title="Version")
+
+
 class Protocol2(StrEnum):
     rest = "rest"
     http = "http"
@@ -231,6 +264,28 @@ class McpServerIn(BaseModel):
     protocol: Protocol2 | None = Field("streamable-http", title="Protocol")
     system: constr(max_length=64) | None = Field("", title="System")
     version: constr(min_length=1, max_length=32) | None = Field("1", title="Version")
+
+
+class ResolveOut(BaseModel):
+    lock: list[LockEntry] = Field(..., title="Lock")
+    risk_level: str = Field(..., title="Risk Level")
+
+
+class RevokeIn(BaseModel):
+    reason: constr(max_length=512) | None = Field("", title="Reason")
+
+
+class Revoked(BaseModel):
+    manifest_sha256: str | None = Field(..., title="Manifest Sha256")
+    name: str = Field(..., title="Name")
+    revoked_at: datetime | None = Field(..., title="Revoked At")
+    version: str = Field(..., title="Version")
+
+
+class ScanSummary(BaseModel):
+    findings_count: int = Field(..., title="Findings Count")
+    passed: bool = Field(..., title="Passed")
+    rules_version: str | None = Field(..., title="Rules Version")
 
 
 class SearchIn(BaseModel):
@@ -272,19 +327,44 @@ class SearchOut(BaseModel):
     items: list[SearchItem] = Field(..., title="Items")
 
 
-class SkillIn(BaseModel):
-    """
-    Skill 上架申请。
-    """
-
-    capabilities_declared: list[str] | None = Field(None, title="Capabilities Declared")
-    eval_dataset_ref: str | None = Field(None, title="Eval Dataset Ref")
+class SkillListItem(BaseModel):
+    eval: EvalSummary | None
+    listed_at: datetime | None = Field(..., title="Listed At")
     name: str = Field(..., title="Name")
-    owner: str = Field(..., title="Owner")
-    package_uri: str = Field(..., title="Package Uri")
-    risk_level: str | None = Field("read", title="Risk Level")
-    scan_passed: bool | None = Field(False, title="Scan Passed")
-    signature: str = Field(..., title="Signature")
+    reviewed_by: str | None = Field(..., title="Reviewed By")
+    revoked_at: datetime | None = Field(..., title="Revoked At")
+    scan: ScanSummary | None
+    status: str = Field(..., title="Status")
+    submitted_by: str = Field(..., title="Submitted By")
+    version: str = Field(..., title="Version")
+
+
+class SkillOut(BaseModel):
+    eval: EvalOut | None
+    eval_cases: list[dict[str, Any]] | None = Field(None, title="Eval Cases")
+    eval_min_pass_rate: float | None = Field(None, title="Eval Min Pass Rate")
+    listed_at: datetime | None = Field(..., title="Listed At")
+    manifest: dict[str, Any] = Field(..., title="Manifest")
+    manifest_sha256: str | None = Field(..., title="Manifest Sha256")
+    name: str = Field(..., title="Name")
+    reviewed_by: str | None = Field(..., title="Reviewed By")
+    revoked_at: datetime | None = Field(..., title="Revoked At")
+    scan_report: dict[str, Any] | None = Field(..., title="Scan Report")
+    skill_md: str | None = Field(None, title="Skill Md")
+    status: str = Field(..., title="Status")
+    submitted_by: str = Field(..., title="Submitted By")
+    tenant: str = Field(..., title="Tenant")
+    version: str = Field(..., title="Version")
+
+
+class SkillRef(BaseModel):
+    name: constr(min_length=1, max_length=64) = Field(..., title="Name")
+    version: constr(min_length=1, max_length=32) = Field(..., title="Version")
+
+
+class SubmitOut(BaseModel):
+    name: str = Field(..., title="Name")
+    status: str = Field(..., title="Status")
     version: str = Field(..., title="Version")
 
 
@@ -305,3 +385,20 @@ class VersionIn(BaseModel):
 
 class HTTPValidationError(BaseModel):
     detail: list[ValidationError] | None = Field(None, title="Detail")
+
+
+class ResolveIn(BaseModel):
+    agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
+    discovery_scope: list[str] | None = Field(None, max_length=500, title="Discovery Scope")
+    skills: list[SkillRef] | None = Field(None, max_length=50, title="Skills")
+    tenant: constr(min_length=1, max_length=64) = Field(..., title="Tenant")
+    tools: list[str] | None = Field(None, max_length=500, title="Tools")
+
+
+class RevocationsOut(BaseModel):
+    generated_at: datetime = Field(..., title="Generated At")
+    revoked: list[Revoked] = Field(..., title="Revoked")
+
+
+class SkillList(BaseModel):
+    items: list[SkillListItem] = Field(..., title="Items")

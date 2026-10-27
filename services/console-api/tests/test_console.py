@@ -88,16 +88,22 @@ def test_schema_matches_orm(c):
     assert asyncio.run(diff()) == []
 
 
+NODE = {"Authorization": "Bearer test-node-token"}  # 节点服务令牌（开发态静态令牌，见 conftest）
+
+
 def test_node_registry_and_routing(c):
-    """节点注册后进入路由表分组；绑定权重可查；指令队列拉取即清空。"""
-    assert c.post("/nodes/register", json={"node_id": "n1", "labels": ["general", "aftersales"]}).status_code == 200
-    assert c.post("/nodes/n1/heartbeat", json={"load": 0.2}).status_code == 200
+    """节点注册后进入路由表分组；绑定权重可查；指令拉取不清空，回执后不再下发（S9.8）。"""
+    assert c.post("/nodes/register", json={"node_id": "n1", "labels": ["general", "aftersales"]}, headers=NODE).status_code == 200
+    assert c.post("/nodes/n1/heartbeat", json={"load": 0.2}, headers=NODE).status_code == 200
     assert c.put("/agents/a1/bindings", json=[{"node_group": "aftersales", "weight": 100}], headers=TADMIN).status_code == 200
     rt = c.get("/routing").json()
     assert rt["groups"]["aftersales"] == ["n1"] and rt["bindings"]["a1"] == {"aftersales": 100}
     assert c.post("/nodes/n1/commands", json={"type": "reload_skills"}, headers=TADMIN).status_code == 202
-    assert c.get("/nodes/n1/commands").json()[0]["type"] == "reload_skills"
-    assert c.get("/nodes/n1/commands").json() == []
+    cmds = c.get("/nodes/n1/commands", headers=NODE).json()
+    assert cmds[0]["type"] == "reload_skills"
+    assert c.get("/nodes/n1/commands", headers=NODE).json() == cmds  # 拉取不清空
+    assert c.post(f"/nodes/n1/commands/{cmds[0]['id']}/ack", json={"status": "ok"}, headers=NODE).status_code == 200
+    assert c.get("/nodes/n1/commands", headers=NODE).json() == []
 
 
 def test_publish_retry_after_runtime_already_published(c, runtime):

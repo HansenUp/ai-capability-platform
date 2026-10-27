@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple, cast
 
 from pydantic import TypeAdapter
-from sqlalchemy import ColumnElement, CursorResult, event, func, or_, select, text, true, update
+from sqlalchemy import ColumnElement, CursorResult, and_, delete, event, func, or_, select, text, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -31,11 +31,12 @@ from sqlalchemy.orm.util import identity_key
 
 from ai_contract import Event, RunEvent, RunEventType, RunState, can_transition
 from runtime.state import db
-from runtime.state.db import Run, RunEventRow, ToolOperation
+from runtime.state.db import Run, RunCredential, RunEventRow, ToolOperation
 
 _EVENTS = TypeAdapter(list[Event])  # 用于把投影出的 dict 列表按判别字段校验/解析为统一 Event 列表
 
 LEASABLE_STATES = (RunState.SUBMITTED.value, RunState.WORKING.value)  # 可被抢占租约 / reaper 重投的状态
+TERMINAL_STATES = tuple(state.value for state in RunState if state.terminal)
 
 
 class RunNotFound(KeyError):
@@ -144,6 +145,8 @@ class EventLog:
         values: dict[str, Any] = {"last_seq": seq}
         if dst is not None:
             values["state"] = dst.value
+            if dst.terminal:
+                values.update(lease_owner=None, lease_expires_at=None)
         conds: list[ColumnElement[bool]] = [Run.run_id == run_id, Run.last_seq == head.last_seq]
         if src is not None:
             conds.append(Run.state == src.value)
@@ -161,9 +164,8 @@ class EventLog:
         # 会话里若缓存着该 Run 对象，同步其已提交值（不标脏），保证随后的 s.get(Run) 读到新值
         cached = self.s.identity_map.get(identity_key(Run, run_id))
         if cached is not None:
-            set_committed_value(cached, "last_seq", seq)
-            if dst is not None:
-                set_committed_value(cached, "state", dst.value)
+            for key, value in values.items():
+                set_committed_value(cached, key, value)
         f = _fence.get()
         if fence is not None and f is not None:  # 提交后才计入 FenceWrites（见 _fence_writes_committed）
             self.s.info.setdefault(_PENDING, {})[id(f.writes)] = (f.writes, seq)
@@ -189,7 +191,8 @@ class EventLog:
     async def transition(self, run_id: str, dst: RunState, reason: str = "") -> RunState:
         """把 Run 状态迁移到 dst：若已经处于 dst 则直接返回（幂等）；否则校验迁移合法性
         （非法迁移抛 ValueError），合法时以同一条 CAS UPDATE（附加 ``state=src``）更新 state 与 last_seq，
-        并追加一条 RUN_STATE_CHANGED 事件。读到的状态已被并发改变时抛 SeqConflict（不返回 False：
+        并追加一条 RUN_STATE_CHANGED 事件。终态同时清空租约并删除凭据，由调用方统一提交或回滚。
+        读到的状态已被并发改变时抛 SeqConflict（不返回 False：
         现有调用方都不检查返回值，静默失败会让 Run 停在错误状态）。"""
         head = await self._head(run_id)
         src = RunState(head.state)
@@ -199,6 +202,8 @@ class EventLog:
             raise ValueError(f"illegal transition {src} -> {dst}")
         seq = await self._advance(run_id, head, src=src, dst=dst)
         await self._insert(run_id, seq, RunEventType.RUN_STATE_CHANGED, {"from": src.value, "to": dst.value, "reason": reason}, None)
+        if dst.terminal:
+            await self.s.execute(delete(RunCredential).where(RunCredential.run_id == run_id))
         return dst
 
     async def list(self, run_id: str, since_seq: int = 0) -> list[RunEvent]:
@@ -246,23 +251,21 @@ class EventLog:
         """按 operation_id 读登记行（去重 / 对账用）。"""
         return await self.s.get(ToolOperation, operation_id)
 
-    async def update_operation(self, operation_id: str, status: str, result_hash: str | None = None) -> bool:
+    async def update_operation(self, operation_id: str, status: str, result_hash: str | None = None, *, pending_only: bool = False) -> bool:
         """更新登记行的状态与结果指纹（不受 fence 约束：失租旧 Worker 的执行结果也要写回，供对账卡一键确认）。
         返回是否命中。"""
         values: dict[str, Any] = {"status": status}
         if result_hash is not None:
             values["result_hash"] = result_hash
+        statement = update(ToolOperation).where(ToolOperation.operation_id == operation_id)
+        if pending_only:
+            statement = statement.where(ToolOperation.status.in_(("executing", "unknown")))
         res = cast(
             CursorResult[Any],
-            await self.s.execute(
-                update(ToolOperation)
-                .where(ToolOperation.operation_id == operation_id)
-                .values(**values)
-                .execution_options(synchronize_session=False)
-            ),
+            await self.s.execute(statement.values(**values).execution_options(synchronize_session=False)),
         )
         cached = self.s.identity_map.get(identity_key(ToolOperation, operation_id))
-        if cached is not None:
+        if cached is not None and res.rowcount == 1:
             for k, v in values.items():
                 set_committed_value(cached, k, v)
         return res.rowcount == 1
@@ -354,14 +357,14 @@ async def claim_new_run(s: AsyncSession, run_id: str, owner: str, ttl_s: float) 
 
 async def renew_lease(run_id: str, owner: str, epoch: int, ttl_s: float) -> bool:
     """续期（心跳）：仅当持有者与 epoch 都未变时把到期时间推到 now+ttl；返回 False 表示租约已失，应自我隔离。
-    不检查 state——取消由调用方另读 state 判断（心跳兜底）。"""
+    终态拒绝续期；调用方区分同纪元终态清理与真正失租，并继续兜底取消中断。"""
     async with db.SessionLocal() as s:
         dialect = s.get_bind().dialect.name
         res = cast(
             CursorResult[Any],
             await s.execute(
                 update(Run)
-                .where(Run.run_id == run_id, Run.lease_owner == owner, Run.lease_epoch == epoch)
+                .where(Run.run_id == run_id, Run.lease_owner == owner, Run.lease_epoch == epoch, Run.state.not_in(TERMINAL_STATES))
                 .values(lease_expires_at=_clock(dialect, ttl_s))
                 .execution_options(synchronize_session=False)
             ),
@@ -371,13 +374,20 @@ async def renew_lease(run_id: str, owner: str, epoch: int, ttl_s: float) -> bool
 
 
 async def release_lease(run_id: str, owner: str, epoch: int) -> bool:
-    """释放租约：持有者与 epoch 都匹配时清空 owner / 到期时间（epoch 保持单调，不回退）；返回是否命中。"""
+    """释放匹配的租约；相同 epoch 的终态已原子清空时也返回成功，接管后的旧 epoch 不能命中。"""
     async with db.SessionLocal() as s:
         res = cast(
             CursorResult[Any],
             await s.execute(
                 update(Run)
-                .where(Run.run_id == run_id, Run.lease_owner == owner, Run.lease_epoch == epoch)
+                .where(
+                    Run.run_id == run_id,
+                    Run.lease_epoch == epoch,
+                    or_(
+                        Run.lease_owner == owner,
+                        and_(Run.state.in_(TERMINAL_STATES), Run.lease_owner.is_(None), Run.lease_expires_at.is_(None)),
+                    ),
+                )
                 .values(lease_owner=None, lease_expires_at=None)
                 .execution_options(synchronize_session=False)
             ),

@@ -1,4 +1,5 @@
-"""act 断言（S8.4，契约 2）签名与字段；GATEWAY_ENV=prod 的启动约束与 mcp_proxy 不挂载；生产分支 resolve_caller_client 验签。"""
+"""act 断言（S8.4，契约 2）签名与字段；GATEWAY_ENV=prod 的启动约束、mcp_proxy 已删除而 /authz/mcp-check 全环境挂载；
+生产分支 resolve_caller_client 验签。"""
 
 from __future__ import annotations
 
@@ -93,11 +94,13 @@ def _run(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         "rs = [x for r in m.app.routes for x in (r.original_router.routes if hasattr(r, 'original_router') else [r])]\n"
         "print(sorted({r.path for r in rs}))"
     )
-    clean = {k: v for k, v in os.environ.items() if not k.startswith(("GATEWAY_", "KEYCLOAK_", "CATALOG_", "POLICY_"))}
+    clean = {
+        k: v for k, v in os.environ.items() if not k.startswith(("GATEWAY_", "KEYCLOAK_", "CATALOG_", "POLICY_", "SKILL_", "DATA_CLASS_"))
+    }
     return subprocess.run([sys.executable, "-c", code], env=clean | env, capture_output=True, text=True, timeout=60)  # noqa: S603
 
 
-def test_prod_startup_refuses_missing_config_and_hides_mcp_proxy(act_key: Path) -> None:
+def test_prod_startup_refuses_missing_config_and_mounts_authz_only(act_key: Path) -> None:
     r = _run({"GATEWAY_ENV": "prod"})
     assert r.returncode != 0 and "GATEWAY_ENV=prod requires" in r.stderr
     full = {
@@ -111,11 +114,21 @@ def test_prod_startup_refuses_missing_config_and_hides_mcp_proxy(act_key: Path) 
         "GATEWAY_ACT_SIGNING_KEY_FILE": str(act_key),
         "CATALOG_BACKEND": "mysql",
         "GATEWAY_DATABASE_URL": "mysql+asyncmy://u:p@127.0.0.1:1/ai_gateway",
+        "SKILL_SIGNING_KEY_FILE": str(act_key),
+        "DATA_CLASS_MATRIX_FILE": "/etc/ai/data_class_matrix.json",
+        "SKILL_STORE": "s3",
+        "SKILL_S3_ACCESS_KEY": "ak",
+        "SKILL_S3_SECRET_KEY": "sk",
     }
+    for missing in ("SKILL_SIGNING_KEY_FILE", "SKILL_STORE", "SKILL_S3_SECRET_KEY"):
+        r = _run({k: v for k, v in full.items() if k != missing})
+        assert r.returncode != 0 and "GATEWAY_ENV=prod requires" in r.stderr, missing
     r = _run(full)
     assert r.returncode == 0, r.stderr
-    assert "/mcp/{server}" not in r.stdout and "/authz/mcp-check" not in r.stdout and "/invoke" in r.stdout
-    assert "/mcp/{server}" in _run({}).stdout  # 开发态仍挂载
+    # mcp_proxy 已删除（D153）：任何环境都没有 /mcp/{server}；第三方数据面的判定回调 /authz/mcp-check 全环境挂载
+    assert "/mcp/{server}" not in r.stdout and "/authz/mcp-check" in r.stdout and "/invoke" in r.stdout
+    dev = _run({}).stdout
+    assert "/mcp/{server}" not in dev and "/authz/mcp-check" in dev
 
 
 async def test_resolve_caller_client_production_branch_verifies_jwks(keycloak: Upstream) -> None:

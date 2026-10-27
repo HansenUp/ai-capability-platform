@@ -146,3 +146,58 @@ async def test_fastembed_bge_small_zh() -> None:
 
     a, b, other = await FastEmbedEmbedder().embed(["批量关闭工单并通知客户", "把这些售后单都结掉", "发送邮件（外发）"])
     assert len(a) == 512 and cosine(a, b) > cosine(a, other)
+
+
+def test_taint_gates_query_embedding(up: Upstream, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """OPT-4：污点最高等级不被矩阵允许交给当前嵌入 provider 时只走词元打分（degraded），且不向量化查询。"""
+    import json
+
+    from capability_gateway import config
+
+    matrix = tmp_path / "m.json"
+    matrix.write_text(json.dumps({"channels": {"embedding": {"public": ["*"], "internal": ["hash"], "confidential": []}}}))
+    monkeypatch.setattr(config, "DATA_CLASS_MATRIX_FILE", str(matrix))
+    embedded: list[str] = []
+    emb = get_embedder()
+    orig = emb.embed
+
+    async def spy(texts: list[str]) -> list[list[float]]:
+        embedded.extend(texts)
+        return await orig(texts)
+
+    monkeypatch.setattr(emb, "embed", spy)
+    c = TestClient(main.app)
+
+    def run(taint: list[str]) -> dict:  # type: ignore[type-arg]
+        body = {"query": "机密客户名单查询", "agent_id": "demo", "taint": taint}
+        r = c.post("/capabilities/search", json=body, headers={"X-AI-Subject": "u1"})
+        assert r.status_code == 200
+        return r.json()
+
+    assert run([])["degraded"] is False and "机密客户名单查询" in embedded
+    embedded.clear()
+    assert run(["internal"])["degraded"] is False and embedded  # 矩阵允许 internal → hash
+    embedded.clear()
+    out = run(["internal", "confidential"])
+    assert out["degraded"] is True and "机密客户名单查询" not in embedded  # confidential 不出现在任何嵌入请求中
+    assert search.embedding_allowed(emb, ["unknown-level"]) is False  # 无法识别的等级按 confidential
+    monkeypatch.setattr(config, "DATA_CLASS_MATRIX_FILE", str(tmp_path / "missing.json"))
+    assert search.embedding_allowed(emb, []) is True and search.embedding_allowed(emb, ["internal"]) is False  # 矩阵缺失：只放行 public
+
+
+async def test_taint_with_es_runs_bm25_only(up: Upstream, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import json
+
+    from capability_gateway import config
+
+    matrix = tmp_path / "m.json"
+    matrix.write_text(json.dumps({"channels": {"embedding": {"public": ["*"]}}}))
+    monkeypatch.setattr(config, "DATA_CLASS_MATRIX_FILE", str(matrix))
+    es = search.EsIndex(ES_URL, get_embedder("hash"))
+    await es.ensure()
+    await search.Indexer(state.catalog, es, get_embedder("hash")).sync_once()
+    ranked = await search.hybrid_search(
+        state.catalog, es, get_embedder("hash"), "关闭工单", tenant="default", agent_id="demo", scope=None, taint=["internal"]
+    )
+    assert ranked.degraded is True and ranked.items[0][0].name == "ticket.close_batch"
+    assert len(up.es.searches) == 1 and "knn" not in up.es.searches[0]  # 只发了 BM25 查询

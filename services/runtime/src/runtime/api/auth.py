@@ -28,7 +28,8 @@ from fastapi import Depends, Header, HTTPException, Request
 from jwt import PyJWK
 from jwt.types import Options
 
-from runtime.config import settings
+from runtime import net
+from runtime.config import settings as settings
 
 # 只接受非对称签名算法：拒绝 none 与 HS*（HS* 会让公开的 JWKS 公钥变成可伪造签名的共享密钥）
 ALLOWED_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"})
@@ -75,7 +76,7 @@ class JWKSCache:
     async def _refresh(self) -> None:
         """拉取并解析 JWKS；跳过无 kid、非签名用途或本库不支持的密钥。"""
         self._attempted_at = time.monotonic()
-        async with httpx.AsyncClient(transport=self._transport, timeout=JWKS_TIMEOUT_S) as client:
+        async with net.client(transport=self._transport, timeout=JWKS_TIMEOUT_S) as client:
             r = await client.get(self.url)
             r.raise_for_status()
             body = r.json()

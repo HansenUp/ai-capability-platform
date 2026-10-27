@@ -9,6 +9,11 @@ export const router = createRouter({
     { path: "/", redirect: "/manage/agents" },                                 // 默认进入 Agent 管理
     { path: "/manage/agents", component: () => import("./views/Agents.vue") }, // Agent 版本：创建 / 发布
     { path: "/manage/nodes", component: () => import("./views/Nodes.vue") },   // 节点与路由表
+    { path: "/manage/skills", component: () => import("./views/Skills.vue") }, // Skill 审核：扫描 / 评测结果、审批、吊销（S9）
+    { path: "/manage/directory", component: () => import("./views/Directory.vue") },
+    { path: "/manage/runs", component: () => import("./views/Runs.vue") },
+    { path: "/manage/operations", component: () => import("./views/Operations.vue") },
+    { path: "/manage/owner-operations", component: () => import("./views/OwnerOperations.vue") },
     { path: "/chat", component: () => import("./views/Chat.vue") },           // 使用侧：嵌入 <ai-assistant> 调试对话
   ],
 });

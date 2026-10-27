@@ -1,4 +1,4 @@
-"""能力网关测试：两级发现（binding ∩ names、检索契约）、Skill 供应链规则、Token Exchange 开发桩、统一错误体。"""
+"""能力网关测试：两级发现（binding ∩ names、检索契约）、Token Exchange 开发桩、统一错误体。"""
 
 from fastapi.testclient import TestClient
 from gateway_testkit import Upstream
@@ -41,16 +41,6 @@ def test_search_contract_shape_and_policy_hint(up: Upstream):
     r2 = c.post("/capabilities/search", json={"query": "关闭 工单", "agent_id": "demo"}).json()
     hit = next(t for t in r2["items"] if t["name"] == "ticket.close_batch")
     assert hit["decision"] == "require_approval"
-
-
-def test_skill_store_enforces_supply_chain_rules():
-    """缺评测集、缺签名或扫描未通过均按业务规则 409 拒绝（{detail, code}）；齐全时 201。"""
-    base = {"name": "s", "version": "1.0.0", "owner": "o", "package_uri": "s3://x", "signature": "sig", "scan_passed": True}
-    rejects = [{"eval_dataset_ref": None}, {"signature": "", "eval_dataset_ref": "ds1"}, {"scan_passed": False, "eval_dataset_ref": "ds1"}]
-    for bad in rejects:
-        r = c.post("/skills", json=base | bad)
-        assert r.status_code == 409 and isinstance(r.json()["detail"], str) and r.json()["code"]
-    assert c.post("/skills", json=base | {"eval_dataset_ref": "ds1"}).status_code == 201
 
 
 def test_unknown_route_uses_error_detail():

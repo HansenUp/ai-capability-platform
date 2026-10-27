@@ -6,20 +6,23 @@ with an operator identity; every write is audited.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Annotated, Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_contract import RiskLevel, capability_tier
-from runtime import llm
+from runtime import gateway_client, llm
 from runtime.api.auth import Principal, require_admin
-from runtime.api.views import ErrorDetail
+from runtime.api.views import ApiError, ErrorDetail
 from runtime.assemble.assembler import LOCAL_TOOLS, load_skills, skills_digest
 from runtime.config import settings
-from runtime.guard.hooks import validate_hooks_config
+from runtime.context import compact
+from runtime.guard.hooks import parse_hooks, validate_hooks_config
 from runtime.harness import registry
 from runtime.loop import discovery, runner
 from runtime.observe import audit
@@ -110,7 +113,13 @@ async def publish(
     6) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
        harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值；
     7) discovery 配置闸门（S8.2）——{enabled, scope?, max_tools?} 须合规；开启后运行期可能动态加入高风险写工具，
-       按声明了高风险写处理（须 L2，harness 持有循环的还须在白名单内）。
+       按声明了高风险写处理（须 L2，harness 持有循环的还须在白名单内）；
+    8) S9：parallel_tool_calls 须为布尔值，开启时所选 harness 须声明支持（claude-sdk 不支持，D155）；context（上下文压缩，
+       DEF-2）须合规；用到 llm 摘要（thinking_summary llm 模式、context.compaction=llm）时摘要别名须在模型网关上存在（D151）；
+    9) Skill 锁（S9 D143，契约 ②）——TOOL_DISPATCH=gateway 时经能力网关 POST /skills/resolve 校验声明的 Skill（listed、同租户、
+       声明能力 ⊆ Agent 工具 ∪ 发现范围）并冻结 skills_lock；风险等级以网关判定为准（不再查本地工具表）。网关拒绝 409（带网关
+       错误码），网关不可达 / 应答不合规同样 409（失败关闭）。进程内开发执行器（TOOL_DISPATCH=local）不经网关：不冻结锁，
+       风险等级取本地工具表。
 
     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
     """
@@ -135,13 +144,32 @@ async def publish(
         discovery_problem = discovery.validate_config(cfg.get("discovery"))
         if discovery_problem:
             raise HTTPException(409, f"discovery 配置不合规：{discovery_problem}")
+        if "parallel_tool_calls" in cfg and not isinstance(cfg["parallel_tool_calls"], bool):
+            raise HTTPException(409, "parallel_tool_calls 配置不合规：须为 true / false（是否允许一轮多个工具调用）")
+        try:
+            context_conf = compact.config_of(av)
+        except ValueError as exc:
+            raise HTTPException(409, f"context 配置不合规：{exc}") from None
         await _check_model_alias(av)
+        for alias in _summary_aliases(cfg, context_conf):
+            await _check_alias(av, alias, "summary model alias")
         caps = registry.get(av.harness).capabilities()
         if caps.loop_owner == "harness" and not caps.version.strip():
             raise HTTPException(409, f"无法确定所选 Harness 的版本（harness={caps.name}），不能冻结版本快照；请检查其二进制安装")
+        if cfg.get("parallel_tool_calls") is True and not caps.parallel_tool_calls:
+            raise HTTPException(409, f"所选 Harness 不支持并行工具调用（harness={caps.name}），请关闭 parallel_tool_calls")
         tier = capability_tier(caps)
-        # 高风险写工具从本地工具注册表查风险等级；生产环境应改为向能力网关查询。
-        high_risk = [n for n in cfg.get("tools", []) if n in LOCAL_TOOLS and LOCAL_TOOLS[n].risk_level == RiskLevel.WRITE_HIGH]
+        resolved = await resolve_skills(av, cfg, principal.token if principal else None)
+        if resolved.risk_level is not None:
+            # 风险等级以能力网关的判定为准（Agent 工具 ∪ Skill 声明能力中最高者）
+            high_risk = (
+                [f"Agent 工具 / Skill 声明能力（网关判定 {resolved.risk_level.value}）"]
+                if resolved.risk_level == RiskLevel.WRITE_HIGH
+                else []
+            )
+        else:
+            # 进程内开发执行器：工具来自本地工具注册表，风险等级同样取本地定义
+            high_risk = [n for n in cfg.get("tools", []) if n in LOCAL_TOOLS and LOCAL_TOOLS[n].risk_level == RiskLevel.WRITE_HIGH]
         if discovery.enabled(av):
             high_risk.append(f"{discovery.TOOL_NAME}（动态发现的工具）")
         if high_risk and tier != "L2":
@@ -160,6 +188,7 @@ async def publish(
         av.rollout_percent, av.rollout_allowlist = body.rollout_percent, list(body.rollout_allowlist)
         # 冻结发布快照：技能内容摘要与 harness 版本，供事后核对"同一版本是否仍是同一套行为"。
         av.skills_digest = skills_digest(load_skills(cfg.get("skills", [])))
+        av.skills_lock = resolved.lock
         av.harness_version = caps.version
         row = audit.entry(
             principal,
@@ -170,6 +199,7 @@ async def publish(
             detail={
                 "eval_run_ref": body.eval_run_ref,
                 "skills_digest": av.skills_digest,
+                "skills_lock": av.skills_lock,
                 "harness_version": av.harness_version,
                 "capability_tier": tier,
                 "rollout_percent": body.rollout_percent,
@@ -179,23 +209,93 @@ async def publish(
         s.add(row)
         await s.commit()
     audit.mirror(row)
-    return {"agent_id": agent_id, "version": version, "status": "published", "rollout_percent": body.rollout_percent}
+    out: dict[str, Any] = {"agent_id": agent_id, "version": version, "status": "published", "rollout_percent": body.rollout_percent}
+    if resolved.lock is not None:
+        out["skills_lock"] = resolved.lock
+    return out
 
 
 MODEL_HARNESSES = frozenset({"litellm", "claude-sdk", "goose", "dsh"})  # 经模型网关访问真实模型的 harness
+SKILLS_RESOLVE_TIMEOUT_S = 5.0  # 发布时 /skills/resolve 的超时（秒）
+_LOCK_KEYS = ("name", "version", "manifest_sha256")
+
+
+@dataclass(frozen=True)
+class SkillResolution:
+    """发布时的 Skill 解析结论：lock 为冻结的 skills_lock（None = 未经网关、不冻结），risk_level 为网关判定的最高风险等级
+    （None = 取本地工具表）。"""
+
+    lock: list[dict[str, str]] | None
+    risk_level: RiskLevel | None
+
+
+async def resolve_skills(av: AgentVersion, cfg: dict[str, Any], user_token: str | None = None) -> SkillResolution:
+    """契约 ②：``POST /skills/resolve {agent_id, tenant, skills:[{name,version}], tools, discovery_scope}`` →
+    200 ``{lock:[{name,version,manifest_sha256}], risk_level}`` / 409 ``{detail, code}``。TOOL_DISPATCH=local 时不调用网关。
+    网关拒绝、不可达或应答不合规一律抛 409（失败关闭）。"""
+    if settings.tool_dispatch != "gateway":
+        return SkillResolution(None, None)
+    raw = cfg.get("skills") or []
+    if not isinstance(raw, list) or not all(isinstance(x, dict) and isinstance(x.get("name"), str) and x["name"] for x in raw):
+        raise HTTPException(409, "skills 配置不合规：须为 [{name, version}] 列表")
+    body: dict[str, Any] = {
+        "agent_id": av.agent_id,
+        "tenant": av.tenant_id,
+        "skills": [{"name": x["name"], "version": str(x.get("version") or "")} for x in raw],
+        "tools": [t for t in cfg.get("tools", []) if isinstance(t, str)],
+        "discovery_scope": discovery.scope(av) if discovery.enabled(av) else [],
+    }
+    try:
+        r = await gateway_client.request("POST", "/skills/resolve", user_token=user_token, timeout_s=SKILLS_RESOLVE_TIMEOUT_S, json=body)
+    except httpx.HTTPError as e:
+        raise HTTPException(409, f"capability gateway unreachable; cannot resolve skills ({type(e).__name__})") from None
+    try:
+        data = r.json()
+    except ValueError:
+        data = None
+    if r.status_code == 409 and isinstance(data, dict):
+        code = str(data.get("code") or "SKILL_RESOLVE_REJECTED")
+        raise ApiError(409, code, f"Skill 校验未通过：{data.get('detail') or code}")
+    if r.status_code != 200 or not isinstance(data, dict):
+        raise HTTPException(409, f"capability gateway returned HTTP {r.status_code} for /skills/resolve; publish blocked")
+    lock, risk = data.get("lock"), data.get("risk_level")
+    if (
+        not isinstance(lock, list)
+        or not all(isinstance(e, dict) and all(isinstance(e.get(k), str) and e[k] for k in _LOCK_KEYS) for e in lock)
+        or risk not in {r.value for r in RiskLevel}
+        or sorted((e["name"], e["version"]) for e in lock) != sorted((s["name"], s["version"]) for s in body["skills"])
+    ):
+        raise HTTPException(409, "capability gateway returned a malformed /skills/resolve response; publish blocked")
+    return SkillResolution([{k: e[k] for k in _LOCK_KEYS} for e in lock], RiskLevel(risk))
+
+
+def _summary_aliases(cfg: dict[str, Any], context_conf: compact.ContextConfig) -> list[str]:
+    """快照中会用到的 llm 摘要别名（thinking_summary 的 llm 模式、context.compaction=llm），去重保序。"""
+    out: list[str] = []
+    for spec in parse_hooks(cfg.get("hooks")):
+        if spec.name == "thinking_summary" and spec.params.get("mode") == "llm":
+            out.append(str(spec.params.get("model_alias") or settings.thinking_summary_model_alias))
+    if context_conf.method == "llm":
+        out.append(context_conf.summary_model_alias)
+    return list(dict.fromkeys(out))
 
 
 async def _check_model_alias(av: AgentVersion) -> None:
     """受控模型出口（S4.8）：真实模型 harness 的版本只能绑定模型网关上已登记的别名——模型访问只能经网关，
     不能用未登记的别名绕过网关的模型清单与配额。网关不可达时同样拒绝发布（fail closed）。"""
+    await _check_alias(av, av.model_alias, "model alias")
+
+
+async def _check_alias(av: AgentVersion, alias: str, what: str) -> None:
+    """别名须在模型网关上已登记（mock 等不经模型网关的 harness、PUBLISH_CHECK_MODEL_ALIAS=false 时不校验）。"""
     if not settings.publish_check_model_alias or (av.harness or settings.harness) not in MODEL_HARNESSES:
         return
     try:
-        await llm.get_client().resolve_alias(av.model_alias)
+        await llm.get_client().resolve_alias(alias)
     except llm.UnknownModelAlias:
-        raise HTTPException(409, f"model alias '{av.model_alias}' is not registered on the model gateway") from None
+        raise HTTPException(409, f"{what} '{alias}' is not registered on the model gateway") from None
     except llm.LLMError:
-        raise HTTPException(409, "model gateway unavailable; cannot verify model alias") from None
+        raise HTTPException(409, f"model gateway unavailable; cannot verify {what}") from None
 
 
 async def _get_version(s: AsyncSession, agent_id: str, version: str, tenant_id: str | None = None) -> AgentVersion:

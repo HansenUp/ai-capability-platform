@@ -124,21 +124,26 @@ def _validate_thinking_summary(params: dict[str, Any]) -> list[str]:
 
 
 async def _thinking_summary(params: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any] | None:
-    """post_model：把本轮思维链生成摘要（覆盖键 thinking_summary）。truncate 截断原文；llm 经现有 LiteLLM 客户端调摘要模型。
-    Run 带机密污点而摘要模型不在 CONFIDENTIAL_MODEL_ALIASES 内时不生成（不下发）。"""
+    """post_model：把本轮思维链生成摘要（覆盖键 thinking_summary）。truncate 截断原文；llm 经现有 LiteLLM 客户端调摘要模型——
+    缺省为非推理摘要别名 THINKING_SUMMARY_MODEL_ALIAS（S5 #7，D151），params.model_alias 可覆盖。Run 的数据等级不被分级矩阵的
+    model 通道准许发给摘要模型时（如机密污点，S9 OPT-4）不生成（不下发）；等级 ≥ internal 的摘要请求关闭网关回退。"""
     thinking = payload.get("thinking") or ""
     if not isinstance(thinking, str) or not thinking:
         return None
     max_chars = int(params.get("max_chars", 200))
     if params.get("mode", "truncate") == "truncate":
         return {"thinking_summary": thinking if len(thinking) <= max_chars else thinking[:max_chars] + "…"}
-    alias = str(params.get("model_alias") or payload.get("model_alias") or "")
-    if "confidential" in (payload.get("taint") or []) and alias not in settings.confidential_model_aliases:
+    from runtime.loop import data_class as dc  # 延迟导入：runtime.loop 包初始化会导入 runner，而 runner 依赖本模块
+
+    alias = str(params.get("model_alias") or settings.thinking_summary_model_alias or payload.get("model_alias") or "")
+    level = dc.run_level(payload.get("taint") or [])
+    if not dc.model_allowed(alias, level, settings):
         return None
     resp = await llm.get_client().chat(
         alias,
         [{"role": "system", "content": SUMMARY_PROMPT.format(n=max_chars)}, {"role": "user", "content": thinking}],
         temperature=0,
+        extra=None if dc.fallbacks_allowed(alias, level, settings) else {"disable_fallbacks": True},
     )
     text = resp.text.strip()[:max_chars]
     return {"thinking_summary": text} if text else None

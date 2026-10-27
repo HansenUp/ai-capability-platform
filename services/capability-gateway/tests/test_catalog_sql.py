@@ -1,4 +1,5 @@
-"""目录存储：MemoryCatalog 与 SqlCatalog（Alembic 0001 建表）行为一致——CRUD、同租户重名冲突、绑定、outbox、连接器版本与探活。
+"""目录存储：MemoryCatalog 与 SqlCatalog（Alembic 0001～0003 建表）行为一致——CRUD、同租户重名冲突、绑定、outbox、连接器版本与探活；
+Skill 仓储（MemorySkillRepo 与 SqlSkillRepo）：名称归属、版本不可变、row_version 比较并交换、事件。
 
 SQL 后端默认用 SQLite 文件跑；设置 GATEWAY_TEST_DATABASE_URL（如 mysql+asyncmy://root:root@localhost:3316/ai_gateway_test，
 库需已存在）时同时对 MySQL 运行（会删除该库中的 cg_* 表）。
@@ -16,8 +17,9 @@ from alembic.migration import MigrationContext
 from sqlalchemy import text
 
 from capability_gateway.catalog import Catalog, CatalogConflict, ConnectorTool, ConnectorVersion, MemoryCatalog
-from capability_gateway.db import VERSION_TABLE, Base, SqlCatalog
+from capability_gateway.db import VERSION_TABLE, Base, SqlCatalog, SqlSkillRepo
 from capability_gateway.registry import Binding, Capability
+from capability_gateway.skill_repo import MemorySkillRepo, SkillConflict, SkillEvent, SkillRepo, SkillVersion
 
 BACKENDS = ["memory", "sqlite"] + (["mysql"] if os.environ.get("GATEWAY_TEST_DATABASE_URL") else [])
 
@@ -26,7 +28,8 @@ async def _sql(url: str) -> SqlCatalog:
     cat = SqlCatalog(url)
     if cat.engine.dialect.name == "mysql":
         async with cat.engine.begin() as conn:
-            for t in ("cg_outbox", "cg_connector_tool", "cg_connector", "cg_agent_binding", "cg_capability", VERSION_TABLE):
+            tables = ("cg_skill_event", "cg_skill_version", "cg_skill", "cg_outbox", "cg_connector_tool", "cg_connector")
+            for t in (*tables, "cg_agent_binding", "cg_capability", VERSION_TABLE):
                 await conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
     await cat.init()
     return cat
@@ -106,7 +109,7 @@ async def test_connector_versions_and_probe_state(cat: Catalog) -> None:
 
 
 async def test_migration_matches_models(tmp_path: Path) -> None:
-    """0001～0002 迁移建出的 schema 与 ORM 模型一致（autogenerate 无差异），版本表为 cg_alembic_version。"""
+    """0001～0003 迁移建出的 schema 与 ORM 模型一致（autogenerate 无差异），版本表为 cg_alembic_version。"""
     cat = await _sql(f"sqlite+aiosqlite:///{tmp_path / 'm.db'}")
     try:
         async with cat.engine.connect() as conn:
@@ -117,6 +120,44 @@ async def test_migration_matches_models(tmp_path: Path) -> None:
 
             assert await conn.run_sync(diff) == []
             q = text(f"SELECT version_num FROM {VERSION_TABLE}")  # noqa: S608 —— 常量表名
-            assert (await conn.execute(q)).scalar() == "0002"
+            assert (await conn.execute(q)).scalar() == "0003"
     finally:
         await cat.close()
+
+
+def _skill_repo(cat: Catalog) -> SkillRepo:
+    return SqlSkillRepo(cat.session) if isinstance(cat, SqlCatalog) else MemorySkillRepo()
+
+
+async def test_skill_repo_versions_are_immutable_and_cas(cat: Catalog) -> None:
+    repo = _skill_repo(cat)
+    rec = SkillVersion(
+        name="s1",
+        version="1.0.0",
+        tenant="t1",
+        status="submitted",
+        manifest={"files": []},
+        source_key="k",
+        source_sha256="0" * 64,
+        submitted_by="frank",
+    )
+    await repo.create(rec, SkillEvent(name="s1", version="1.0.0", event="submitted", actor="frank"))
+    with pytest.raises(SkillConflict) as e:
+        await repo.create(rec, SkillEvent(name="s1", version="1.0.0", event="submitted"))
+    assert e.value.code == "version_exists"
+    with pytest.raises(SkillConflict) as e:
+        await repo.create(rec.model_copy(update={"version": "2.0.0", "tenant": "t2"}), SkillEvent(name="s1", version="2.0.0", event="x"))
+    assert e.value.code == "name_taken"
+    got = await repo.get("s1", "1.0.0")
+    assert got is not None and got.row_version == 1 and got.created_at.tzinfo is not None
+    saved = await repo.save(
+        got.model_copy(update={"status": "scanned", "scan_report": {"passed": True}}),
+        [SkillEvent(name="s1", version="1.0.0", event="scanned", actor="system:scanner", detail={"blocking": []})],
+    )
+    assert saved.status == "scanned" and saved.row_version == 2 and saved.scan_report == {"passed": True}
+    with pytest.raises(SkillConflict) as e:  # 旧 row_version 写入失败（并发更新）
+        await repo.save(got.model_copy(update={"status": "scan_failed"}), [])
+    assert e.value.code == "concurrent_update"
+    assert [x.event for x in await repo.events("s1", "1.0.0")] == ["submitted", "scanned"]
+    assert [r.version for r in await repo.list(statuses=["scanned"], tenant="t1")] == ["1.0.0"]
+    assert await repo.list(statuses=["listed"]) == [] and await repo.list(tenant="t2") == []

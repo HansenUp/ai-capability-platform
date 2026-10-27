@@ -1,0 +1,16 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>Synthetic business host</title></head><body>
+<h1>业务系统纯替身 · 只读Run嵌入</h1><p id="status">正在读取</p><ol id="events"></ol>
+<script type="module">
+import { RuntimeRunClient } from '@ai-platform/sdk-web/run-client';
+import { mountReadonlyRun } from '../../../../packages/sdk-web/examples/readonly-run.ts';
+const tokens = await (await fetch('/synthetic-tokens')).json();
+const client = new RuntimeRunClient(async () => ({ Authorization: `Bearer ${tokens.alice}` }));
+const id = new URL(location.href).searchParams.get('run');
+const status = document.querySelector('#status'), list = document.querySelector('#events');
+function append(event) { const item = document.createElement('li'); item.textContent = `${event.seq} · ${event.type}`; list.append(item); }
+const view = mountReadonlyRun(client, id, {
+  snapshot(run, events) { status.textContent = `Run ${run.run_id} · ${run.state}`; events.forEach(append); },
+  event: append, error() { status.textContent = '只读请求失败，请手动重新认证或定位'; },
+});
+window.addEventListener('pagehide', () => view.close(), { once: true });
+</script></body></html>

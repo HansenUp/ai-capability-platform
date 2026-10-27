@@ -32,6 +32,7 @@ from typing import Any, Literal
 import httpx
 
 from ai_contract import ToolSpec
+from runtime import net
 from runtime.config import settings
 
 CHAT_PATH = "/v1/chat/completions"  # OpenAI 兼容的对话补全接口
@@ -317,7 +318,7 @@ class LLMClient:
 
     def _http(self) -> httpx.AsyncClient:
         """构造一次性的 httpx 客户端（Bearer 鉴权、统一超时、可注入传输层）。"""
-        return httpx.AsyncClient(
+        return net.client(
             base_url=self.base_url,
             headers={"Authorization": f"Bearer {self.api_key}"},
             timeout=httpx.Timeout(self.timeout_s),
@@ -537,6 +538,8 @@ def to_openai_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     - `{"role":"assistant","tool_use":{call_id,name,input}}` → assistant 消息的 tool_calls；
       若紧邻的前一条是 assistant 文本（或已带 tool_calls 的 assistant），合并为同一条消息；
+    - `{"role":"assistant","tool_uses":[{call_id,name,input}, ...]}`（同批并行调用，Contract V1.4）→ 同一条 assistant 消息的
+      多个 tool_calls（按顺序），合并规则同上；
     - `{"role":"tool","call_id","content"}` → `{"role":"tool","tool_call_id","content": 字符串}`；
     - system / user / assistant 文本原样（浅拷贝，不修改入参）。
 
@@ -547,22 +550,24 @@ def to_openai_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for m in history:
         role = m.get("role")
-        if role == "assistant" and isinstance(m.get("tool_use"), dict):
-            tu = m["tool_use"]
-            call_id = str(tu.get("call_id"))
-            call = {
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": to_openai_tool_name(str(tu.get("name"))),
-                    "arguments": json.dumps(tu.get("input") or {}, ensure_ascii=False),
-                },
-            }
+        uses = [m["tool_use"]] if isinstance(m.get("tool_use"), dict) else m.get("tool_uses")
+        if role == "assistant" and isinstance(uses, list) and uses and all(isinstance(u, dict) for u in uses):
+            calls = [
+                {
+                    "id": str(tu.get("call_id")),
+                    "type": "function",
+                    "function": {
+                        "name": to_openai_tool_name(str(tu.get("name"))),
+                        "arguments": json.dumps(tu.get("input") or {}, ensure_ascii=False),
+                    },
+                }
+                for tu in uses
+            ]
             prev = out[-1] if out else None
             if prev is not None and prev.get("role") == "assistant" and (isinstance(prev.get("content"), str) or "tool_calls" in prev):
-                prev.setdefault("tool_calls", []).append(call)
+                prev.setdefault("tool_calls", []).extend(calls)
             else:
-                prev = {"role": "assistant", "content": None, "tool_calls": [call]}
+                prev = {"role": "assistant", "content": None, "tool_calls": calls}
                 out.append(prev)
             thought = m.get("reasoning")
             if isinstance(thought, str) and thought and "reasoning_content" not in prev:

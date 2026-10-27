@@ -1,9 +1,10 @@
 """Tool gate. Fixed decision order:
 hooks → deny rules → policy engine (Cedar service) → risk level → approval → idempotency key → sandbox level.
-Default is deny. Egress allowlist and data-classification taint are applied as part of the decision.
+Default is deny. Data-classification taint is applied as part of the decision; egress is enforced by runtime.net.
 （工具闸口：固定判定顺序为 hooks → 红线拒绝规则 → 策略引擎（Cedar 服务）→ 风险等级 →
-审批 → 幂等键 → 沙箱级别。默认拒绝（default deny）。出站白名单与数据分类污点
-（data-classification taint）传播是判定逻辑的一部分，用于收紧对外发送类工具。
+审批 → 幂等键 → 沙箱级别。默认拒绝（default deny）。数据分类污点
+（data-classification taint）传播是判定逻辑的一部分，用于收紧对外发送类工具。出站白名单（S9.6）由统一出站客户端
+runtime.net 按 scheme + host + port 精确匹配执行（本模块原有的前缀匹配 egress_allowed 无调用方且可被绕过，已删除）。
 注意：hooks 环节由平台统一执行（S5，runtime.guard.hooks）：工具代理（loop.toolbroker.handle_tool）在本模块 evaluate()
 之前执行 pre_tool 链，拒绝即不进闸口；改写后的 effective_input 才是送进 evaluate() 的入参。
 本模块实现的是 deny → policy → risk → approval → idempotency → sandbox 这几步。
@@ -24,6 +25,7 @@ import httpx
 import jwt
 
 from ai_contract import RiskLevel, SandboxLevel, ToolSpec
+from runtime import net
 from runtime.config import settings
 
 Decision = Literal["allow", "deny", "require_approval"]  # 闸口最终决策的三种取值
@@ -132,7 +134,7 @@ async def _policy_check(ctx: GateContext, tool: ToolSpec, approved: bool) -> tup
     body = {"requests": [policy_request(ctx, tool, approved)]}
     try:
         headers = {POLICY_TOKEN_HEADER: settings.policy_service_token} if settings.policy_service_token else {}
-        async with httpx.AsyncClient(timeout=POLICY_TIMEOUT_S, transport=_policy_transport) as c:
+        async with net.client(timeout=POLICY_TIMEOUT_S, transport=_policy_transport) as c:
             r = await c.post(f"{settings.policy_url.rstrip('/')}/authz/check-batch", json=body, headers=headers)
         if r.status_code != 200:
             return "deny", POLICY_UNAVAILABLE, POLICY_UNAVAILABLE
@@ -222,11 +224,3 @@ def idempotency_key(ctx: GateContext, call_id: str, tool_input: dict[str, Any]) 
     if len(key) > IDEMPOTENCY_KEY_MAX:
         key = f"{scope}:{uuid.uuid5(uuid.NAMESPACE_URL, call_id).hex[:16]}:{digest}"[:IDEMPOTENCY_KEY_MAX]
     return key
-
-
-def egress_allowed(url: str) -> bool:
-    """Only registered MCP endpoints, the model gateway and explicit allowlist entries may be reached.
-    （只有已注册的 MCP 端点、模型网关以及显式配置的白名单条目才允许被访问；其余一律拒绝出站。）
-    """
-    allowed = (settings.model_gateway_url, settings.capability_gateway_url, settings.policy_url, *settings.egress_allowlist)
-    return any(url.startswith(a) for a in allowed if a)

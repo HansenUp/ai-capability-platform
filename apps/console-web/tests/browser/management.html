@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>Management component fixture</title></head><body>
+<button id="unmount">卸载测试组件</button><button id="remount">重新挂载测试组件</button><div id="component"></div>
+<script type="module">
+import { createApp } from "vue";
+import Agents from "../../src/views/Agents.vue";
+import Nodes from "../../src/views/Nodes.vue";
+import Operations from "../../src/views/Operations.vue";
+import Runs from "../../src/views/Runs.vue";
+import Directory from "../../src/views/Directory.vue";
+import Skills from "../../src/views/Skills.vue";
+const view = new URLSearchParams(location.search).get("view");
+const components = { agents: Agents, nodes: Nodes, operations: Operations, runs: Runs, directory: Directory, skills: Skills };
+if (!Object.hasOwn(components, view)) throw new Error("Unsupported component fixture");
+let app;
+function mount() { if (app) return; app = createApp(components[view]); app.mount("#component"); }
+document.querySelector("#unmount").addEventListener("click", () => { app?.unmount(); app = null; });
+document.querySelector("#remount").addEventListener("click", mount);
+mount();
+</script></body></html>

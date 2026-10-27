@@ -218,17 +218,23 @@ def openai_to_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if role == "assistant":
             if isinstance(m.get("content"), str) and m["content"]:
                 out.append({"role": "assistant", "content": m["content"]})
-            for k, tc in enumerate(m.get("tool_calls") or []):
-                fn = tc.get("function") or {}
-                msg: dict[str, Any] = {
-                    "role": "assistant",
-                    "tool_use": {
-                        "call_id": tc.get("id"),
-                        "name": str(fn.get("name") or "").replace("__", "."),
-                        "input": json.loads(fn.get("arguments") or "{}"),
-                    },
+            uses = [
+                {
+                    "call_id": tc.get("id"),
+                    "name": str((tc.get("function") or {}).get("name") or "").replace("__", "."),
+                    "input": json.loads((tc.get("function") or {}).get("arguments") or "{}"),
                 }
-                if k == 0 and m.get("reasoning_content"):
+                for tc in m.get("tool_calls") or []
+            ]
+            if len(uses) > 1:
+                # 同批并行调用（Contract V1.4）：平台历史中为一条 tool_uses 消息（与 invariant.rebuild_messages 同形）
+                batch: dict[str, Any] = {"role": "assistant", "tool_uses": uses}
+                if m.get("reasoning_content"):
+                    batch["reasoning"] = m["reasoning_content"]
+                out.append(batch)
+            elif uses:
+                msg: dict[str, Any] = {"role": "assistant", "tool_use": uses[0]}
+                if m.get("reasoning_content"):
                     msg["reasoning"] = m["reasoning_content"]
                 out.append(msg)
         elif role == "tool":
@@ -332,7 +338,8 @@ async def litellm_probe_factory(script: ModelScript) -> AsyncIterator[ProbeTarge
 
     def make() -> HarnessAdapter:
         transport = ScriptedGatewayTransport(model)
-        client = LLMClient(base_url="http://probe-gateway", api_key="probe", timeout_s=30, max_retries=0, transport=transport)
+        # 基址取配置的模型网关（出站白名单内，S9.6）：请求实际由脚本化 transport 应答，不出网
+        client = LLMClient(api_key="probe", timeout_s=30, max_retries=0, transport=transport)
         adapter = LiteLLMHarness(client=client)
         transports[id(adapter)] = transport
         return adapter

@@ -58,17 +58,30 @@ from ai_contract import (
     TurnInput,
     UsageEvent,
 )
+from ai_contract.data_class import Level
 from runtime import credentials
 from runtime.assemble.assembler import assemble
 from runtime.config import settings
 from runtime.context import budget as ctx
+from runtime.context import compact
 from runtime.guard.gate import GateContext, principal_attrs
 from runtime.guard.hooks import HookChain, HookConfigError, HookOutcome
 from runtime.harness import registry
 from runtime.loop import active, discovery, user_input
-from runtime.loop.toolbroker import RunCtx, handle_tool, hmac_json, operation_view, record_unknown_result, taint_of
+from runtime.loop import data_class as dc
+from runtime.loop.toolbroker import (
+    BatchItem,
+    RunCtx,
+    handle_batch,
+    handle_tool,
+    hmac_json,
+    operation_view,
+    record_unknown_result,
+    taint_of,
+)
 from runtime.observe import tracing
 from runtime.run import invariant
+from runtime.skills.verify import SkillVerifyError
 from runtime.state.db import AgentVersion, Run, RunInput, SessionLocal
 from runtime.state.eventlog import EventLog, LeaseLost, RunNotFound, claim_new_run, current_fence
 from runtime.worker.settings import worker_settings
@@ -95,6 +108,42 @@ def _harness_version_mismatch(harness: Any, session: SessionHandle, agent: Agent
     if caps is None or caps.loop_owner != "harness" or caps.version == agent.harness_version:
         return None
     return f"harness '{caps.name}' version {caps.version!r} differs from the published snapshot {agent.harness_version!r}"
+
+
+def parallel_enabled(agent: AgentVersion, harness: Any) -> bool:
+    """并行工具调用（S9，D149）：Agent 版本快照 parallel_tool_calls 为 true 且适配器声明支持时才按批处理；默认关。"""
+    return (agent.config or {}).get("parallel_tool_calls") is True and bool(harness.capabilities().parallel_tool_calls)
+
+
+def request_extra(level: Level, alias: str) -> dict[str, Any]:
+    """按 Run 数据等级给模型请求附加的字段（OPT-4，D152）：回退通道不准许时 disable_fallbacks（LiteLLM 1.107 按请求关闭回退），
+    等级 ≥ internal 时网关回调只记元数据（metadata.mask_input / mask_output）。public 且准许回退时为空（请求体不变）。"""
+    extra: dict[str, Any] = {}
+    if not dc.fallbacks_allowed(alias, level, settings):
+        extra["disable_fallbacks"] = True
+    if level >= Level.INTERNAL:
+        extra["metadata"] = {"data_class": level.value, "mask_input": True, "mask_output": True}
+    return extra
+
+
+def _configure_session(harness: Any, session: SessionHandle, parallel: bool, extra: dict[str, Any]) -> None:
+    """把并行开关与按等级附加的请求字段下发给提供 configure_session 的适配器（litellm；不属于 Contract，其他适配器忽略）。"""
+    configure = getattr(harness, "configure_session", None)
+    if callable(configure):
+        configure(session, parallel_tool_calls=parallel, request_extra=extra)
+
+
+def _reconcile_card(unknown: list[dict[str, Any]], operations: dict[str, dict[str, Any] | None]) -> dict[str, Any]:
+    """对账卡 payload：首要字段为日志中最后一个结果未知的调用（与单个调用时一致）；多个（并行批次）时另附 calls[] 列出全部。"""
+    last = unknown[-1]
+    op = operations.get(str(last.get("operation_id")))
+    payload = dict(last) | ({"operation": op} if op else {})
+    if len(unknown) > 1:
+        payload["calls"] = [
+            dict(u) | ({"operation": operations[str(u.get("operation_id"))]} if operations.get(str(u.get("operation_id"))) else {})
+            for u in unknown
+        ]
+    return payload
 
 
 def thinking_visibility(agent: AgentVersion) -> ThinkingVisibility:
@@ -212,9 +261,45 @@ async def create_run(
 
     lease_owner（/v1/messages 内联执行）：同一事务内以该持有者直接置租约（纪元 FIRST_LEASE_EPOCH、有效期 LEASE_TTL_S），
     提交后调用方以 ``lease.hold(run_id, lease_owner, epoch=FIRST_LEASE_EPOCH)`` 接管心跳——reaper / Worker 看不到无租约窗口。"""
+    async with SessionLocal() as s:
+        run_id = await persist_run(
+            s,
+            agent,
+            subject,
+            session_id,
+            actor,
+            rollout,
+            attachments,
+            initial_messages,
+            durable=durable,
+            credential=credential,
+            lease_owner=lease_owner,
+        )
+        await s.commit()
+    return run_id
+
+
+async def persist_run(
+    s: AsyncSession,
+    agent: AgentVersion,
+    subject: str,
+    session_id: str | None,
+    actor: str | None = None,
+    rollout: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    initial_messages: list[dict[str, Any]] | None = None,
+    *,
+    durable: bool = False,
+    credential: str | None = None,
+    lease_owner: str | None = None,
+    run_id: str | None = None,
+    attempt_id: str | None = None,
+    value_hmac: str | None = None,
+    snapshot_hash: str | None = None,
+) -> str:
     if durable and initial_messages is None:
         raise ValueError("durable runs need initial_messages")
-    run_id = "run_" + uuid.uuid4().hex[:20]
+    run_id = run_id or "run_" + uuid.uuid4().hex[:20]
     created: dict[str, Any] = {
         "agent_id": agent.agent_id,
         "agent_version": agent.version,
@@ -228,30 +313,32 @@ async def create_run(
         created["inherited_taint"] = "confidential" if any(a.get("data_class") not in ("public", "internal") for a in attachments) else None
     if initial_messages is not None:
         created[invariant.INITIAL_MESSAGES_HASH] = invariant.message_hash(initial_messages)
-    async with SessionLocal() as s:
-        s.add(
-            Run(
-                run_id=run_id,
-                tenant_id=agent.tenant_id,
-                agent_id=agent.agent_id,
-                agent_version=agent.version,
-                model_alias=agent.model_alias,
-                subject=subject,
-                session_id=session_id,
-                durable=durable,
-            )
+    if attempt_id is not None:
+        if value_hmac is None or snapshot_hash is None:
+            raise ValueError("workbench create requires content and snapshot bindings")
+        created.update(workbench_attempt_id=attempt_id, workbench_value_hmac=value_hmac, workbench_snapshot_hash=snapshot_hash)
+    s.add(
+        Run(
+            run_id=run_id,
+            tenant_id=agent.tenant_id,
+            agent_id=agent.agent_id,
+            agent_version=agent.version,
+            model_alias=agent.model_alias,
+            subject=subject,
+            session_id=session_id,
+            durable=durable,
         )
-        await s.flush()
-        await EventLog(s).append(run_id, RunEventType.RUN_CREATED, created)
-        if durable:
-            assert initial_messages is not None
-            s.add(RunInput(run_id=run_id, messages=initial_messages, fingerprint=invariant.message_hash(initial_messages)))
-            if credential:
-                await credentials.store_credential(s, run_id, subject, credential)
-        if lease_owner is not None:
-            epoch = await claim_new_run(s, run_id, lease_owner, worker_settings.lease_ttl_s)
-            assert epoch == FIRST_LEASE_EPOCH, epoch
-        await s.commit()
+    )
+    await s.flush()
+    await EventLog(s).append(run_id, RunEventType.RUN_CREATED, created)
+    if durable:
+        assert initial_messages is not None
+        s.add(RunInput(run_id=run_id, messages=initial_messages, fingerprint=invariant.message_hash(initial_messages)))
+        if credential:
+            await credentials.store_credential(s, run_id, subject, credential)
+    if lease_owner is not None:
+        epoch = await claim_new_run(s, run_id, lease_owner, worker_settings.lease_ttl_s)
+        assert epoch == FIRST_LEASE_EPOCH, epoch
     return run_id
 
 
@@ -487,7 +574,17 @@ async def _drive(
     对 claude-sdk 而言这一步会结束后台 CLI 子进程，避免会话泄漏。
     """
     harness = registry.get(agent.harness)
-    assembled = await assemble(agent, subject, credential)
+    try:
+        assembled = await assemble(agent, subject, credential)
+    except SkillVerifyError as exc:
+        # Skill 加载前验签失败 / 已吊销 / 取不到包（S9.5，D144）：失败关闭，Run 以对应错误码失败，不在缺技能的情况下继续跑
+        if await _stop_if_canceled(run_id):
+            yield DoneEvent(run_id=run_id, stop_reason="cancelled")
+            return
+        await _fail(run_id, exc.code, exc.message, "skill verify")
+        yield ErrorEvent(code=exc.code, message=exc.message)
+        yield DoneEvent(run_id=run_id, stop_reason="error")
+        return
     if user_input.enabled(agent):
         # 平台工具 request_user_input（S7 §3）：按版本配置 user_input:true 注入（不改组装器），由工具代理在闸口前拦截
         assembled.tools.append(user_input.TOOL)
@@ -526,9 +623,11 @@ async def _drive(
             principal_tenant=p_tenant,
             roles=p_roles,
             resources=dict(assembled.resources),
+            taint=taint_of("ok", assembled.data_class),
         ),
         history=list(messages),
         workspace=spec.workspace_dir or ".",
+        skills=list(assembled.skills),
     )
 
     # 驱动开始前 Run 已被取消（如后台 Run 刚创建即被取消）：不再打开会话，直接以 cancelled 收尾。
@@ -561,8 +660,9 @@ async def _drive(
     # TOOL_RESULT，说明工具已经开始执行但结果未落盘——它到底有没有产生副作用无从判断。
     # 这种情况下**禁止盲目重试**：必须转人工确认或与下游系统对账，因此把 Run 迁移到
     # input-required 并推一张对账卡片给前端，由人来决定补做还是跳过。）
-    unknown: dict[str, Any] | None = None
-    operation: dict[str, Any] | None = None  # 结果未知调用的写前登记行（t_tool_operation，失租旧 Worker 可能已写回结果）
+    # 只读调用的孤儿 TOOL_EXECUTING 不算结果未知（S9）：作为尚无结果的调用在下面重执行；写调用全部列入对账卡（calls[]）。
+    unknown: list[dict[str, Any]] = []
+    operations: dict[str, dict[str, Any] | None] = {}  # 结果未知调用的写前登记行（t_tool_operation，失租旧 Worker 可能已写回结果）
     mismatch: str | None = None  # 初始消息与 RUN_CREATED 记录的指纹不一致
     async with SessionLocal() as s:
         log = EventLog(s)
@@ -572,22 +672,23 @@ async def _drive(
             invariant.check_initial(prior, initial_messages)
         except invariant.InvariantViolation as exc:
             mismatch = str(exc)
-        unknown = user_input.pending_reconcile(prior)
-        if unknown is not None and unknown.get("operation_id"):
-            op = await log.get_operation(unknown["operation_id"])
-            operation = operation_view(op) if op is not None else None
-        if unknown is not None and mismatch is None:
+        unknown = user_input.pending_reconciles(prior)
+        for u in unknown:
+            if u.get("operation_id"):
+                op = await log.get_operation(u["operation_id"])
+                operations[str(u["operation_id"])] = operation_view(op) if op is not None else None
+        if unknown and mismatch is None:
             await _bind_trace(s, run_id, rs)
-            await record_unknown_result(log, run_id, unknown)
+            await record_unknown_result(log, run_id, _reconcile_card(unknown, {}))
             await s.commit()
     if mismatch is not None:
         await _fail(run_id, "INVARIANT_VIOLATION", mismatch, "invariant")
         yield ErrorEvent(code="INVARIANT_VIOLATION", message=mismatch)
         yield DoneEvent(run_id=run_id, stop_reason="error")
         return
-    if unknown is not None:
+    if unknown:
         # 对账卡附写前登记的状态（接管场景：失租旧 Worker 可能已执行完成并写回结果指纹，发起人据此一键确认）
-        yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=unknown | ({"operation": operation} if operation else {}))
+        yield CardEvent(card_type=CardType.RECONCILIATION_REQUIRED, payload=_reconcile_card(unknown, operations))
         yield DoneEvent(run_id=run_id, stop_reason="awaiting")
         return
 
@@ -596,6 +697,7 @@ async def _drive(
         # ---- open or resume the session from the event log ----
         # （从事件日志判断本次是新开会话还是需要重放续跑；同时找出可能存在的挂起中工具调用。）
         pending_call: ToolUseEvent | None = None
+        pending_batch: list[BatchItem] = []  # 续跑时同批中尚无结果的调用（并行批次，按 index 处理）
         async with SessionLocal() as s:
             log = EventLog(s)
             prior = await log.list(run_id)
@@ -612,12 +714,18 @@ async def _drive(
             rc.gate.taint |= _replayed_taint(prior, rc.tools_by_name)
             resulted = {e.payload["call_id"] for e in prior if e.type == RunEventType.TOOL_RESULT}
             for e in prior:
-                # 找到"已请求但尚无结果"的工具调用：这是上次执行被挂起（等待审批）的位置，
+                # 找到"已请求但尚无结果"的工具调用：这是上次执行被挂起（等待审批 / 补充输入 / 对账）的位置，
                 # 续跑时需要先完成它，而不是让 harness 重新决策。
                 if e.type == RunEventType.TOOL_REQUESTED and e.payload["call_id"] not in resulted:
                     # pre_tool 改写过入参时按 effective_input 续跑（审批指纹也是按它算的）；重放不重跑 hook。
                     effective = e.payload["effective_input"] if "effective_input" in e.payload else e.payload.get("input", {})
                     pending_call = ToolUseEvent(call_id=e.payload["call_id"], tool_name=e.payload["tool"], input=effective)
+                    batch = e.payload.get("batch")
+                    if isinstance(batch, dict):
+                        pending_batch = [it for it in pending_batch if it.batch.get("id") == batch.get("id")]
+                        pending_batch.append(BatchItem(pending_call, batch))
+                    else:
+                        pending_batch = []
             replay = any(e.type in (RunEventType.TOOL_REQUESTED, RunEventType.MODEL_RESPONSE) for e in prior)
             try:
                 if replay:
@@ -663,7 +771,15 @@ async def _drive(
             await log.append(run_id, RunEventType.CONTEXT_ASSEMBLED, plan.report() | assembled.report)
             await s.commit()
 
-        if pending_call is not None:  # complete the interrupted (now approved) call before asking the harness again
+        if pending_batch:  # 续跑同批中尚无结果的调用（审批通过 / 对账处置后 / 只读孤儿重执行），按批语义处理
+            with tracing.tool_span("batch", str(pending_batch[0].batch.get("id")), parent=rs) as tspan:
+                async for ev in handle_batch(rc, pending_batch, already_logged=True):
+                    tracing.record_tool_event(tspan, ev)
+                    yield ev
+                tracing.record_hooks(tspan, rc.hook_records)
+            if rc.suspended:
+                return
+        elif pending_call is not None:  # complete the interrupted (now approved) call before asking the harness again
             # （先补完此前被打断（现已获批准）的工具调用，再重新向 harness 请求下一轮。
             # already_logged=True：TOOL_REQUESTED（含 reasoning）与历史中的 tool_use 消息均已由重放恢复，不重复写。）
             with tracing.tool_span(pending_call.tool_name, pending_call.call_id, parent=rs) as tspan:
@@ -679,15 +795,17 @@ async def _drive(
         # 适配器侧的 hook 结论随本轮 MODEL_RESPONSE 的 hooks 记录（source=adapter）。
         adapter_hook_records: list[dict[str, Any]] = []
         hooks = chain.hookset(harness.capabilities().internal_hook_points, adapter_hook_records)
+        parallel = parallel_enabled(agent, harness)
         for _round in range(max_rounds):
             # 每轮开始前检查 Run 是否已被取消 API 抢先置为 canceled（例如上一轮工具执行期间被取消）。
             if await _stop_if_canceled(run_id):
                 yield DoneEvent(run_id=run_id, stop_reason="cancelled")
                 return
-            # 数据分级矩阵（S4.9）：Run 已带 confidential 污点而模型不在机密数据允许清单内——不再把上下文发给该模型，
-            # 以失败收尾（宁可中断，不让机密数据流向未授权的模型）。
-            if "confidential" in rc.gate.taint and agent.model_alias not in settings.confidential_model_aliases:
-                msg = f"model '{agent.model_alias}' is not authorized for confidential data"
+            # 数据分级矩阵（S4.9 → S9 OPT-4 六通道，D152）：Run 的数据等级（污点中最高者）不被矩阵 model 通道准许发给该模型别名——
+            # 不再把上下文发给该模型，以失败收尾（宁可中断，不让数据流向未授权的模型）。
+            level = dc.run_level(rc.gate.taint)
+            if not dc.model_allowed(agent.model_alias, level, settings):
+                msg = f"model '{agent.model_alias}' is not authorized for {level.value} data"
                 async with SessionLocal() as s:
                     log = EventLog(s)
                     await log.append(run_id, RunEventType.RUN_ERROR, {"code": "DATA_CLASS_MODEL_BLOCKED", "message": msg})
@@ -696,6 +814,28 @@ async def _drive(
                 yield ErrorEvent(code="DATA_CLASS_MODEL_BLOCKED", message=msg)
                 yield DoneEvent(run_id=run_id, stop_reason="error")
                 return
+            # 上下文压缩（DEF-2，D150）：history 超预算时在 MODEL_REQUEST 之前按边界压缩并事件化（CONTEXT_COMPACTED），
+            # 重建与续跑据此得到同一份历史；摘要请求按本 Run 数据等级判定与附加字段。
+            try:
+                compaction = await compact.plan_compaction(
+                    rc.history,
+                    agent,
+                    level,
+                    model_allowed=lambda alias, lv: dc.model_allowed(alias, lv, settings),
+                    request_extra=request_extra(level, compact.config_of(agent, settings).summary_model_alias),
+                    cfg=settings,
+                )
+            except ValueError as exc:
+                await _fail(run_id, "CONTEXT_CONFIG_INVALID", str(exc), "context config")
+                yield ErrorEvent(code="CONTEXT_CONFIG_INVALID", message=str(exc))
+                yield DoneEvent(run_id=run_id, stop_reason="error")
+                return
+            if compaction is not None:
+                async with SessionLocal() as s:
+                    await EventLog(s).append(run_id, RunEventType.CONTEXT_COMPACTED, compaction.payload())
+                    await s.commit()
+                rc.history = compaction.apply(rc.history)
+            _configure_session(harness, session, parallel, request_extra(level, agent.model_alias))
             pre_model: HookOutcome | None = None
             async with SessionLocal() as s:
                 log = EventLog(s)
@@ -737,7 +877,7 @@ async def _drive(
                 yield DoneEvent(run_id=run_id, stop_reason="error")
                 return
 
-            tool_call: ToolUseEvent | None = None
+            tool_calls: list[ToolUseEvent] = []  # 本轮模型请求的工具调用（未开启并行时至多一个）
             text_parts: list[str] = []
             thinking_parts: list[str] = []
             harness_stop: str = "end_turn"  # harness 本轮的停止原因（DoneEvent.stop_reason），决定 Run 终态
@@ -784,7 +924,10 @@ async def _drive(
                                     else:
                                         yield shown
                             elif isinstance(ev, ToolUseEvent):
-                                tool_call = ev
+                                if not parallel:
+                                    tool_calls = [ev]  # 未开启并行：每轮只处理一个工具调用（同此前：以最后一个为准）
+                                elif all(t.call_id != ev.call_id for t in tool_calls):
+                                    tool_calls.append(ev)
                                 if held is not None:
                                     held.append(ev)
                                 else:
@@ -823,7 +966,12 @@ async def _drive(
                                             "model_alias": agent.model_alias,
                                             "text": payload["text"],
                                             "thinking": payload.get("thinking", ""),
-                                            "tool_call": tool_call.model_dump(mode="json") if tool_call else None,
+                                            "tool_call": tool_calls[0].model_dump(mode="json") if tool_calls else None,
+                                            **(
+                                                {"tool_calls": [t.model_dump(mode="json") for t in tool_calls]}
+                                                if len(tool_calls) > 1
+                                                else {}
+                                            ),
                                             "usage": ev.model_dump(mode="json"),
                                             "taint": sorted(rc.gate.taint),
                                         },
@@ -878,8 +1026,11 @@ async def _drive(
                     # 否则 Run 会卡在 working。只捕获 Exception：GeneratorExit（客户端断开）与 CancelledError 照常上抛。
                     harness_exc = exc
                     tracing.mark_error(mspan, exc)
-                # ADR-0010：Run 已带 confidential 污点时，模型轮次只记元数据，不记提示词/补全原文。
-                tracing.record_model_content(mspan, prompt, "".join(text_parts), redact="confidential" in rc.gate.taint)
+                # ADR-0010 / OPT-4：观测通道按 Run 数据等级——public 记原文，internal 脱敏（redact_pii）后记录，
+                # confidential（或矩阵未准许）只记元数据，不记提示词/补全原文。
+                tracing.record_model_content(
+                    mspan, prompt, "".join(text_parts), mode=dc.observe_mode(dc.run_level(rc.gate.taint), settings)
+                )
 
             if await _stop_if_canceled(run_id):
                 # 本轮进行期间 Run 被取消 API 抢先置为 canceled（取消 API 同时中断了 harness）：
@@ -903,7 +1054,7 @@ async def _drive(
                 yield ErrorEvent(code="HOOK_DENIED", message=msg)
                 yield DoneEvent(run_id=run_id, stop_reason="error")
                 return
-            if harness_stop == "error" or (harness_error is not None and tool_call is None):
+            if harness_stop == "error" or (harness_error is not None and not tool_calls):
                 # harness 以错误收尾（或报错且未请求工具）：Run 判为失败，不能落成 completed。
                 code = harness_error.code if harness_error is not None else "HARNESS_ERROR"
                 async with SessionLocal() as s:
@@ -931,7 +1082,7 @@ async def _drive(
                     await s.commit()
                 yield DoneEvent(run_id=run_id, stop_reason="cancelled")
                 return
-            if tool_call is None:
+            if not tool_calls:
                 # 本轮模型没有请求任何工具：视为对话正常结束，Run 迁移到 completed。
                 # 输出因长度上限被截断（max_tokens）时仍视为完成，但停止原因如实记录，便于客户端提示。
                 stop: Literal["end_turn", "max_tokens"] = "max_tokens" if harness_stop == "max_tokens" else "end_turn"
@@ -943,6 +1094,19 @@ async def _drive(
                 yield DoneEvent(run_id=run_id, stop_reason=stop)
                 return
 
+            if len(tool_calls) > 1:
+                # 并行工具调用（S9，D149）：同一轮的多个调用作为一批——逐条过闸口、只读并发、写按序串行、待审批合成一张卡
+                batch_id = uuid.uuid4().hex[:16]
+                items = [BatchItem(t, {"id": batch_id, "index": i, "size": len(tool_calls)}) for i, t in enumerate(tool_calls)]
+                with tracing.tool_span("batch", batch_id, parent=rs) as tspan:
+                    async for ev in handle_batch(rc, items, reasoning="".join(thinking_parts) or None):
+                        tracing.record_tool_event(tspan, ev)
+                        yield ev
+                    tracing.record_hooks(tspan, rc.hook_records)
+                if rc.suspended:
+                    return
+                continue
+            tool_call = tool_calls[0]
             with tracing.tool_span(tool_call.tool_name, tool_call.call_id, parent=rs) as tspan:
                 # 本轮的思维链随工具调用进入可重建历史（tool_use 消息的 reasoning 字段），供需要回传推理的模型使用。
                 async for ev in handle_tool(rc, tool_call, reasoning="".join(thinking_parts) or None):

@@ -8,8 +8,8 @@
 - Token Exchange：`POST /token/exchange` 按 RFC 8693 向 Keycloak 换取 OBO 令牌；
 - 工具分发：`POST /invoke` 以终端用户令牌换取面向连接器的 OBO 令牌，并附网关签发的 act 断言（act.py）后转发；
 - 连接器管理与探活（connectors.py）、写操作规范三处校验（spec.py）；
-- Skill 商店：`/skills`，入库前执行供应链硬规则（签名、静态扫描、评测集）；
-- MCP 数据面（mcp_proxy，开发态候选，GATEWAY_ENV=prod 不挂载，S9 删除）。
+- Skill 商店：`/skills*`（skills.py：服务端扫描、评测复核、双人审批、平台签名、包代理下载、吊销）；
+- 第三方数据面判定回调：`POST /authz/mcp-check`（dataplane_authz.py，全环境挂载；自研 MCP 数据面 mcp_proxy 已于 S9 删除，D153）。
 
 调用方鉴权（契约 3，auth.py）：`Authorization: Bearer <ai-runtime-svc 服务令牌>` + `X-AI-User-Token: <终端用户令牌>`；
 未配置 Keycloak 时为开发态 dev 头。执行者身份不接受客户端自称——act 由服务端依据经过认证的调用方组装。
@@ -32,11 +32,11 @@ import httpx
 from fastapi import Depends, FastAPI, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from capability_gateway import act, auth, config, connectors, errors, policy, search, spec, state
+from capability_gateway import act, auth, config, connectors, dataplane_authz, errors, policy, search, skill_sign, skills, spec, state
 from capability_gateway.auth import Caller, require_gateway_admin, require_runtime_client
 from capability_gateway.catalog import CatalogConflict
 from capability_gateway.embed import get_embedder
-from capability_gateway.errors import ErrorDetail, GatewayError, responses
+from capability_gateway.errors import GatewayError, responses
 from capability_gateway.policy import AgentRef
 from capability_gateway.registry import Binding, Capability
 
@@ -45,9 +45,10 @@ config.check_prod()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """启动：目录初始化（MySQL 迁移）、加载 act 签名密钥、后台 outbox 同步与连接器探活。"""
+    """启动：目录初始化（MySQL 迁移）、加载 act 与 Skill 签名密钥、后台 outbox 同步与连接器探活。"""
     await state.catalog.init()
     act.load_key()
+    skill_sign.load_key()
     indexer = search.Indexer(state.catalog, state.es, get_embedder())
     tasks = [
         asyncio.create_task(indexer.run(config.INDEXER_INTERVAL_S)),
@@ -64,7 +65,6 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="AI Capability Platform · Capability Gateway", version="0.1.0", lifespan=lifespan)
 errors.install(app)
 CallerDep = Annotated[Caller, Depends(require_runtime_client)]
-SKILLS: dict[str, dict[str, Any]] = {}  # Skill 商店（内存），键为 name@version
 AUTH_ERRORS = (401, 403, 503)
 
 
@@ -94,7 +94,7 @@ class SearchIn(BaseModel):
     agent_version: str = Field(default="", max_length=32)
     scope: list[str] | None = Field(default=None, max_length=50)  # 版本快照冻结的 discovery.scope：系统名 / 工具名 / 能力 id
     limit: int = Field(default=5, ge=1, le=20)
-    taint: list[str] = Field(default_factory=list, max_length=20)  # 本次 Run 的数据污点
+    taint: list[str] = Field(default_factory=list, max_length=20)  # 本次 Run 的数据污点（决定查询能否向量化，OPT-4）
     agent_tenant: str | None = Field(default=None, max_length=64)  # Agent 所属租户（缺省取用户租户）
 
 
@@ -115,15 +115,23 @@ class SearchItem(BaseModel):
 
 class SearchOut(BaseModel):
     items: list[SearchItem]
-    degraded: bool  # ES 不可用、退回目录词元打分
+    degraded: bool  # ES / 向量不可用，或数据分级不允许向量化查询：只用词元（BM25）打分
 
 
 @app.post("/capabilities/search", responses=responses(*AUTH_ERRORS))
 async def search_capabilities(body: SearchIn, caller: CallerDep) -> SearchOut:
-    """硬过滤 → BM25 top50 + kNN top50 → RRF(k=60) → 取 3×limit 交策略批量判定（deny 剔除、require_approval 标注）→ 截断 limit。"""
+    """硬过滤 → BM25 top50 + kNN top50 → RRF(k=60) → 取 3×limit 交策略批量判定（deny 剔除、require_approval 标注）→ 截断 limit。
+    taint 的最高数据等级不被矩阵允许交给当前嵌入 provider 时只走 BM25（degraded=true）。"""
     principal = caller.principal()
     ranked = await search.hybrid_search(
-        state.catalog, state.es, get_embedder(), body.query, tenant=principal.tenant, agent_id=body.agent_id, scope=body.scope
+        state.catalog,
+        state.es,
+        get_embedder(),
+        body.query,
+        tenant=principal.tenant,
+        agent_id=body.agent_id,
+        scope=body.scope,
+        taint=body.taint,
     )
     pool = ranked.items[: 3 * body.limit]
     agent = AgentRef(body.agent_id, body.agent_version, body.agent_tenant or principal.tenant)
@@ -436,40 +444,6 @@ async def jwks() -> dict[str, Any]:
     return act.jwks()
 
 
-# ---- Skill 商店（Agent Skills 规范包 + 治理元数据） ----
-class SkillIn(BaseModel):
-    """Skill 上架申请。"""
-
-    name: str
-    version: str
-    owner: str
-    package_uri: str  # 例：s3://...，SKILL.md 目录的签名归档
-    signature: str  # 包签名（必填）
-    capabilities_declared: list[str] = Field(default_factory=list)  # 声明会调用的能力 id
-    risk_level: str = "read"
-    eval_dataset_ref: str | None = None  # 评测集引用（必填）
-    scan_passed: bool = False  # 静态扫描是否通过（必须为 True）
-
-
-@app.post("/skills", status_code=201, responses={409: {"model": ErrorDetail}})
-async def submit_skill(body: SkillIn) -> dict[str, Any]:
-    """上架 Skill；供应链硬规则（签名、静态扫描、评测集）任一不满足即 409 拒绝。"""
-    if not body.signature:
-        raise GatewayError(409, "signature_required", "signature required")
-    if not body.scan_passed:
-        raise GatewayError(409, "scan_required", "static scan must pass before listing")
-    if body.eval_dataset_ref is None:
-        raise GatewayError(409, "eval_dataset_required", "skills must ship an evaluation dataset")
-    SKILLS[f"{body.name}@{body.version}"] = body.model_dump() | {"status": "listed"}
-    return SKILLS[f"{body.name}@{body.version}"]
-
-
-@app.get("/skills")
-async def list_skills() -> list[dict[str, Any]]:
-    """列出已上架 Skill。"""
-    return list(SKILLS.values())
-
-
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     """健康检查。"""
@@ -477,10 +451,5 @@ async def healthz() -> dict[str, str]:
 
 
 app.include_router(connectors.router)
-
-# MCP 数据面（ADR-0005 自研候选）：/mcp/{server} 流式透传 + 第三方数据面的判定回调 /authz/mcp-check。
-# 放在末尾挂载：/mcp/servers 的登记与列表路由先注册、优先匹配。生产不挂载（D133：生产走 /invoke，S9 删除）。
-if config.GATEWAY_ENV != "prod":
-    from capability_gateway import mcp_proxy  # noqa: E402
-
-    app.include_router(mcp_proxy.router)
+app.include_router(skills.router)
+app.include_router(dataplane_authz.router)  # agentgateway 等第三方数据面的判定回调，全环境挂载（prod 必配 GATEWAY_AUTHZ_TOKEN）

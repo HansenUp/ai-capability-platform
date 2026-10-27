@@ -40,6 +40,7 @@ SCORE_NAME = "eval_pass"  # 评测脚本写在每条 Trace 上的通过评分（
 PAGE_LIMIT = 100  # 拉取运行项的分页大小
 MAX_PAGES = 50  # 运行项分页上限（防止异常响应无限翻页）
 FETCH_CONCURRENCY = 8  # 并发拉取 Trace 评分的上限
+EVALUATION_TIMEOUT_S = 30.0
 TRACE_MAX_AGE_S = float(os.environ.get("EVAL_TRACE_MAX_AGE_S", str(6 * 3600)))  # Trace 早于运行项创建时间的最大秒数
 TRACE_SKEW_S = float(os.environ.get("EVAL_TRACE_SKEW_S", "300"))  # Trace 晚于运行项创建时间的容许时钟偏差（秒）
 _transport: httpx.AsyncBaseTransport | None = None  # 测试注入
@@ -66,7 +67,7 @@ def set_transport_for_tests(transport: httpx.AsyncBaseTransport | None) -> None:
 
 def production_problems() -> list[str]:
     """CONSOLE_ENV=prod 的评测闸门基线：返回不满足的条目（空表示通过）。"""
-    problems: list[str] = []
+    problems = configuration_problems()
     if MODE != "langfuse":
         problems.append("CONSOLE_EVAL_GATE 必须为 langfuse（不得信任请求体的 eval_passed）")
     if not DATASETS:
@@ -76,8 +77,26 @@ def production_problems() -> list[str]:
     return problems
 
 
+def configuration_problems() -> list[str]:
+    problems: list[str] = []
+    if MODE not in {"flag", "langfuse"}:
+        problems.append("CONSOLE_EVAL_GATE must be flag or langfuse")
+    if isinstance(MIN_PASS_RATE, bool) or not math.isfinite(MIN_PASS_RATE) or not 0 <= MIN_PASS_RATE <= 1:
+        problems.append("EVAL_MIN_PASS_RATE must be finite and within [0, 1]")
+    if isinstance(MIN_ITEMS, bool) or not isinstance(MIN_ITEMS, int) or MIN_ITEMS < 1:
+        problems.append("EVAL_MIN_ITEMS must be a positive integer")
+    if not math.isfinite(TRACE_MAX_AGE_S) or TRACE_MAX_AGE_S <= 0:
+        problems.append("EVAL_TRACE_MAX_AGE_S must be finite and positive")
+    if not math.isfinite(TRACE_SKEW_S) or TRACE_SKEW_S < 0:
+        problems.append("EVAL_TRACE_SKEW_S must be finite and nonnegative")
+    return problems
+
+
 def validate_for_production() -> None:
     """CONSOLE_ENV=prod 且评测闸门基线不满足时拒绝启动；其他环境不检查。"""
+    invalid = configuration_problems()
+    if invalid:
+        raise RuntimeError("Console 评测闸门配置非法：" + "；".join(invalid))
     if os.environ.get("CONSOLE_ENV", "dev") != "prod":
         return
     problems = production_problems()
@@ -88,6 +107,18 @@ def validate_for_production() -> None:
 def allowed_datasets(agent_id: str) -> list[str]:
     """该 Agent 允许用于发布闸门的数据集名单（未单独配置时取 "*"）。"""
     return DATASETS.get(agent_id, DATASETS.get("*", []))
+
+
+def policy_snapshot(agent_id: str) -> dict[str, Any]:
+    return {
+        "mode": MODE,
+        "min_items": MIN_ITEMS,
+        "min_pass_rate": MIN_PASS_RATE,
+        "trace_max_age_s": TRACE_MAX_AGE_S,
+        "trace_skew_s": TRACE_SKEW_S,
+        "datasets": list(allowed_datasets(agent_id)),
+        "scope": "console_process_environment",
+    }
 
 
 class _Unavailable(Exception):
@@ -103,8 +134,9 @@ def _ts(value: Any) -> float | None:
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return stamp.timestamp() if stamp.tzinfo is not None else None
+    except (ValueError, OverflowError, OSError):
         return None
 
 
@@ -136,19 +168,43 @@ async def _run_items(c: httpx.AsyncClient, run: dict[str, Any], run_name: str) -
     """评测运行的全部运行项：运行详情带 datasetRunItems 时直接用，否则按数据集 id + 运行名分页拉取。"""
     items = run.get("datasetRunItems")
     if isinstance(items, list):
-        return [x for x in items if isinstance(x, dict)]
+        if len(items) > PAGE_LIMIT * MAX_PAGES or any(not isinstance(item, dict) for item in items):
+            raise _Unavailable("Langfuse returned malformed embedded run items")
+        return items
+    if items is not None:
+        raise _Unavailable("Langfuse returned malformed embedded run items")
+    if not isinstance(run.get("datasetId"), str) or not run["datasetId"]:
+        raise _Unavailable("Langfuse paged evaluation has no datasetId")
     out: list[dict[str, Any]] = []
+    declared_pages: int | None = None
     for page in range(1, MAX_PAGES + 1):
         params = {"datasetId": run.get("datasetId"), "runName": run_name, "page": page, "limit": PAGE_LIMIT}
         body = await _get(c, "/api/public/dataset-run-items", params)
         data = body.get("data") if isinstance(body, dict) else None
-        if not isinstance(data, list):
+        if not isinstance(data, list) or len(data) > PAGE_LIMIT:
             raise _Unavailable("Langfuse returned a malformed run item page")
-        out += [x for x in data if isinstance(x, dict)]
-        total_pages = (body.get("meta") or {}).get("totalPages", page)
-        if not data or page >= int(total_pages or page):
-            break
-    return out
+        if any(not isinstance(item, dict) for item in data):
+            raise _Unavailable("Langfuse returned malformed run items")
+        meta = body.get("meta")
+        if meta is not None and not isinstance(meta, dict):
+            raise _Unavailable("Langfuse returned malformed pagination metadata")
+        total_pages = meta.get("totalPages") if isinstance(meta, dict) else None
+        if total_pages is not None and (
+            isinstance(total_pages, bool) or not isinstance(total_pages, int) or total_pages < page or total_pages > MAX_PAGES
+        ):
+            raise _Unavailable("Langfuse pagination is invalid or exceeds the verification limit")
+        if declared_pages is not None and total_pages != declared_pages:
+            raise _Unavailable("Langfuse pagination changed during verification")
+        if total_pages is not None:
+            declared_pages = total_pages
+        if not data:
+            if total_pages is not None and page < total_pages:
+                raise _Unavailable("Langfuse pagination ended before all pages were verified")
+            return out
+        out += data
+        if total_pages is not None and page == total_pages:
+            return out
+    raise _Unavailable("Langfuse pagination exceeds the verification limit; evaluation is incomplete")
 
 
 async def _trace_passed(
@@ -164,13 +220,15 @@ async def _trace_passed(
     ts = _ts(trace.get("timestamp"))
     if window is None or ts is None or not window[0] <= ts <= window[1]:
         return False
-    scores = [s for s in (trace.get("scores") or []) if isinstance(s, dict) and s.get("name") == SCORE_NAME]
+    raw_scores = trace.get("scores")
+    if not isinstance(raw_scores, list):
+        return False
+    scores = [score for score in raw_scores if isinstance(score, dict) and score.get("name") == SCORE_NAME]
     if not scores:
         return False
-    try:
-        return all(float(s.get("value")) == 1.0 for s in scores)
-    except (TypeError, ValueError):
-        return False
+    return all(
+        isinstance(score.get("value"), (int, float)) and not isinstance(score["value"], bool) and score["value"] == 1 for score in scores
+    )
 
 
 async def recompute(c: httpx.AsyncClient, run: dict[str, Any], run_name: str, expect: dict[str, str] | None = None) -> tuple[int, int]:
@@ -182,9 +240,9 @@ async def recompute(c: httpx.AsyncClient, run: dict[str, Any], run_name: str, ex
     created: dict[str, list[float | None]] = {}  # traceId → 引用它的运行项创建时间
     run_created = _ts(run.get("createdAt"))
     for it in items:
-        key = str(it.get("datasetItemId") or "")
-        if not key:
-            continue
+        key = it.get("datasetItemId")
+        if not isinstance(key, str) or not key.strip():
+            raise _Unavailable("Langfuse run item has no valid datasetItemId")
         tid = it.get("traceId") if isinstance(it.get("traceId"), str) and it.get("traceId") else None
         by_item.setdefault(key, []).append(tid)
         if tid is not None:
@@ -207,36 +265,82 @@ async def recompute(c: httpx.AsyncClient, run: dict[str, Any], run_name: str, ex
     return passed, len(by_item)
 
 
-async def check(agent_id: str, version: str, eval_run_ref: str | None, eval_passed: bool | None, tenant: str | None = None) -> str | None:
-    """返回 None 表示通过；否则返回拒绝原因。tenant 为发布所在租户（Trace 的 ai.tenant_id 须一致）。"""
-    if MODE != "langfuse":
-        return None if eval_passed is True else "evaluation must pass (eval_passed=true with eval_run_ref)"
+async def _evaluate(
+    agent_id: str, version: str, eval_run_ref: str | None, eval_passed: bool | None, tenant: str | None = None
+) -> dict[str, Any]:
+    """按发布闸门当前策略重算汇总；不返回 Trace 原文，也不写发布状态。"""
+
+    def result(reason: str | None, status: str = "failed", passed: int | None = None, total: int | None = None) -> dict[str, Any]:
+        return {
+            "status": "passed" if reason is None else status,
+            "reason": reason,
+            "passed_items": passed,
+            "total_items": total,
+            "pass_rate": passed / total if passed is not None and total else None,
+            "source": "langfuse_eval_pass" if MODE == "langfuse" else "development_flag",
+        }
+
+    invalid = configuration_problems()
+    if invalid:
+        return result("invalid evaluation gate configuration: " + "; ".join(invalid), "unavailable")
+    if MODE == "flag":
+        return result(None if eval_passed is True else "evaluation must pass (eval_passed=true with eval_run_ref)", "not_evaluated")
     if not eval_run_ref or not eval_run_ref.startswith("langfuse:") or "/" not in eval_run_ref:
-        return "eval_run_ref must reference a Langfuse dataset run (langfuse:<dataset>/<run>)"
+        return result("eval_run_ref must reference a Langfuse dataset run (langfuse:<dataset>/<run>)", "not_evaluated")
     dataset, run_name = eval_run_ref.removeprefix("langfuse:").split("/", 1)
     if dataset not in allowed_datasets(agent_id):
-        return f"dataset '{dataset}' is not an evaluation dataset configured for agent '{agent_id}' (EVAL_DATASETS)"
+        return result(f"dataset '{dataset}' is not an evaluation dataset configured for agent '{agent_id}' (EVAL_DATASETS)")
     host = os.environ.get("LANGFUSE_HOST", "http://localhost:3000").rstrip("/")
     pk, sk = os.environ.get("LANGFUSE_PUBLIC_KEY", ""), os.environ.get("LANGFUSE_SECRET_KEY", "")
     auth = {"Authorization": "Basic " + base64.b64encode(f"{pk}:{sk}".encode()).decode()}
-    async with httpx.AsyncClient(base_url=host, timeout=10, transport=_transport, headers=auth) as c:
+    async with httpx.AsyncClient(
+        base_url=host, timeout=10, transport=_transport, headers=auth, trust_env=False, follow_redirects=False
+    ) as c:
         try:
             run = await _get(c, f"/api/public/datasets/{quote(dataset, safe='')}/runs/{quote(run_name, safe='')}")
             if not isinstance(run, dict):
-                return "Langfuse returned a malformed evaluation run"
+                return result("Langfuse returned a malformed evaluation run", "unavailable")
             meta = run.get("metadata") or {}
             if not isinstance(meta, dict) or meta.get("agent_id") != agent_id or str(meta.get("agent_version")) != version:
                 got = f"{meta.get('agent_id')}@{meta.get('agent_version')}" if isinstance(meta, dict) else "?"
-                return f"evaluation run is for {got}, not {agent_id}@{version}"
+                return result(f"evaluation run is for {got}, not {agent_id}@{version}")
+            if tenant and meta.get("tenant_id", meta.get("tenant", tenant)) != tenant:
+                return result("evaluation run tenant mismatch")
             expect = {"agent_id": agent_id, "agent_version": version} | ({"tenant_id": tenant} if tenant else {})
             passed, total = await recompute(c, run, run_name, expect)
-        except _Rejected as e:
-            return f"evaluation run rejected: {e}"
+        except _Rejected:
+            return result("evaluation run rejected: trace reused across dataset items")
         except _Unavailable as e:
-            return str(e) if "unavailable" in str(e) else f"evaluation run not verifiable: {e}"
+            reason = str(e) if "unavailable" in str(e) else f"evaluation run not verifiable: {e}"
+            return result(reason, "unavailable")
     if total < MIN_ITEMS:
-        return f"evaluation run covers {total} dataset items, fewer than EVAL_MIN_ITEMS={MIN_ITEMS}"
+        return result(f"evaluation run covers {total} dataset items, fewer than EVAL_MIN_ITEMS={MIN_ITEMS}", passed=passed, total=total)
     rate = passed / total
     if not math.isfinite(rate) or rate < MIN_PASS_RATE:
-        return f"evaluation pass rate {rate:.0%} ({passed}/{total}, recomputed from {SCORE_NAME} scores) is below {MIN_PASS_RATE:.0%}"
-    return None
+        reason = f"evaluation pass rate {rate:.0%} ({passed}/{total}, recomputed from {SCORE_NAME} scores) is below {MIN_PASS_RATE:.0%}"
+        return result(reason, passed=passed, total=total)
+    return result(None, passed=passed, total=total)
+
+
+async def evaluate(
+    agent_id: str, version: str, eval_run_ref: str | None, eval_passed: bool | None, tenant: str | None = None
+) -> dict[str, Any]:
+    """限定完整重算耗时，超时不返回部分统计。"""
+    try:
+        async with asyncio.timeout(EVALUATION_TIMEOUT_S):
+            return await _evaluate(agent_id, version, eval_run_ref, eval_passed, tenant)
+    except TimeoutError:
+        return {
+            "status": "unavailable",
+            "reason": "evaluation verification deadline exceeded",
+            "passed_items": None,
+            "total_items": None,
+            "pass_rate": None,
+            "source": "langfuse_eval_pass" if MODE == "langfuse" else "development_flag",
+        }
+
+
+async def check(agent_id: str, version: str, eval_run_ref: str | None, eval_passed: bool | None, tenant: str | None = None) -> str | None:
+    """发布路径复用同一重算结果；None 通过，否则为失败关闭原因。"""
+    result = await evaluate(agent_id, version, eval_run_ref, eval_passed, tenant)
+    return None if result["reason"] is None else str(result["reason"])

@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>Chat component fixture</title></head><body>
+<button id="unmount">卸载测试组件</button><div id="component"></div>
+<script type="module">
+import { createApp, h } from "vue";
+import Chat from "../../src/views/Chat.vue";
+const app = createApp(Chat);
+app.component("RouterLink", { props: ["to"], setup(props, { slots }) { return () => h("a", { href: props.to }, slots.default?.()); } });
+app.mount("#component");
+document.querySelector("#unmount").addEventListener("click", () => app.unmount());
+</script></body></html>

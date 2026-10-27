@@ -59,18 +59,33 @@ class Worker:
         self.consumer = consumer or lease_mod.new_owner()  # 同时作为租约持有者标识
         self._slots = asyncio.Semaphore(self.ws.concurrency)
         self._tasks: set[asyncio.Task[None]] = set()
+        self._resumed = asyncio.Event()
+        self._resumed.set()
+        self.idle = asyncio.Event()
+        self.idle.set()
         self._durable_queue = not isinstance(queue, InMemoryQueue)  # 有投递计数与接管的队列（Redis）
 
     # ---- 主循环 ----
 
+    @property
+    def paused(self) -> bool:
+        return not self._resumed.is_set()
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        if value:
+            self._resumed.clear()
+        else:
+            self._resumed.set()
+
     async def run(self) -> None:
+        if not self._durable_queue:
+            await self._reap_quietly()
         loops = [asyncio.create_task(self._consume_loop(), name="worker-consume")]
         if self._durable_queue:
             loops.append(asyncio.create_task(self._claim_loop(), name="worker-autoclaim"))
         loops.append(asyncio.create_task(self._reaper_loop(), name="worker-reaper"))
         try:
-            if not self._durable_queue:
-                await self._reap_quietly()  # 单进程：启动时先把上次进程遗留的持久化 Run 重新投递，之后按 REAPER_S 周期扫
             await asyncio.gather(*loops)
         finally:
             for t in loops:
@@ -89,15 +104,19 @@ class Worker:
         """为一条已占用槽位的投递启动处理任务；任务结束归还槽位。"""
         t = asyncio.create_task(self._handle(d), name=f"worker-run-{d.run_id}")
         self._tasks.add(t)
+        self.idle.clear()
 
         def _done(task: asyncio.Task[None]) -> None:
             self._tasks.discard(task)
+            if not self._tasks:
+                self.idle.set()
             self._slots.release()
 
         t.add_done_callback(_done)
 
     async def _consume_loop(self) -> None:
         while True:
+            await self._resumed.wait()
             await self._slots.acquire()
             try:
                 ds = await self.q.read(self.consumer, 1, READ_BLOCK_MS)
@@ -112,6 +131,12 @@ class Worker:
             if not ds:
                 self._slots.release()
                 continue
+            if self.paused:
+                self._slots.release()
+                if not self._durable_queue:
+                    for delivery in ds:
+                        await self.q.enqueue(delivery.run_id, "drain", dedupe_s=0)
+                continue
             self._spawn(ds[0])
             for extra in ds[1:]:  # count=1 时不会发生；防御性地占用槽位
                 await self._slots.acquire()
@@ -119,6 +144,8 @@ class Worker:
 
     async def claim_once(self) -> int:
         """按空闲槽位数 XAUTOCLAIM 一次，返回接管并开始处理的条数。"""
+        if self.paused:
+            return 0
         n = 0
         while n < self.ws.concurrency and not self._slots.locked():
             await self._slots.acquire()
@@ -130,6 +157,10 @@ class Worker:
         except Exception:
             logger.warning("run queue autoclaim failed", exc_info=True)
             ds = []
+        if self.paused:
+            for _ in range(n):
+                self._slots.release()
+            return 0
         for d in ds[:n]:
             self._spawn(d)
         for _ in range(n - min(n, len(ds))):

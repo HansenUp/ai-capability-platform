@@ -23,6 +23,12 @@ line-ending = "lf"
 select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
 ignore = ["S101", "B008"]                # S101 允许测试中的 assert；B008 允许 FastAPI 的 Depends() 默认参数
 
+[tool.ruff.lint.per-file-ignores]
+"scripts/verify_s10_node_control.py" = ["S603"]
+"scripts/verify_s10_routing.py" = ["S603"]
+"scripts/verify_s10_publishing.py" = ["S603"]
+"scripts/verify_s11_console.py" = ["S603"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

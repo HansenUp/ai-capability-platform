@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from runtime import secret_store
 
@@ -109,9 +110,24 @@ class Settings:
     jwt_tenant_claim: str = field(default_factory=lambda: _env("JWT_TENANT_CLAIM", "tenant"))  # 携带租户的声明名
     jwt_leeway_s: int = field(default_factory=lambda: int(_env("JWT_LEEWAY_S", "30")))  # exp / nbf / iat 校验允许的时钟偏差（秒）
     jwks_cache_ttl_s: float = field(default_factory=lambda: float(_env("JWKS_CACHE_TTL_S", "300")))  # JWKS 缓存有效期（秒）
+    # 并行工具调用（S9，D149）：同一批里并发执行的只读工具调用上限（写调用一律按序串行）
+    parallel_tool_max: int = field(default_factory=lambda: max(1, int(_env("PARALLEL_TOOL_MAX", "4"))))
+    # 非推理摘要别名（S5 #7，D151）：thinking_summary llm 模式与上下文压缩摘要的缺省模型；发布时校验其在模型网关上存在
+    thinking_summary_model_alias: str = field(default_factory=lambda: _env("THINKING_SUMMARY_MODEL_ALIAS", "summary-fast-2026-10"))
+    # 上下文压缩（DEF-2，D150）：history 区块的 token 预算（超出即在 model.request 前按边界压缩），压缩后目标占比与摘要上限
+    context_history_budget_tokens: int = field(default_factory=lambda: int(_env("CONTEXT_HISTORY_BUDGET_TOKENS", "150000")))
+    context_compact_target_ratio: float = field(default_factory=lambda: float(_env("CONTEXT_COMPACT_TARGET_RATIO", "0.5")))
+    context_summary_max_chars: int = field(default_factory=lambda: int(_env("CONTEXT_SUMMARY_MAX_CHARS", "4000")))
+    # 数据分级六通道矩阵（S9 OPT-4，D152）：未配置时用随源码的开发矩阵（未签署）；生产必须配置已签署的矩阵
+    data_class_matrix_file: str = field(default_factory=lambda: _env("DATA_CLASS_MATRIX_FILE", "") or str(DEV_DATA_CLASS_MATRIX))
+    # 节点只出不进（S9.8）：false 时不挂载 /admin 管理接口（边缘 / 混合部署的节点由中心经指令下发，不接受入站管理调用）
+    runtime_admin_enabled: bool = field(default_factory=lambda: _env("RUNTIME_ADMIN_ENABLED", "true").lower() == "true")
 
 
 DEFAULT_DSH_BIN = "~/.local/share/ai-platform/dsh/node_modules/.bin/dsh"  # dsh 的平台约定安装位置（npm 锁定版本）
+# 开发态数据分级矩阵（未签署）：源码布局下为 services/runtime/data_class_matrix.dev.json（config.py 向上 3 级即 services/runtime）；
+# 镜像内由 Dockerfile 拷贝并以 DATA_CLASS_MATRIX_FILE 指向
+DEV_DATA_CLASS_MATRIX: Path = Path(__file__).resolve().parents[2] / "data_class_matrix.dev.json"
 DEV_GATEWAY_KEY = "sk-dev-master"  # noqa: S105 —— 本机 compose LiteLLM 的公开开发主密钥，生产禁止使用
 DEV_HOOK_DIGEST_KEY = "dev-hook-digest-key"  # noqa: S105 —— 开发用公开默认值，生产禁止使用
 DEV_CREDENTIAL_ENC_KEY = "dev-credential-enc-key"  # noqa: S105 —— 开发用公开默认值，生产禁止使用
@@ -147,9 +163,28 @@ def production_problems(s: Settings) -> list[str]:
         problems.append("RUNTIME_GATEWAY_CLIENT_SECRET 未配置（服务客户端 ai-runtime-svc 的密钥）")
     if not s.policy_service_token:
         problems.append("POLICY_SERVICE_TOKEN 未配置（调用策略服务的服务间令牌）")
+    problems += _data_class_matrix_problems(s)
     for name in secret_store.SECRET_NAMES:
         if secret_store.source(name) == "env":
             problems.append(f"{name} 来自明文环境变量，生产须经 Vault 或 {name}_FILE 注入")
+    return problems
+
+
+def _data_class_matrix_problems(s: Settings) -> list[str]:
+    """数据分级矩阵（OPT-4）：生产必须显式配置 DATA_CLASS_MATRIX_FILE、可加载且已合规签署；旧配置 CONFIDENTIAL_MODEL_ALIASES 只在
+    开发态兼容，生产以矩阵为准，配置了即视为未迁移。"""
+    from ai_contract.data_class import Matrix
+
+    problems: list[str] = []
+    if Path(s.data_class_matrix_file).resolve() == DEV_DATA_CLASS_MATRIX:
+        problems.append("缺少 DATA_CLASS_MATRIX_FILE（生产须使用已签署的数据分级矩阵，不能用开发矩阵）")
+    try:
+        if not Matrix.load(s.data_class_matrix_file).signed:
+            problems.append("数据分级矩阵未签署（signoff.by / signoff.at 为空）")
+    except (OSError, ValueError) as exc:
+        problems.append(f"数据分级矩阵无法加载：{exc}")
+    if s.confidential_model_aliases:
+        problems.append("CONFIDENTIAL_MODEL_ALIASES 已由数据分级矩阵的 model 通道取代，生产不得再配置")
     return problems
 
 

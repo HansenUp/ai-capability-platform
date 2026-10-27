@@ -4,10 +4,15 @@
 模型别名，把推理 / 文本 / 工具调用映射为统一事件。轮次循环、工具执行与闸口判定全部由平台的
 loop.runner 与工具代理完成，因此本 harness 不执行任何工具，capability_tier 为 L2（ADR-0008）。
 
-每轮事件顺序固定为：Thinking*/Text* → ToolUse?（至多一个）→ Usage（每轮必有，D5 决策）→ Done。
+每轮事件顺序固定为：Thinking*/Text* → ToolUse*（未开启并行时至多一个）→ Usage（每轮必有，D5 决策）→ Done。
 
-约束：每轮只支持一个工具调用——请求里带 `parallel_tool_calls: False`，即便模型仍返回多个也只取第一个
-（runner 每轮也只处理一个工具调用）；多工具并行留待 S5/S7。
+并行工具调用（S9，D149）：适配器声明 `parallel_tool_calls=True`；是否开启由 Agent 版本快照 `parallel_tool_calls: true` 决定，
+runner 经 ``configure_session`` 逐会话下发（默认关）。关闭时请求带 `parallel_tool_calls: False`，即便模型仍返回多个也只取
+第一个（与此前逐字节一致）；开启时带 `parallel_tool_calls: True`，按模型给出的顺序产出全部 ToolUse，由 runner 作为一批处理。
+
+数据分级（S9 OPT-4，D152）：runner 每轮经 ``configure_session(request_extra=...)`` 下发按本 Run 数据等级附加的请求字段——
+等级 ≥ internal 时 `disable_fallbacks: true`（LiteLLM 1.107 按请求关闭回退链）与 `metadata{data_class, mask_input, mask_output}`
+（网关回调不记正文）；public 时不附加（请求体不变）。
 
 推理模型回传：DeepSeek 等推理模型在思考模式下要求回传发起工具调用那一轮的 reasoning_content。
 本 harness 不在进程内缓存推理文本：runner 依事件日志把该轮 ThinkingEvent 拼接后放进 tool_use 历史消息的
@@ -99,6 +104,7 @@ class LiteLLMHarness:
         self._active: set[str] = set()  # 正在跑一轮的 session_id
         self._cancelled: set[str] = set()  # 进行中的一轮已被请求中断的 session_id（只记录 _active 中的会话）
         self._pumps: dict[str, asyncio.Task[None]] = {}  # session_id → 读取上游流的任务（interrupt 时取消）
+        self._options: dict[str, dict[str, Any]] = {}  # session_id → runner 下发的会话选项（并行、附加请求字段）
 
     def _llm(self) -> LLMClient:
         """返回本轮使用的 LLM 客户端。"""
@@ -116,7 +122,16 @@ class LiteLLMHarness:
             loop_owner="platform",
             tool_interception="none",
             can_resume_from_events=False,
+            parallel_tool_calls=True,  # 一轮可交回多个工具调用；是否开启由快照决定（configure_session）
         )
+
+    def configure_session(
+        self, session: SessionHandle, *, parallel_tool_calls: bool = False, request_extra: dict[str, Any] | None = None
+    ) -> None:
+        """runner 逐轮下发的会话选项（不属于 Contract，只有平台持有循环的进程内适配器提供）：是否开启并行工具调用、
+        按数据等级附加的请求字段（disable_fallbacks / metadata）。未调用时等同全部默认（关闭并行、不附加）。"""
+        if session.session_id in self._specs:
+            self._options[session.session_id] = {"parallel_tool_calls": parallel_tool_calls, "request_extra": dict(request_extra or {})}
 
     async def open_session(self, spec: SessionSpec) -> SessionHandle:
         """开启会话：生成 session_id 并缓存会话规格（模型别名、系统提示词）。"""
@@ -133,6 +148,7 @@ class LiteLLMHarness:
         """结束会话：删除会话规格（之后该会话的 run_turn 返回 SESSION_NOT_FOUND）；若正有一轮在进行，
         令其在收到下一个增量时停止，并以 stop_reason="cancelled" 结束。空闲会话不留下任何中断标记。"""
         self._specs.pop(session.session_id, None)
+        self._options.pop(session.session_id, None)
         if session.session_id in self._active:
             self._cancelled.add(session.session_id)
             pump = self._pumps.get(session.session_id)
@@ -195,13 +211,16 @@ class LiteLLMHarness:
             if len(name_map) < len({t.name for t in tools}):
                 # 两个平台工具名编码成同一个 OpenAI 函数名：模型的调用无法还原，拒绝本轮（收口为 HARNESS_ERROR）
                 raise ValueError(f"platform tool names collide after OpenAI name encoding: {sorted(t.name for t in tools)}")
-            extra = {"parallel_tool_calls": False} if openai_tools else None
+            options = self._options.get(sid, {})
+            parallel = bool(options.get("parallel_tool_calls"))
+            extra: dict[str, Any] = {"parallel_tool_calls": parallel} if openai_tools else {}
+            extra |= options.get("request_extra") or {}
 
             client = self._llm()
             tool_calls: list[ToolCall] = []
             finish_reason: str | None = None
             cancelled = False
-            stream = client.stream_chat(spec.model_alias, messages, tools=openai_tools or None, extra=extra)
+            stream = client.stream_chat(spec.model_alias, messages, tools=openai_tools or None, extra=extra or None)
             chunks: asyncio.Queue[LLMChunk | Exception | None] = asyncio.Queue()
 
             async def pump() -> None:
@@ -249,23 +268,25 @@ class LiteLLMHarness:
                 yield DoneEvent(run_id=run_id, stop_reason="cancelled")
                 return
 
-            tc = tool_calls[0] if tool_calls else None  # 每轮只支持一个工具调用（见模块说明）
+            # 未开启并行时每轮只取第一个工具调用（见模块说明）；开启时按模型给出的顺序全部交回
+            calls = tool_calls if parallel else tool_calls[:1]
             usage_ev = self._usage_event(usage, await self._model_name(client, spec.model_alias, reported_model))
-            if tc is not None and finish_reason == "length" and _is_truncated(tc):
-                # 输出被 max_tokens 截断导致参数残缺：不能把它当作工具调用交给 runner 执行。
+            truncated = next((tc for tc in calls if _is_truncated(tc)), None) if finish_reason == "length" else None
+            if truncated is not None:
+                # 输出被 max_tokens 截断导致参数残缺：不能把它当作工具调用交给 runner 执行（同批其余调用一并放弃）。
                 yield ErrorEvent(
                     code="TOOL_CALL_TRUNCATED",
-                    message=f"tool call '{name_map.get(tc.name, tc.name)}' arguments truncated by max_tokens",
+                    message=f"tool call '{name_map.get(truncated.name, truncated.name)}' arguments truncated by max_tokens",
                     retryable=False,
                 )
                 yield usage_ev
                 yield DoneEvent(run_id=run_id, stop_reason="max_tokens")
                 return
-            if tc is not None:
+            for tc in calls:
                 yield ToolUseEvent(call_id=tc.id, tool_name=name_map.get(tc.name, tc.name), input=tc.arguments)
             yield usage_ev
             stop: Literal["tool_use", "max_tokens", "end_turn"]
-            if tc is not None:
+            if calls:
                 stop = "tool_use"
             elif finish_reason == "length":
                 stop = "max_tokens"

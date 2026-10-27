@@ -255,9 +255,9 @@ def test_image_refs_counted_at_1500_tokens_each():
     assert plan.truncated == []
     # 无图片时与此前完全一致（快照不漂移）
     assert budget.assemble({"history": text}).usage["history"] == budget.estimate_tokens(text)
-    # 图片把 history 推过预算：记截断
+    # 图片把 history 推过预算：S9（DEF-2，D150）起 history 不再静默截断——如实记录用量，超预算由 context.compact 事件化压缩
     tight = budget.assemble({"history": text}, {"history": 2_000}, history_images=2)
-    assert "history" in tight.truncated
+    assert "history" not in tight.truncated and tight.usage["history"] > 2_000 and tight.blocks["history"] == text
 
 
 def test_context_assembled_reports_image_tokens(client, monkeypatch: pytest.MonkeyPatch):

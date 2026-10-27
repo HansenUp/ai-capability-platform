@@ -36,7 +36,7 @@ from ai_contract import RunState
 from runtime.config import settings
 from runtime.state import db
 from runtime.state.db import Run
-from runtime.state.eventlog import LEASABLE_STATES, FenceWrites, acquire_lease, fence_scope, release_lease, renew_lease
+from runtime.state.eventlog import LEASABLE_STATES, TERMINAL_STATES, FenceWrites, acquire_lease, fence_scope, release_lease, renew_lease
 from runtime.worker import control, queue
 from runtime.worker.settings import WorkerSettings, worker_settings
 
@@ -99,6 +99,21 @@ async def _heartbeat(lease: Lease, ws: WorkerSettings, on_beat: Callable[[], Awa
                 return
             continue
         if not ok:
+            try:
+                async with db.SessionLocal() as session:
+                    head = (
+                        await session.execute(
+                            select(Run.state, Run.lease_epoch, Run.lease_owner, Run.lease_expires_at).where(Run.run_id == lease.run_id)
+                        )
+                    ).first()
+            except Exception:
+                await _isolate(lease, "renewal rejected and terminal state unavailable")
+                return
+            if head is not None and head[0] in TERMINAL_STATES and head[1] == lease.epoch and head[2] is None and head[3] is None:
+                if head[0] == RunState.CANCELED.value:
+                    lease.canceled.set()
+                    await control.interrupt_local(lease.run_id, epoch=lease.epoch)
+                return
             await _isolate(lease, "renewal rejected")
             return
         lease.renewed_at = started

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>AgentConfig component fixture</title></head><body>
+<div id="component"></div>
+<script type="module">
+import { createApp, h, ref } from "vue";
+import AgentConfig from "../../src/components/AgentConfig.vue";
+createApp({
+  setup() {
+    const model = ref(JSON.stringify({ tools: ["echo"], redlines: { deny_tools: ["write"], extension: { limit: 7 } },
+      skills: [{ name: "synthetic-skill", version: "1", extension: { pinned: true } }], custom: { enabled: false, value: null, order: [2, 1] } }));
+    const updates = ref(0);
+    const inputs = ref(0);
+    function update(value) { model.value = value; updates.value += 1; }
+    return () => h("div", { onInput: () => { inputs.value += 1; } }, [h(AgentConfig, { modelValue: model.value, "onUpdate:modelValue": update }),
+      h("pre", { id: "model-output" }, model.value), h("output", { id: "updates" }, String(updates.value)), h("output", { id: "inputs" }, String(inputs.value))]);
+  },
+}).mount("#component");
+</script></body></html>

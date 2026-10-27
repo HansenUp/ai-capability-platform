@@ -66,6 +66,10 @@ class HarnessCapabilities(BaseModel):
     # 平台看不到、须由适配器自己调用 hook 的拦截点（V1.1 新增，如 stdio 帧内部、子代理）。runner 传给 run_turn 的
     # HookSet 只包含这里声明的点，其余点由平台统一执行；为空表示全部由平台执行。
     internal_hook_points: list[HookPoint] = Field(default_factory=list)
+    # 一轮模型输出可否交回多个工具调用（V1.4 新增，S9 并行工具调用，D149）：True 时 runner 可在 Agent 快照开启
+    # parallel_tool_calls 后把同一轮的多个 ToolUseEvent 作为一批处理；False（默认）表示每轮至多一个工具调用（如 claude-sdk，D155）。
+    # 不参与 capability_tier() 判定。
+    parallel_tool_calls: bool = False
 
 
 class SessionSpec(BaseModel):

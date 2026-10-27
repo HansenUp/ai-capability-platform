@@ -44,10 +44,11 @@ PY_IMAGE = "ai-platform/dataplane-poc-py:local"
 CF_IMAGE = "ai-platform/dataplane-poc-contextforge:local"
 CF_SECRET = "poc-contextforge-jwt-secret-0123456789abcdef"  # noqa: S105 —— 与 docker-compose.yml 一致，仅本 POC 容器内有效
 AGENT = "poc-agent@1"
-TARGETS = ("baseline", "selfbuilt", "agentgateway", "contextforge")
+# 自研数据面（capability_gateway/mcp_proxy.py）已于 S9 删除（D153）：selfbuilt 容器只保留判定端点 /authz/mcp-check，
+# 不再作为压测 / 功能用例目标；results/ 中的 selfbuilt 数据为历史结论（ADR-0005）。
+TARGETS = ("baseline", "agentgateway", "contextforge")
 URLS = {  # 宿主机访问地址（cases.py 用）
     "baseline": "http://127.0.0.1:19100/mcp",
-    "selfbuilt": "http://127.0.0.1:19200/mcp/mcp-ticket",
     "agentgateway": "http://127.0.0.1:19300/mcp",
     "contextforge": None,  # 由 up 时登记的虚拟服务器决定，见 cf_state()
 }
@@ -55,17 +56,15 @@ URLS = {  # 宿主机访问地址（cases.py 用）
 # 在 50 并发长连接下自身成为瓶颈并出现连接被断开，会把差异淹没，见 README）
 NET_URLS = {
     "baseline": "http://upstream:9100/mcp",
-    "selfbuilt": "http://selfbuilt:8082/mcp/mcp-ticket",
     "agentgateway": "http://agentgateway:3000/mcp",
     "contextforge": None,
 }
 LOADGEN_CPUS = "6"  # 压测器容器的 CPU 上限（10 个进程实际约用 1.5 CPU；限得过紧时压测器自己成为瓶颈）
 # 补充对照目标：名字 → (实际目标, 网络内地址覆盖, 网关容器, 额外 loadgen 参数)
 EXTRA_TARGETS: dict[str, tuple[str, str | None, str, list[str]]] = {
-    "selfbuilt-4cpu": ("selfbuilt", "http://selfbuilt4:8082/mcp/mcp-ticket", "selfbuilt4", []),
     "contextforge-notrace": ("contextforge", None, "contextforge", ["--no-traceparent"]),
 }
-GATEWAY_CONTAINER = {"selfbuilt": "selfbuilt", "agentgateway": "agentgateway", "contextforge": "contextforge", "baseline": None}
+GATEWAY_CONTAINER = {"agentgateway": "agentgateway", "contextforge": "contextforge", "baseline": None}
 NO_PROXY_ENV = {"NO_PROXY": "localhost,127.0.0.1", "no_proxy": "localhost,127.0.0.1"}
 os.environ.update({k: ",".join(x for x in (os.environ.get(k, ""), v) if x) for k, v in NO_PROXY_ENV.items()})
 
@@ -293,8 +292,6 @@ def headers_for(target: str, user: str = "alice", **extra: str) -> dict[str, str
     """各目标的客户端请求头：自研收终端用户令牌（网关换 OBO）；其余收已换好的 OBO 令牌（数据面只透传）。"""
     ut = devkit.user_token(user)
     ctx = {"X-AI-Agent": AGENT, "X-AI-Run-Id": f"run-{int(time.time())}"} | extra
-    if target == "selfbuilt":
-        return {"Authorization": f"Bearer {ut}"} | ctx
     obo = obo_token(ut)
     if target == "baseline":  # 直连：客户端自己扮演网关输出的头
         return {"Authorization": f"Bearer {obo}", "X-AI-Act": f"agent:{AGENT}", "X-AI-Run-Id": ctx["X-AI-Run-Id"]}
@@ -356,9 +353,6 @@ def bench_one(name: str, rnd: int, args: argparse.Namespace) -> dict[str, Any]:
     containers = ["upstream", "policy"] + ([gw_container] if gw_container else [])
     if target in ("agentgateway", "contextforge"):
         containers.append("selfbuilt")  # 判定端点所在容器
-    if name == "selfbuilt-4cpu":
-        sh([*COMPOSE, "--profile", "scale", "up", "-d", "selfbuilt4"])
-        time.sleep(5)
     out = RESULTS / f"{name}-r{rnd}.json"
     # 压测器跑在 POC 网络内的容器里（令牌经环境变量传入，不出现在命令行）
     cmd = ["docker", "run", "--rm", "--network", f"{PROJECT}_default", "--cpus", LOADGEN_CPUS, "-e", "LOADGEN_HEADERS"]
@@ -373,8 +367,6 @@ def bench_one(name: str, rnd: int, args: argparse.Namespace) -> dict[str, Any]:
     stats.stop.set()
     if stats.is_alive():
         stats.join(timeout=10)
-    if name == "selfbuilt-4cpu":
-        sh([*COMPOSE, "--profile", "scale", "stop", "selfbuilt4"])
     if r.returncode != 0 or not out.exists():
         raise SystemExit(f"loadgen {name} failed: {r.stderr[-2000:]}")
     res = json.loads(out.read_text())

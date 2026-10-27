@@ -7,7 +7,11 @@ name / description 用 ES 内置 ``cjk`` 分析器；tenant / status / system / 
 检索流程（应用侧）：硬过滤（租户、published、discovery.scope、binding=discoverable 含 "*"）→ BM25 top50 + kNN top50
 （num_candidates 100）→ RRF(k=60) → 以 MySQL 中的权威数据复核过滤条件（防 ES 滞后）。策略判定在 main 中进行。
 - ``ES_URL`` 未配置：在进程内对目录做同样的过滤 + 词元打分 top50 + 向量余弦 top50 + RRF（开发 / 单测），degraded=false；
-- ES 已配置但不可用 / 出错：退回目录 + 词元打分（无向量），degraded=true。
+- ES 已配置但不可用 / 出错：退回目录 + 词元打分（无向量），degraded=true；
+- 数据分级（OPT-4，D152）：查询语句本身就是数据。按本次 Run 污点的最高等级判定 ``Matrix.allows("embedding", 等级, provider)``
+  （provider：litellm 为嵌入模型别名，进程内 provider 为 hash / fastembed），未获准时不向量化查询，只走 BM25（ES）或目录词元打分，
+  degraded=true。矩阵取 DATA_CLASS_MATRIX_FILE（缺省开发矩阵 services/runtime/data_class_matrix.dev.json）；矩阵无法加载时
+  只有 public 查询可以向量化（失败关闭）。
 """
 
 from __future__ import annotations
@@ -20,13 +24,15 @@ import time
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
 
+from ai_contract.data_class import Level, Matrix
 from capability_gateway import config
 from capability_gateway.catalog import Catalog
-from capability_gateway.embed import Embedder, char_bigrams, cosine
+from capability_gateway.embed import Embedder, LiteLLMEmbedder, char_bigrams, cosine
 from capability_gateway.registry import Binding, Capability
 
 log = logging.getLogger("capability_gateway.search")
@@ -37,6 +43,8 @@ TOP_K = 50  # BM25 与 kNN 各取前 50
 NUM_CANDIDATES = 100
 RRF_K = 60
 ES_ADMIN_TIMEOUT_S = 60.0
+# 源码树中的开发矩阵（镜像内须以 DATA_CLASS_MATRIX_FILE 指定）
+DEV_MATRIX = Path(__file__).resolve().parents[4] / "services" / "runtime" / "data_class_matrix.dev.json"
 
 
 class SearchUnavailable(Exception):
@@ -181,25 +189,27 @@ class EsIndex:
     async def delete(self, cid: str) -> None:
         await self._req("DELETE", f"/{self.alias}/_doc/{cid}?refresh=wait_for", ok=(404,), admin=True)
 
-    async def search(self, query: str, vector: list[float], filters: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
-        """BM25 top50 与 kNN top50 两路召回（同一组硬过滤），返回两路的能力 id 排名。"""
+    async def search(self, query: str, vector: list[float] | None, filters: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+        """BM25 top50 与 kNN top50 两路召回（同一组硬过滤），返回两路的能力 id 排名；vector 为 None 时只做 BM25（kNN 为空）。"""
         bm25 = {
             "size": TOP_K,
             "_source": False,
             "query": {"bool": {"filter": filters, "must": {"multi_match": {"query": query, "fields": ["name^2", "description"]}}}},
         }
-        knn = {
-            "size": TOP_K,
-            "_source": False,
-            "knn": {"field": "embedding", "query_vector": vector, "k": TOP_K, "num_candidates": NUM_CANDIDATES, "filter": filters},
-        }
-        r1, r2 = await asyncio.gather(
-            self._req("POST", f"/{self.alias}/_search", json=bm25), self._req("POST", f"/{self.alias}/_search", json=knn)
-        )
+        reqs = [self._req("POST", f"/{self.alias}/_search", json=bm25)]
+        if vector is not None:
+            knn = {
+                "size": TOP_K,
+                "_source": False,
+                "knn": {"field": "embedding", "query_vector": vector, "k": TOP_K, "num_candidates": NUM_CANDIDATES, "filter": filters},
+            }
+            reqs.append(self._req("POST", f"/{self.alias}/_search", json=knn))
+        rs = await asyncio.gather(*reqs)
         try:
-            return [h["_id"] for h in r1.json()["hits"]["hits"]], [h["_id"] for h in r2.json()["hits"]["hits"]]
+            ids = [[h["_id"] for h in r.json()["hits"]["hits"]] for r in rs]
         except (ValueError, KeyError, TypeError) as e:
             raise SearchUnavailable("elasticsearch returned malformed search response") from e
+        return ids[0], ids[1] if len(ids) > 1 else []
 
     async def reindex(self, docs: list[dict[str, Any]]) -> str:
         """全量重建：新建 ``<base>-<时间戳>`` 索引、批量写入、原子切换别名、删除旧的同前缀索引。返回新索引名。"""
@@ -293,15 +303,54 @@ async def _local_vectors(embedder: Embedder, caps: list[Capability]) -> list[lis
     return [_vec_cache[(embedder.name, c.id, c.row_version)] for c in caps]
 
 
+_matrix: tuple[str, Matrix | None] | None = None
+
+
+def _load_matrix() -> Matrix | None:
+    """按 DATA_CLASS_MATRIX_FILE（缺省开发矩阵）加载并缓存；加载失败返回 None（调用方失败关闭）。"""
+    global _matrix
+    path = config.DATA_CLASS_MATRIX_FILE or str(DEV_MATRIX)
+    if _matrix is None or _matrix[0] != path:
+        try:
+            _matrix = (path, Matrix.load(path))
+        except (OSError, ValueError) as e:
+            log.warning("data-class matrix %s unavailable, only public queries are embedded: %s", path, e)
+            _matrix = (path, None)
+    return _matrix[1]
+
+
+def embedding_processor(embedder: Embedder) -> str:
+    """矩阵中的嵌入处理方标识：经模型网关时为嵌入模型别名，进程内 provider 为其名称。"""
+    return embedder.model if isinstance(embedder, LiteLLMEmbedder) else embedder.name
+
+
+def embedding_allowed(embedder: Embedder, taint: list[str] | None) -> bool:
+    """查询能否交给该嵌入 provider（污点取最高等级；矩阵不可用时只放行 public）。"""
+    level = Level.highest(taint or [])
+    matrix = _load_matrix()
+    if matrix is None:
+        return level == Level.PUBLIC
+    return matrix.allows("embedding", level, embedding_processor(embedder))
+
+
 async def hybrid_search(
-    catalog: Catalog, es: EsIndex | None, embedder: Embedder, query: str, *, tenant: str, agent_id: str, scope: list[str] | None
+    catalog: Catalog,
+    es: EsIndex | None,
+    embedder: Embedder,
+    query: str,
+    *,
+    tenant: str,
+    agent_id: str,
+    scope: list[str] | None,
+    taint: list[str] | None = None,
 ) -> Ranked:
-    """混合检索 + RRF；ES 不可用时退回词元打分并标 degraded。"""
+    """混合检索 + RRF；ES 不可用时退回词元打分并标 degraded；数据等级不允许向量化时只走 BM25 并标 degraded。"""
+    vectors = embedding_allowed(embedder, taint)
     if es is not None:
         try:
-            (qvec,) = await embedder.embed([query])
+            qvec = (await embedder.embed([query]))[0] if vectors else None
             bm25, knn = await es.search(query, qvec, es_filters(tenant, agent_id, scope))
-            fused = rrf([bm25, knn])
+            fused = rrf([bm25, knn] if vectors else [bm25])
             caps = await catalog.get_many([cid for cid, _ in fused])
             allowed = await catalog.bound_ids(agent_id, "discoverable")
             items = [
@@ -313,7 +362,7 @@ async def hybrid_search(
                 and cid in allowed
                 and in_scope(caps[cid], scope)
             ]
-            return Ranked(items, degraded=False)
+            return Ranked(items, degraded=not vectors)
         except Exception as e:  # noqa: BLE001 —— ES 或向量 provider 任何失败都退回目录词元打分
             log.warning("capability search degraded to catalog lexical scoring: %s", e)
             cands = await _candidates(catalog, tenant, agent_id, scope)
@@ -323,6 +372,8 @@ async def hybrid_search(
     cands = await _candidates(catalog, tenant, agent_id, scope)
     by_id = {c.id: c for c in cands}
     lex = lexical_rank(query, cands)
+    if not vectors:
+        return Ranked([(by_id[cid], s) for cid, s in rrf([lex])], degraded=True)
     try:
         (qvec,) = await embedder.embed([query])
         vecs = await _local_vectors(embedder, cands)

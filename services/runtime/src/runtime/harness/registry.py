@@ -98,3 +98,12 @@ def _acp_harness(profile: str) -> HarnessAdapter:
 def names() -> list[str]:
     """返回当前已加载的 harness 名称列表（按字母序）。"""
     return sorted(_REGISTRY)
+
+
+async def shutdown_pools() -> None:
+    closed: set[int] = set()
+    for adapter in list(_REGISTRY.values()):
+        pool = getattr(adapter, "pool", None)
+        if pool is not None and id(pool) not in closed:
+            await pool.aclose()
+            closed.add(id(pool))

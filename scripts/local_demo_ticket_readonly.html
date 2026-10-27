@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>工单总结 · 隔离演示</title>
+<style>body{font:16px/1.7 system-ui;max-width:960px;margin:36px auto;padding:0 20px}aside{padding:16px;background:#fff1cf}textarea{width:95%;height:60px}button,a{margin:6px}code{background:#eee;padding:3px}li{margin:10px 0}</style></head>
+<body><h1>工单总结 · 只读隔离演示</h1>
+<aside>仅使用临时 SQLite、签名测试身份、模拟模型与只读工单替身；不连接真实业务、真实模型或 Langfuse。开发态评测标志不代表真实评测通过。</aside>
+<p id="status">正在读取本机演示信息…</p>
+<p><a href="/manage/agents" target="_blank">① 配置与发布</a><a href="/chat" target="_blank">② 使用工作台</a><a href="/manage/runs" target="_blank">③ 只读轨迹</a></p>
+<h2>测试身份</h2><p>Alice 是本机测试身份，不是正式账号。令牌仅用于本次演示页面。</p>
+<label>Alice 测试令牌<textarea id="alice" readonly autocomplete="off"></textarea></label><button id="copy">复制 Alice 测试令牌</button>
+<h2>体验步骤</h2><ol>
+<li>配置页新建 Agent，版本填 <code>1</code>、Harness 使用 <code>mock</code>，完整 config 填 <code>{"tools":["ticket.get"]}</code>，保存草稿。</li>
+<li>选择“评测与发布”，显式确认开发态评测，再确认发布；只写入本次临时库。</li>
+<li>工作台应用 Alice 测试令牌，填写 Agent ID；消息输入 <code>SYNTHETIC_TICKET_SUMMARY</code>，登记并确认执行一次，随后由本人确认收口。记录 Run ID。</li>
+<li>读取同一 Run，应看到“模拟工单摘要：设备无法连接，已建议检查网络。”在轨迹页应用 Alice，输入 Run ID，读取只读事件。</li>
+</ol><p>仅调用合成只读工具 <code>ticket.get</code>；模拟内容不代表真实自然语言效果或业务数据。未知结果先只读对账，不自动重发。</p>
+<p id="verified"></p><p>按 Ctrl+C 停止；服务最长约 30 分钟，只监听本机回环地址。</p>
+<script type="module">
+const response = await fetch('/__demo/info', { cache:'no-store' });
+if (!response.ok) throw new Error('演示信息不可用');
+const info = await response.json();
+document.getElementById('alice').value = info.tokens.alice;
+document.getElementById('status').textContent = `演示有效至 ${new Date(info.expires_at).toLocaleString()}，所有操作仅作用本次临时数据。`;
+document.getElementById('verified').textContent = info.verified ? `已验证只读链路，示例 Run：${info.verified.run_id}。` : '只读链路自动验证中。';
+document.getElementById('copy').onclick = async () => { await navigator.clipboard.writeText(document.getElementById('alice').value); };
+</script></body></html>

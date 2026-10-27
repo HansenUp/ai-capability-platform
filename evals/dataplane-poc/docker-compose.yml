@@ -39,7 +39,7 @@ services:
     ports: ["127.0.0.1:19083:8083"]
     cpus: 2
 
-  selfbuilt:                                  # 候选 1：自研数据面（capability-gateway + mcp_proxy），同时提供 /authz/mcp-check 给另两个候选
+  selfbuilt:                                  # 判定端点 /authz/mcp-check（capability-gateway，供另两个候选回调）；自研数据面 mcp_proxy 已于 S9 删除（D153），历史结果见 results/
     <<: *py
     # relay：容器内 127.0.0.1:8180 → 宿主机 Keycloak，使换取请求的 Host 仍为 localhost:8180（签发者与用户令牌一致）
     command: ["sh", "-c", "python /poc/evals/relay.py 127.0.0.1:8180 host.docker.internal:8180 & exec uvicorn capability_gateway.main:app --host 0.0.0.0 --port 8082 --workers 2 --no-access-log --log-level warning"]
@@ -53,22 +53,6 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel:4318
     ports: ["127.0.0.1:19200:8082"]
     cpus: 2
-    mem_limit: 2g
-    depends_on: [upstream, policy]
-
-  selfbuilt4:                                 # 补充对照（整改复测）：自研数据面横向扩到 4 CPU / 4 worker，只在 bench 该目标时启动
-    <<: *py
-    profiles: [scale]
-    command: ["sh", "-c", "python /poc/evals/relay.py 127.0.0.1:8180 host.docker.internal:8180 & exec uvicorn capability_gateway.main:app --host 0.0.0.0 --port 8082 --workers 4 --no-access-log --log-level warning"]
-    environment:
-      KEYCLOAK_TOKEN_URL: http://localhost:8180/realms/ai-platform/protocol/openid-connect/token
-      GATEWAY_CLIENT_ID: capability-gateway
-      GATEWAY_AUTHZ_TOKEN: poc-authz-token-dev                # /authz/mcp-check 服务间共享密钥（与 agentgateway.yaml、ContextForge 插件一致，仅 POC）
-      GATEWAY_CLIENT_SECRET: capability-gateway-dev-secret
-      POLICY_URL: http://policy:8083
-      MCP_TICKET_URL: http://upstream:9100/mcp
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel:4318
-    cpus: 4
     mem_limit: 2g
     depends_on: [upstream, policy]
 

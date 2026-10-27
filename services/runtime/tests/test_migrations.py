@@ -12,7 +12,7 @@ import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import Connection, Engine, create_engine, inspect
+from sqlalchemy import Connection, Engine, create_engine, inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from runtime.state.db import Base, alembic_config, normalize_database_url
@@ -71,6 +71,58 @@ def test_upgrade_head_is_idempotent(sqlite_engine: Engine) -> None:
             _migrate(conn, "upgrade", "head")
     with sqlite_engine.connect() as conn:
         assert _schema_diff(conn) == []
+
+
+def test_approval_migration_preserves_existing_credential_lock(sqlite_engine: Engine) -> None:
+    with sqlite_engine.begin() as conn:
+        _migrate(conn, "upgrade", "0007")
+        conn.execute(text("INSERT INTO t_workbench_scope (scope_id, active_attempt, revision) VALUES ('scope', 'legacy', 1)"))
+        conn.execute(
+            text(
+                "INSERT INTO t_workbench_attempt "
+                "(attempt_id, scope_id, run_id, request_seq, fingerprint, status, revision, acknowledged, created_at) "
+                "VALUES ('legacy', 'scope', 'run', 1, 'fingerprint', 'PREPARED', 1, 0, CURRENT_TIMESTAMP)"
+            )
+        )
+        _migrate(conn, "upgrade", "head")
+    with sqlite_engine.connect() as conn:
+        assert conn.execute(text("SELECT action, call_id, params_hash FROM t_workbench_attempt WHERE attempt_id='legacy'")).one() == (
+            "credential",
+            None,
+            None,
+        )
+        assert conn.execute(text("SELECT active_attempt FROM t_workbench_scope WHERE scope_id='scope'")).scalar_one() == "legacy"
+        assert _schema_diff(conn) == []
+    with sqlite_engine.begin() as conn:
+        _migrate(conn, "downgrade", "0007")
+        assert conn.execute(text("SELECT status FROM t_workbench_attempt WHERE attempt_id='legacy'")).scalar_one() == "PREPARED"
+        _migrate(conn, "upgrade", "head")
+
+
+def test_create_migration_preserves_existing_answer_binding(sqlite_engine: Engine) -> None:
+    with sqlite_engine.begin() as conn:
+        _migrate(conn, "upgrade", "0009")
+        conn.execute(text("INSERT INTO t_workbench_scope (scope_id, active_attempt, revision) VALUES ('scope', 'answer', 1)"))
+        conn.execute(
+            text(
+                "INSERT INTO t_workbench_attempt "
+                "(attempt_id, scope_id, run_id, action, call_id, value_hmac, "
+                "request_seq, fingerprint, status, revision, acknowledged, created_at) "
+                "VALUES ('answer', 'scope', 'run', 'answer', 'call', 'binding', 2, 'fingerprint', 'PREPARED', 1, 0, CURRENT_TIMESTAMP)"
+            )
+        )
+        _migrate(conn, "upgrade", "head")
+        assert conn.execute(text("SELECT action, call_id, value_hmac, create_agent FROM t_workbench_attempt")).one() == (
+            "answer",
+            "call",
+            "binding",
+            None,
+        )
+        assert conn.execute(text("SELECT active_attempt FROM t_workbench_scope")).scalar_one() == "answer"
+        assert _schema_diff(conn) == []
+        _migrate(conn, "downgrade", "0009")
+        assert conn.execute(text("SELECT value_hmac FROM t_workbench_attempt")).scalar_one() == "binding"
+        _migrate(conn, "upgrade", "head")
 
 
 @pytest.mark.skipif(not os.environ.get("RUNTIME_TEST_DATABASE_URL"), reason="未设置 RUNTIME_TEST_DATABASE_URL")

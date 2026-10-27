@@ -19,7 +19,7 @@ RUNTIME_EXTRAS ?= dev,probe
 GATEWAY_EXTRAS ?= dev
 PKGS := packages/contract[dev] harness-adapters/probe[dev] packages/sdk-python[dev] services/runtime[$(RUNTIME_EXTRAS)] services/console-api[dev] services/capability-gateway[$(GATEWAY_EXTRAS)] services/policy[dev] services/observe-adapter[dev] harness-adapters/claude-sdk[$(CLAUDE_SDK_EXTRAS)] harness-adapters/stdio[dev,probe,acp] mcp-servers/template[dev] mcp-servers/ticket[dev] mcp-servers/mocks[dev]
 
-.PHONY: setup test test-mysql test-gateway-mysql test-gateway-es cedar-build cedar-test cedar-run verify-s8 migrate migrate-new verify-s1 verify-s2 verify-s3 verify-s4 verify-s5 verify-s6 verify-s7 dataplane-poc probe probe-real eval-ticket-summary lint openapi openapi-check sdk-types run-runtime run-console run-gateway run-observe compose-up compose-down compose-ps precommit-install precommit images
+.PHONY: setup test test-mysql test-gateway-mysql test-gateway-es cedar-build cedar-test cedar-run verify-s8 verify-s9 security migrate migrate-new verify-s1 verify-s2 verify-s3 verify-s4 verify-s5 verify-s6 verify-s7 dataplane-poc probe probe-real eval-ticket-summary lint openapi openapi-check sdk-types run-runtime run-console run-gateway run-observe compose-up compose-down compose-ps precommit-install precommit images
 
 # 创建虚拟环境并一次性安装所有本地包（任一失败即整体失败，不静默降级）
 setup:
@@ -30,6 +30,39 @@ setup:
 # 运行全部 Python 测试（testpaths 见 pyproject.toml）
 test:
 	$(PYTHON) -m pytest -q
+
+.PHONY: verify-s10-traces verify-s10-publishing verify-s11-console verify-s12-console verify-s12-commands verify-s12-workbench verify-s12-browser
+verify-s12-browser:
+	cd packages/sdk-web && node node_modules/vite/bin/vite.js build
+	node scripts/verify_s12_browser.mjs
+
+.PHONY: verify-s12-feedback
+verify-s12-feedback:
+	$(PYTHON) -m pytest services/runtime/tests/test_s12_feedback_cohort.py services/runtime/tests/test_s12_feedback_writes.py services/console-api/tests/test_s12_feedback_metrics.py services/console-api/tests/test_s12_feedback_v2.py -q
+	node --test apps/console-web/tests/feedback.test.mjs apps/console-web/tests/feedback-v2.test.mjs
+
+verify-s12-workbench:
+	$(PYTHON) -m pytest services/runtime/tests/test_s12_workbench.py services/runtime/tests/test_s12_write_ledger.py services/runtime/tests/test_s12_approval_ledger.py services/runtime/tests/test_s12_answer_ledger.py services/runtime/tests/test_s12_create_ledger.py -q
+	$(PYTHON) scripts/verify_s12_workbench.py
+
+verify-s12-commands:
+	$(PYTHON) scripts/verify_s12_commands.py
+
+verify-s12-console:
+	$(PYTHON) -m pytest services/console-api -q
+	node --test apps/console-web/tests/*.test.mjs
+	cd packages/sdk-web && node node_modules/typescript/bin/tsc --noEmit && node node_modules/vite/bin/vite.js build
+	node apps/console-web/node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p apps/console-web/tsconfig.json
+	cd apps/console-web && node node_modules/vite/bin/vite.js build
+
+verify-s11-console:
+	$(PYTHON) scripts/verify_s11_console.py
+	node --test apps/console-web/tests/s11.test.mjs
+verify-s10-traces:
+	$(PYTHON) scripts/verify_s10_trace_metrics.py
+
+verify-s10-publishing:
+	$(PYTHON) scripts/verify_s10_publishing.py
 
 # 用 compose 的 MySQL 跑 Runtime 测试：测试库 ai_platform_test 由 conftest 自动创建并在会话开始前清空重建
 TEST_MYSQL_URL ?= mysql+asyncmy://root:root@localhost:3316/ai_platform_test
@@ -188,6 +221,38 @@ verify-s7:  ## S7 本机出口验证：Run 持久化执行（API×2 + Worker×2�
 
 verify-s8:  ## S8 本机出口验证：能力网关 V1 五条链路（Keycloak + 网关 mysql/ES/fastembed + 策略服务 + Cedar + 生产态连接器 + Runtime 服务客户端；需 compose 的 mysql、redis、elasticsearch、keycloak 与 make cedar-build）
 	$(PYTHON) scripts/verify_s8_e2e.py
+
+verify-s9:  ## S9 本机出口验证：Skill 商店与安全管控（打包→扫描→回放→双人审批→签名上架、五个坏包、推送验签、吊销 / 篡改失败关闭、沙箱、出站白名单、并行工具与压缩、机密六通道；需 compose 的 mysql、redis、elasticsearch、minio、keycloak、docker 与 make cedar-build）
+	$(PYTHON) scripts/verify_s9_e2e.py
+
+.PHONY: verify-s10-node
+verify-s10-node:
+	$(PYTHON) scripts/verify_s10_node_control.py
+
+.PHONY: verify-s10-routing
+verify-s10-routing:
+	$(PYTHON) scripts/verify_s10_routing.py
+
+.PHONY: verify-s10-eval
+verify-s10-eval:
+	$(PYTHON) scripts/verify_s10_eval_gate.py
+
+# S9 安全门禁（D154；CI 的 security job 同样执行）：
+# ① bandit -lll（只报 HIGH）扫描 services / mcp-servers 源码（不含测试）。bandit 是 python 进程，本机透明加密下读到的是明文；
+#    为防密文或语法错误的文件被 bandit 静默跳过（退出码仍为 0），要求报告为 "Files skipped (0)"，否则失败。
+# ② pip-audit 审计 venv 中的第三方依赖（本地可编辑包不在 PyPI，跳过）；需要联网访问漏洞库。
+# ②' 出站审计（D147）：runtime.net.audit_sources——Runtime 源码中 net.py 之外不得直接构造 httpx 客户端（不经 pytest，模块缺失即失败）。
+# ③ evals/security 安全用例（单元层；全栈部分 S9_SECURITY_STACK=1 时由 verify-s9 / 夜间 CI 运行）。
+# 工具版本：pip install bandit==1.9.4 pip-audit==2.10.1（与 CI 一致）。
+BANDIT_EXCLUDE := */tests/*,*/node_modules/*,*/target/*
+security:
+	@out=$$($(PYTHON) -m bandit -r -lll -x '$(BANDIT_EXCLUDE)' services mcp-servers 2>&1); rc=$$?; \
+	printf '%s\n' "$$out" | sed -n '/^Test results:/,/^Code scanned:/p'; \
+	printf '%s\n' "$$out" | grep -q 'Files skipped (0)' || { printf '%s\n' "$$out" | sed -n '/Files skipped/,$$p'; echo "bandit：有文件未能解析（透明加密密文或语法错误），扫描不完整" >&2; exit 1; }; \
+	if [ $$rc -ne 0 ]; then echo "bandit：存在 HIGH 级问题（退出码 $$rc）" >&2; exit $$rc; fi
+	$(VENV)/bin/pip-audit --skip-editable --progress-spinner off
+	$(PYTHON) -c "import sys; from runtime.net import audit_sources as a; f = a(['services/runtime/src/runtime']); print(*f, sep='\n'); print('出站审计：Runtime 源码中 net.py 之外无 httpx 客户端构造' if not f else '出站审计失败：须经 runtime.net.client 构造', file=sys.stderr); sys.exit(1 if f else 0)"
+	$(PYTHON) -m pytest evals/security -q -p no:cacheprovider
 
 verify-s2:  ## S2 本机出口验证：Keycloak JWT、统一审计、Vault 密钥注入、Prompt Cache 命中统计（需 keycloak、vault、observe profile）
 	$(PYTHON) scripts/verify_s2_e2e.py

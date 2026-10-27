@@ -22,7 +22,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_contract import HookPoint, InputRequiredEvent, RunEvent, RunEventType, RunState, ToolSpec
+from ai_contract import HookPoint, InputRequiredEvent, RiskLevel, RunEvent, RunEventType, RunState, ToolSpec
 from runtime import credentials
 from runtime.config import settings
 from runtime.context import budget as ctx
@@ -118,19 +118,33 @@ async def request_credential(log: EventLog, run_id: str, call_id: str | None, re
     return InputRequiredEvent(prompt=f"credential {reason}: re-authenticate to continue this run", call_id=call_id)
 
 
-def pending_reconcile(prior: list[RunEvent]) -> dict[str, Any] | None:
-    """结果未知窗口：有 TOOL_EXECUTING 却没有对应 TOOL_EXECUTED / TOOL_RESULT 的调用（取日志中最后一个）。
-    发起人对账选择 retry（INPUT_PROVIDED{kind:reconcile, action:retry}）之后、重做写下新 TOOL_EXECUTING 之前，该调用不算未知。"""
+def pending_reconciles(prior: list[RunEvent]) -> list[dict[str, Any]]:
+    """结果未知窗口：有 TOOL_EXECUTING 却没有对应 TOOL_EXECUTED / TOOL_RESULT 的**写**调用（按日志顺序，可能多个——并行批次）。
+    发起人对账选择 retry（INPUT_PROVIDED{kind:reconcile, action:retry}）之后、重做写下新 TOOL_EXECUTING 之前，该调用不算未知。
+
+    只读调用（TOOL_REQUESTED.risk_level=read）的孤儿 TOOL_EXECUTING 不算未知（S9，D149）：只读没有副作用，接管 / 续跑时
+    作为尚无结果的调用直接重执行，不转人工对账。"""
     settled = {e.payload["call_id"] for e in prior if e.type in (RunEventType.TOOL_EXECUTED, RunEventType.TOOL_RESULT)}
+    reads = {
+        str(e.payload.get("call_id"))
+        for e in prior
+        if e.type == RunEventType.TOOL_REQUESTED and str(e.payload.get("risk_level")) == RiskLevel.READ.value
+    }
     unknown: dict[str, dict[str, Any]] = {}
     for e in prior:
         cid = str(e.payload.get("call_id"))
-        if e.type == RunEventType.TOOL_EXECUTING and cid not in settled:
+        if e.type == RunEventType.TOOL_EXECUTING and cid not in settled and cid not in reads:
             unknown.pop(cid, None)
             unknown[cid] = {"call_id": cid, "tool": e.payload.get("tool"), "operation_id": e.payload.get("operation_id")}
         elif e.type == RunEventType.INPUT_PROVIDED and e.payload.get("kind") == KIND_RECONCILE and e.payload.get("action") == "retry":
             unknown.pop(cid, None)
-    return list(unknown.values())[-1] if unknown else None
+    return list(unknown.values())
+
+
+def pending_reconcile(prior: list[RunEvent]) -> dict[str, Any] | None:
+    """结果未知的写调用中日志里最后一个（单个调用时即唯一的那个）；没有返回 None。全部见 pending_reconciles。"""
+    unknown = pending_reconciles(prior)
+    return unknown[-1] if unknown else None
 
 
 # ---------------- 最小 JSON Schema 校验（runtime 不依赖 jsonschema） ----------------
@@ -225,6 +239,7 @@ async def provide_input(
     user_token: str | None = None,
 ) -> dict[str, Any]:
     """发起人为 input-required 的 Run 补充输入，同一事务写事件并 CAS 回 working；返回 ``{run_id, state, kind, call_id}``。
+    对账（reconcile）时若还有其他结果未知的调用（并行批次），Run 保持 input-required（返回的 state 即如此），全部处置后才回 working。
 
     - answer：call_id 须为待回答的 request_user_input 调用；value 按其 schema 校验（不符 ValueError）；
     - reconcile：call_id 须为结果未知的调用；action ∈ done / skip / retry（done 时 value 可选，作为补记的结果）；retry 时以
@@ -233,30 +248,51 @@ async def provide_input(
 
     异常：Run 不存在 RunNotFound（404）；非发起人 InputForbidden / CredentialSubjectMismatch（403）；不在 input-required
     或无匹配的待补充输入 InputNotPending（409）；输入不合规 ValueError（400）；并发写者抢先 SeqConflict（409，可重试）。"""
+    async with SessionLocal() as s:
+        result = await apply_input(s, run_id, subject, kind, call_id, value, action, user_token)
+        await s.commit()
+    return result
+
+
+async def apply_input(
+    s: AsyncSession,
+    run_id: str,
+    subject: str,
+    kind: str,
+    call_id: str | None = None,
+    value: Any = None,
+    action: str | None = None,
+    user_token: str | None = None,
+    attempt_id: str | None = None,
+    value_hmac: str | None = None,
+) -> dict[str, Any]:
+    """复用输入规则，事务提交由调用者持有；工作台回执与输入原子提交。"""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
-    async with SessionLocal() as s:
-        run = await s.get(Run, run_id)
-        if run is None:
-            raise RunNotFound(run_id)
-        if subject != run.subject:
-            raise InputForbidden("only the run initiator can provide input")
-        if run.state != RunState.INPUT_REQUIRED:
-            raise InputNotPending(f"run state is {run.state}")
-        log = EventLog(s)
-        prior = await log.list(run_id)
-        if kind == KIND_ANSWER:
-            await _answer(s, log, run, prior, call_id, value)
-        elif kind == KIND_RECONCILE:
-            await _reconcile(s, log, run, prior, call_id, action, value, user_token)
-        else:
-            call_id = await _credential(s, log, run, prior, subject, value)
+    run = await s.get(Run, run_id)
+    if run is None:
+        raise RunNotFound(run_id)
+    if subject != run.subject:
+        raise InputForbidden("only the run initiator can provide input")
+    if run.state != RunState.INPUT_REQUIRED:
+        raise InputNotPending(f"run state is {run.state}")
+    log = EventLog(s)
+    prior = await log.list(run_id)
+    state = RunState.WORKING
+    if kind == KIND_ANSWER:
+        await _answer(s, log, run, prior, call_id, value, attempt_id, value_hmac)
+    elif kind == KIND_RECONCILE:
+        await _reconcile(s, log, run, prior, call_id, action, value, user_token)
+        if pending_reconciles(await log.list(run_id)):
+            state = RunState.INPUT_REQUIRED
+    else:
+        call_id = await _credential(s, log, run, prior, subject, value, attempt_id)
+    if state == RunState.WORKING:
         await log.transition(run_id, RunState.WORKING, f"input {kind}")
-        await s.commit()
-    return {"run_id": run_id, "state": RunState.WORKING.value, "kind": kind, "call_id": call_id}
+    return {"run_id": run_id, "state": state.value, "kind": kind, "call_id": call_id}
 
 
-async def _answer(s: AsyncSession, log: EventLog, run: Run, prior: list[RunEvent], call_id: str | None, value: Any) -> None:
+def validate_answer_request(prior: list[RunEvent], call_id: str | None, value: Any) -> RunEvent:
     req = _pending_request(prior, KIND_ANSWER)
     answered = {e.payload.get("call_id") for e in prior if e.type == RunEventType.TOOL_RESULT}
     if req is None or req.payload.get("call_id") != call_id or call_id in answered:
@@ -267,6 +303,22 @@ async def _answer(s: AsyncSession, log: EventLog, run: Run, prior: list[RunEvent
         validate_answer(req.payload.get("schema"), value)
     except RecursionError as e:  # 回答嵌套过深（schema 深度已在请求时限制）：按不合规处理（400）
         raise ValueError("answer is nested too deeply") from e
+    return req
+
+
+async def _answer(
+    s: AsyncSession,
+    log: EventLog,
+    run: Run,
+    prior: list[RunEvent],
+    call_id: str | None,
+    value: Any,
+    attempt_id: str | None = None,
+    value_hmac: str | None = None,
+) -> None:
+    validate_answer_request(prior, call_id, value)
+    if attempt_id is not None and value_hmac is None:
+        raise ValueError("workbench answer requires a content binding")
     from runtime.loop.toolbroker import hmac_json  # 延迟导入：toolbroker 在运行期导入本模块
 
     status, output, data_class = "ok", value, TOOL.data_class
@@ -290,7 +342,10 @@ async def _answer(s: AsyncSession, log: EventLog, run: Run, prior: list[RunEvent
             output, data_class = post.payload["output"], post.payload["data_class"]
         extra = {"hooks": post.records, "raw_output_hmac": raw_digest}
     summary, ref = ctx.offload_if_large(output, f"{settings.workspace_dir}/{run.run_id}", settings.tool_result_offload_tokens)
-    await log.append(run.run_id, RunEventType.INPUT_PROVIDED, {"kind": KIND_ANSWER, "call_id": call_id})
+    provided: dict[str, Any] = {"kind": KIND_ANSWER, "call_id": call_id}
+    if attempt_id is not None:
+        provided.update(workbench_attempt_id=attempt_id, workbench_value_hmac=value_hmac)
+    await log.append(run.run_id, RunEventType.INPUT_PROVIDED, provided)
     await log.append(
         run.run_id,
         RunEventType.TOOL_RESULT,
@@ -308,19 +363,34 @@ async def _reconcile(
     value: Any,
     user_token: str | None = None,
 ) -> None:
-    pending = pending_reconcile(prior)
-    if pending is None or pending["call_id"] != call_id:
+    pending = next((u for u in pending_reconciles(prior) if u["call_id"] == call_id), None)
+    if pending is None:
         raise InputNotPending(f"no unknown tool result awaiting reconciliation for call {call_id!r}")
     if action not in RECONCILE_ACTIONS:
         raise ValueError(f"action must be one of {', '.join(RECONCILE_ACTIONS)}")
     op_id = pending.get("operation_id")
+    if action == "retry" and pending.get("tool") == "run_skill_script":
+        raise ValueError("signed scripts do not declare downstream idempotency; reconcile with done or skip, never retry")
+    script_extra: dict[str, Any] = {}
+    if pending.get("tool") == "run_skill_script":
+        from runtime.skills.execution import BINDING, stop_operation
+
+        requested = next(event for event in prior if event.type == RunEventType.TOOL_REQUESTED and event.payload.get("call_id") == call_id)
+        binding = requested.payload.get("effective_input", {}).get(BINDING, {})
+        await stop_operation(op_id, binding)
+        script_extra = {"data_class": binding.get("data_class", "confidential"), "skill": binding}
     if action == "retry":
         agent = await _agent_of(s, run)
         tool = None
         if agent is not None:
             from runtime.assemble.assembler import assemble
+            from runtime.skills.verify import SkillVerifyError
 
-            tool = next((t for t in (await assemble(agent, run.subject, user_token)).tools if t.name == pending["tool"]), None)
+            try:
+                assembled = await assemble(agent, run.subject, user_token)
+            except SkillVerifyError as e:  # 技能验签 / 吊销失败：无法确认工具元数据，不允许重做（失败关闭）
+                raise ValueError(f"{e.code}: cannot assemble the agent's tools to verify retry ({e.message})") from e
+            tool = next((t for t in assembled.tools if t.name == pending["tool"]), None)
         if tool is None or not tool.requires_idempotency_key:
             raise ValueError(
                 f"retry is only allowed for tools whose downstream declares idempotency (use done or skip): {pending['tool']!r}"
@@ -339,20 +409,26 @@ async def _reconcile(
         )
         output = value if value is not None else {"reconciled": "done"}
         summary, ref = ctx.offload_if_large(output, f"{settings.workspace_dir}/{run.run_id}", settings.tool_result_offload_tokens)
-        await log.append(run.run_id, RunEventType.TOOL_RESULT, {"call_id": call_id, "status": "ok", "output": summary, "output_ref": ref})
+        await log.append(
+            run.run_id,
+            RunEventType.TOOL_RESULT,
+            {"call_id": call_id, "status": "ok", "output": summary, "output_ref": ref} | script_extra,
+        )
         if op_id:
             await log.update_operation(op_id, OP_EXECUTED)
         return
     await log.append(
         run.run_id,
         RunEventType.TOOL_RESULT,
-        {"call_id": call_id, "status": "error", "output": {"error": "skipped by the run initiator after an unknown result"}},
+        {"call_id": call_id, "status": "error", "output": {"error": "skipped by the run initiator after an unknown result"}} | script_extra,
     )
     if op_id:
         await log.update_operation(op_id, OP_SKIPPED)
 
 
-async def _credential(s: AsyncSession, log: EventLog, run: Run, prior: list[RunEvent], subject: str, value: Any) -> str | None:
+async def _credential(
+    s: AsyncSession, log: EventLog, run: Run, prior: list[RunEvent], subject: str, value: Any, attempt_id: str | None = None
+) -> str | None:
     req = _pending_request(prior, KIND_CREDENTIAL)
     if req is None:
         raise InputNotPending("no pending credential request")
@@ -367,5 +443,8 @@ async def _credential(s: AsyncSession, log: EventLog, run: Run, prior: list[RunE
         if stored is None or not credentials.is_fresh(stored.expires_at):
             raise ValueError("no fresh credential stored for this run")
     cid = req.payload.get("call_id")
-    await log.append(run.run_id, RunEventType.INPUT_PROVIDED, {"kind": KIND_CREDENTIAL, "call_id": cid})
+    payload = {"kind": KIND_CREDENTIAL, "call_id": cid}
+    if attempt_id is not None:
+        payload["workbench_attempt_id"] = attempt_id
+    await log.append(run.run_id, RunEventType.INPUT_PROVIDED, payload)
     return cid if isinstance(cid, str) else None

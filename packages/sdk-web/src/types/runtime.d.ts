@@ -53,7 +53,13 @@ export interface paths {
          *     6) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的
          *        harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值；
          *     7) discovery 配置闸门（S8.2）——{enabled, scope?, max_tools?} 须合规；开启后运行期可能动态加入高风险写工具，
-         *        按声明了高风险写处理（须 L2，harness 持有循环的还须在白名单内）。
+         *        按声明了高风险写处理（须 L2，harness 持有循环的还须在白名单内）；
+         *     8) S9：parallel_tool_calls 须为布尔值，开启时所选 harness 须声明支持（claude-sdk 不支持，D155）；context（上下文压缩，
+         *        DEF-2）须合规；用到 llm 摘要（thinking_summary llm 模式、context.compaction=llm）时摘要别名须在模型网关上存在（D151）；
+         *     9) Skill 锁（S9 D143，契约 ②）——TOOL_DISPATCH=gateway 时经能力网关 POST /skills/resolve 校验声明的 Skill（listed、同租户、
+         *        声明能力 ⊆ Agent 工具 ∪ 发现范围）并冻结 skills_lock；风险等级以网关判定为准（不再查本地工具表）。网关拒绝 409（带网关
+         *        错误码），网关不可达 / 应答不合规同样 409（失败关闭）。进程内开发执行器（TOOL_DISPATCH=local）不经网关：不冻结锁，
+         *        风险等级取本地工具表。
          *
          *     已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。
          */
@@ -259,9 +265,10 @@ export interface paths {
         put?: never;
         /**
          * Approve
-         * @description 批准一次挂起中的高风险工具调用：仅在 Run 处于 auth-required 状态时允许，
-         *     记录 TOOL_APPROVED 事件并把状态迁回 working。持久化执行的 Run（S7，D108）随即入队，由 Worker 以发起人存储的
-         *     凭据自动续跑；S7 之前创建的 Run（非持久化）仍需发起人调用 /resume 才继续执行。
+         * @description 批准挂起中的高风险工具调用（单个 call_id，或并行批次的 calls[]）：仅在 Run 处于 auth-required 状态时允许，
+         *     逐个记录 TOOL_APPROVED 事件；同批待审批的调用全部批准后才把状态迁回 working（否则保持 auth-required，返回的 state 即如此）。
+         *     持久化执行的 Run（S7，D108）迁回 working 后随即入队，由 Worker 以发起人存储的凭据自动续跑；S7 之前创建的 Run（非持久化）
+         *     仍需发起人调用 /resume 才继续执行。
          *
          *     批准会绑定"参数指纹 + 有效期"：参数一旦变化或审批超时，闸口不会放行，必须重新审批。
          */
@@ -484,26 +491,39 @@ export interface components {
         };
         /**
          * ApprovalBody
-         * @description 审批/拒绝工具调用请求体。
+         * @description 审批/拒绝工具调用请求体：单个调用给 call_id + params_hash；并行批次的影响预览卡（payload.calls[]）可用 calls 一次批多个
+         *     （S9，D149），两种写法二选一。
          *
          *     params_hash 是必填项：审批附着于具体参数与资源，审批人必须回传卡片上展示的那一份参数指纹，
          *     否则无从判断"批的到底是哪一组参数"。
          */
         ApprovalBody: {
             /** Call Id */
-            call_id: string;
+            call_id?: string | null;
+            /** Calls */
+            calls?: components["schemas"]["ApprovalCall"][] | null;
             /**
              * Comment
              * @default
              */
             comment: string;
             /** Params Hash */
-            params_hash: string;
+            params_hash?: string | null;
             /**
              * Ttl Seconds
              * @default 900
              */
             ttl_seconds: number;
+        };
+        /**
+         * ApprovalCall
+         * @description 批量审批中的一个调用：调用标识与卡片上展示的参数指纹。
+         */
+        ApprovalCall: {
+            /** Call Id */
+            call_id: string;
+            /** Params Hash */
+            params_hash: string;
         };
         /**
          * ApprovalView

@@ -1,7 +1,7 @@
 [project]
 name = "ai-capability-gateway"
 version = "0.1.0"
-description = "Capability registry, two-level discovery, authz proxy, token exchange, MCP connectors, Skill store"
+description = "Capability registry, two-level discovery, authz proxy, token exchange, MCP connectors, signed Skill store"
 requires-python = ">=3.11"
 dependencies = [
   "ai-contract",
@@ -12,11 +12,15 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0",                 # 目录库（S8.1）
   "alembic>=1.13",                            # 网关自带迁移（version_table cg_alembic_version）
   "pyjwt[crypto]>=2.10",                      # 服务令牌 / 用户令牌 JWKS 验签、act 断言 ES256 签名（S8.4）
+  "pyyaml>=6.0",                              # Skill SKILL.md frontmatter 解析（S9）
+  "python-multipart>=0.0.9",                  # POST /skills multipart 上传（S9）
+  "bandit==1.9.4",                            # Skill 脚本静态扫描（S9.3，缺失时扫描失败关闭）
 ]
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx", "schemathesis>=3.30", "aiosqlite>=0.20"]
 mcp = ["mcp>=1.0"]
 mysql = ["asyncmy>=0.2.9"]                    # CATALOG_BACKEND=mysql
+s3 = ["minio==7.2.20"]                        # SKILL_STORE=s3（MinIO / S3 兼容存储）
 fastembed = ["fastembed>=0.4"]                # EMBED_PROVIDER=fastembed（本机 bge-small-zh-v1.5）
 [build-system]
 requires = ["setuptools>=68"]

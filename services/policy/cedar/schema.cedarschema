@@ -8,6 +8,8 @@ entity User = { tenant: String, roles: Set<String>, department?: String };
 entity Agent = { tenant: String, owner?: String };
 // 能力：所属系统、风险级别（read / write_low / write_high）、数据分级、租户（属性取自能力目录）
 entity Capability = { system: String, risk_level: String, data_class: String, tenant: String };
+// Skill 版本（S9）：所属租户、清单声明的风险级别、提交人（属性取自能力网关的 Skill 商店）
+entity Skill = { tenant: String, risk_level: String, submitter: User };
 
 // 代理执行的 Agent（act）：id、版本与所属租户
 type AgentRef = { id: String, version?: String, tenant: String };
@@ -20,3 +22,5 @@ action invoke appliesTo { principal: [User, Agent], resource: [Capability], cont
 action read_data appliesTo { principal: [User, Agent], resource: [Capability], context: AuthzContext };
 // approve：审批一次高风险调用（为 S11 审批人指派与收件箱预留，当前无 permit，默认拒绝）
 action approve appliesTo { principal: [User], resource: [Capability], context: AuthzContext };
+// approve_skill：审批 Skill 上架（S9，双人审批：审批人必须是 skill-reviewer 且不是提交人）
+action approve_skill appliesTo { principal: [User], resource: [Skill], context: AuthzContext };

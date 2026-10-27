@@ -16,7 +16,10 @@ import httpx
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from observe_adapter.feedback_protocol import router as feedback_router
+
 app = FastAPI(title="AI Capability Platform · Observe Adapter", version="0.1.0")
+app.include_router(feedback_router)
 LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST")  # 例：http://localhost:3000
 LANGFUSE_AUTH = (os.environ.get("LANGFUSE_PUBLIC_KEY", ""), os.environ.get("LANGFUSE_SECRET_KEY", ""))  # Basic Auth
 BUFFER: list[dict[str, Any]] = []  # 未配置 Langfuse 时的开发态落点

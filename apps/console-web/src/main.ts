@@ -1,3 +1,4 @@
+import "./platform.css";
 /**
  * Agent Console 前端入口（Vue 3）。
  * 注册 Pinia 状态、路由，并引入 `@ai-platform/sdk-web` 以注册 `<ai-assistant>` 自定义元素。

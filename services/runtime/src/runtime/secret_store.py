@@ -33,6 +33,8 @@ SECRET_NAMES = (
     "REDIS_URL",
     "RUNTIME_GATEWAY_CLIENT_SECRET",  # 服务客户端 ai-runtime-svc 的密钥（S8，调用能力网关的服务令牌）
     "POLICY_SERVICE_TOKEN",  # 调用策略服务的服务间共享令牌（S8 评审 #7）
+    "NODE_CLIENT_SECRET",  # 节点服务客户端 ai-node-svc 的密钥（S9.8，节点代理换取访问 Console 的服务令牌）
+    "NODE_CONSOLE_TOKEN",  # 开发态节点静态令牌（S9.8，仅未配置节点令牌端点时使用；生产须经 Vault / 挂载文件）
 )
 VAULT_TIMEOUT_S = 5.0  # 读取 Vault 的超时（秒）
 

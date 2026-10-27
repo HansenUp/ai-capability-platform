@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-platform:owner-identity-bindings:draft:1",
+  "title": "Draft Owner identity bindings; not a runtime configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "revision", "profile_id", "change_ref", "bindings"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "revision": {"type": "integer", "minimum": 1},
+    "profile_id": {"$ref": "#/$defs/identifier"},
+    "change_ref": {"$ref": "#/$defs/identifier"},
+    "bindings": {
+      "type": "array",
+      "maxItems": 2000,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["issuer", "tenant", "subject", "legacy_user"],
+        "properties": {
+          "issuer": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 2048},
+          "tenant": {"$ref": "#/$defs/identifier"},
+          "subject": {"$ref": "#/$defs/identifier"},
+          "legacy_user": {"$ref": "#/$defs/identifier"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f]+$"
+    }
+  }
+}

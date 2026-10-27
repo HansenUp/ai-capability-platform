@@ -1,0 +1,8 @@
+{
+  "_doc": "坏包 → 应命中的扫描规则（规则 id 等于该值或以 '<值>.' / '<值>:' / '<值>/' 开头即算命中）；ok-baseline 为对照组，应无阻断项",
+  "bad-remote-fetch": "remote_fetch",
+  "bad-binary": "structure",
+  "bad-capability": "capabilities",
+  "bad-injection": "injection",
+  "bad-bandit": "bandit"
+}

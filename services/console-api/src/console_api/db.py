@@ -1,7 +1,7 @@
 """Console 库（S3.3）：生产为 MySQL，本机默认 SQLite。
 
-只存运营侧控制面的持久数据：Agent、Agent 版本快照与发布 / 灰度状态、可见范围、Agent 归属（user_agents）、审计。
-节点注册、心跳与指令队列是易失状态，仍在进程内存（多副本部署时迁到 Redis，见 S7）。
+只存运营侧控制面的持久数据：Agent、Agent 版本快照与发布 / 灰度状态、可见范围、Agent 归属（user_agents）、审计，
+以及节点指令、节点注册与心跳、租户 Agent 的节点组绑定。
 
 表名统一加 ``t_console_`` 前缀、Alembic 版本表为 ``alembic_version_console``：与 Runtime 共用同一个 MySQL 库时互不冲突。
 schema 只由 Alembic 管理（``services/console-api/migrations``），启动时程序化执行 ``upgrade head``。
@@ -16,7 +16,21 @@ from typing import Any
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import JSON, Connection, DateTime, Dialect, Integer, String, Text, TypeDecorator, UniqueConstraint, make_url
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Connection,
+    DateTime,
+    Dialect,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    TypeDecorator,
+    UniqueConstraint,
+    make_url,
+)
 from sqlalchemy.dialects import mysql
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -128,6 +142,76 @@ class Audit(Base):
     action: Mapped[str] = mapped_column(String(64), index=True)
     object: Mapped[str] = mapped_column(String(128))
     detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class DirectoryTenant(Base):
+    __tablename__ = "t_console_directory_tenant"
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    __table_args__ = {"mysql_collate": "utf8mb4_bin"}
+
+
+class DirectoryUser(Base):
+    __tablename__ = "t_console_directory_user"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64))
+    issuer: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(128))
+    display_name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "issuer", "subject", name="uq_console_directory_identity"),
+        {"mysql_collate": "utf8mb4_bin"},
+    )
+
+
+class NodeGroup(Base):
+    __tablename__ = "t_console_node_group"
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    description: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+
+
+class Node(Base):
+    __tablename__ = "t_console_node"
+    node_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    topology: Mapped[str] = mapped_column(String(16))
+    labels: Mapped[list[str]] = mapped_column(JSON, default=list)
+    version: Mapped[str] = mapped_column(String(64))
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    load: Mapped[float] = mapped_column(Float, default=0)
+    qps: Mapped[float] = mapped_column(Float, default=0)
+    ready: Mapped[bool] = mapped_column(Boolean, default=True)
+    boot_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class NodeBinding(Base):
+    __tablename__ = "t_console_node_binding"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64))
+    agent_id: Mapped[str] = mapped_column(String(64))
+    weights: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
+    __table_args__ = (UniqueConstraint("tenant_id", "agent_id", name="uq_console_node_binding"),)
+
+
+class NodeCommand(Base):
+    """下发给 Runtime 节点的指令（S9.8）：节点拉取不清空，回执（ack）后才不再下发；status：pending → ok / error / unsupported。"""
+
+    __tablename__ = "t_console_node_command"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    command_id: Mapped[str] = mapped_column(String(36), unique=True)
+    node_id: Mapped[str] = mapped_column(String(128))
+    tenant_id: Mapped[str] = mapped_column(String(64))
+    type: Mapped[str] = mapped_column(String(32))
+    args: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(128))
+    authorization_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+    acked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    __table_args__ = (Index("ix_t_console_node_command_node_status", "node_id", "status"),)
 
 
 def normalize_database_url(url: str) -> URL:

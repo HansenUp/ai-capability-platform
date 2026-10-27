@@ -373,7 +373,7 @@ async def test_migrate_function_on_fresh_sqlite(tmp_path: Path) -> None:
         await db.migrate(eng)
         await db.migrate(eng)  # 重复执行为空操作
         async with eng.connect() as conn:
-            assert (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == "0004"
+            assert (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == "0011"
     finally:
         await eng.dispose()
 
@@ -402,7 +402,7 @@ def test_python_m_runtime_migrate(tmp_path: Path) -> None:
     eng = create_engine(f"sqlite:///{path}")
     try:
         with eng.connect() as conn:
-            assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004"
+            assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0011"
     finally:
         eng.dispose()
 
@@ -424,7 +424,7 @@ async def test_mysql_concurrent_migrations_on_empty_db() -> None:
         try:
             await asyncio.gather(*(db.migrate(e) for e in engines))
             async with engines[0].connect() as conn:
-                assert [r[0] for r in await conn.execute(text("SELECT version_num FROM alembic_version"))] == ["0004"]
+                assert [r[0] for r in await conn.execute(text("SELECT version_num FROM alembic_version"))] == ["0011"]
         finally:
             for e in engines:
                 await e.dispose()

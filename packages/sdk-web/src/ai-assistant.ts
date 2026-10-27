@@ -13,6 +13,8 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { components } from "./types/runtime";
+export { RuntimeRunClient, RuntimeRequestError, workbenchCards, answerValue } from "./run-client";
+export type { WorkbenchRun, WorkbenchEvent, ApprovalCard, InputCard, WorkbenchIdentity, WriteAttempt } from "./run-client";
 
 /** SSE data 帧的类型：由 docs/api/runtime-openapi.json 生成的契约统一事件（按 type 判别的联合，见 pnpm gen:types）。 */
 type Ev = components["schemas"]["Event"];

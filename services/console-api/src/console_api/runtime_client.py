@@ -56,12 +56,25 @@ async def _bearer(client: httpx.AsyncClient) -> str | None:
     return _token[0]
 
 
+def subject(user: str) -> str:
+    """Runtime 眼中本客户端请求的主体：令牌模式为服务账号 ``app:<CLIENT_ID>``（Runtime 只认令牌，不认 user 参数），
+    开发头模式为 ``human:<user>``。用于 0% 预发布版本的评测白名单——白名单写错主体时 Runtime 按"版本不存在"处理。"""
+    return f"app:{CLIENT_ID}" if TOKEN_URL and os.environ.get("CONSOLE_CLIENT_SECRET") else f"human:{user}"
+
+
 async def call(
-    method: str, path: str, *, user: str, tenant: str, json: dict[str, Any] | None = None, params: dict[str, str] | None = None
+    method: str,
+    path: str,
+    *,
+    user: str,
+    tenant: str,
+    json: dict[str, Any] | None = None,
+    params: dict[str, str] | None = None,
+    timeout_s: float = TIMEOUT_S,
 ) -> dict[str, Any]:
-    """调用 Runtime 管理接口，返回 JSON 响应体。"""
+    """调用 Runtime 管理接口，返回 JSON 响应体（timeout_s：/v1/messages 等含模型调用的请求需要更长超时）。"""
     try:
-        async with httpx.AsyncClient(base_url=RUNTIME_ADMIN_URL, timeout=TIMEOUT_S, transport=_transport) as client:
+        async with httpx.AsyncClient(base_url=RUNTIME_ADMIN_URL, timeout=timeout_s, transport=_transport) as client:
             token = await _bearer(client)
             headers = {"Authorization": f"Bearer {token}"} if token else {"X-AI-Subject": f"human:{user}", "X-AI-Tenant": tenant}
             r = await client.request(method, path, json=json, headers=headers, params=params)

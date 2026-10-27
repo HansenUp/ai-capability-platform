@@ -21,6 +21,16 @@ when { resource.risk_level == "write_low" && principal.tenant == resource.tenant
 permit(principal, action == Action::"invoke", resource)
 when { resource.risk_level == "write_high" && principal.tenant == resource.tenant && context.approved == true };
 
+// Skill 上架审批：只有同租户的 skill-reviewer 角色可以批准（S9，D140）。
+@id("permit:approve_skill_reviewer")
+permit(principal, action == Action::"approve_skill", resource)
+when { principal.roles.contains("skill-reviewer") && principal.tenant == resource.tenant };
+
+// 双人审批：提交人不能批准自己提交的 Skill（forbid 优先，任何 permit 都无法绕过）。
+@id("forbid:self_approve_skill")
+forbid(principal, action == Action::"approve_skill", resource)
+when { resource.submitter == principal };
+
 // 跨租户调用一律禁止，作为租户边界的兜底（对所有动作生效）。
 // Cedar 多条 permit 取并集：只在单条 permit 上加租户条件，后续新增的 permit 仍可能绕过租户边界；
 // forbid 优先于 permit，因此这里显式禁止跨租户，确保任何 permit（含带审批的高风险写）都无法绕过。

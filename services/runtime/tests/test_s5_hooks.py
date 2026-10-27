@@ -576,7 +576,8 @@ def test_summary_visibility_llm_mode_streams_one_summary(client, monkeypatch):
     evs, run_id, _, log = _run(client, [_text_turn(thinking="第一段思考。第二段思考。")], cfg)
     thinking = [e for e in evs if e["type"] == "thinking"]
     assert [(t["delta"], t["visibility"]) for t in thinking] == [("先查工单再总结", "summary")]
-    assert seen and seen[0]["model"] == "default-chat" and seen[0]["messages"][1]["content"] == "第一段思考。第二段思考。"
+    # S5 #7（S9，D151）：llm 模式缺省用非推理摘要别名 THINKING_SUMMARY_MODEL_ALIAS，而不是 Agent 自己的（推理）模型
+    assert seen and seen[0]["model"] == "summary-fast-2026-10" and seen[0]["messages"][1]["content"] == "第一段思考。第二段思考。"
     resp = _one(log, "model.response")
     assert resp["thinking"] == "第一段思考。第二段思考。" and resp["thinking_summary"] == "先查工单再总结"
     assert resp["hooks"] == [{"point": "post_model", "name": "thinking_summary", "verdict": "override"}]
@@ -592,7 +593,8 @@ def test_summary_llm_failure_streams_nothing(client, monkeypatch):
 
 
 def test_summary_not_generated_by_unauthorized_model_under_confidential_taint(client, monkeypatch):
-    """Run 带机密污点时，摘要模型不在 CONFIDENTIAL_MODEL_ALIASES 内：不调用摘要模型、不下发摘要。"""
+    """Run 带机密污点时，摘要模型不被数据分级矩阵准许接收机密数据（开发矩阵 + 旧配置 CONFIDENTIAL_MODEL_ALIASES）：
+    不调用摘要模型、不下发摘要。"""
     seen: list[dict[str, Any]] = []
     _summary_client(monkeypatch, seen)
     cfg = {

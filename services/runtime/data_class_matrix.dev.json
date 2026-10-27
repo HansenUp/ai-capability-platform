@@ -1,0 +1,63 @@
+{
+  "schema": "ai-platform.data-class-matrix/v1",
+  "version": "dev-2026-10-18",
+  "description": "开发态数据分级六通道矩阵（未签署，S9 OPT-4 / D152）。生产须以 DATA_CLASS_MATRIX_FILE 指向经合规签署（signoff）的矩阵并逐项列出处理方。开发态兼容旧配置 CONFIDENTIAL_MODEL_ALIASES：其中的别名并入 model 通道 confidential 等级。未列出 = 拒绝；\"*\" = 任意处理方。 embedding 通道的 hash / fastembed 为能力网关进程内嵌入器（数据不出进程、不出境），故对 internal 与 confidential 准许；外部嵌入 provider（embed-default）只准 internal。",
+  "channels": {
+    "model": {
+      "public": [
+        "*"
+      ],
+      "internal": [
+        "*"
+      ],
+      "confidential": []
+    },
+    "embedding": {
+      "public": [
+        "*"
+      ],
+      "internal": [
+        "embed-default",
+        "hash",
+        "fastembed"
+      ],
+      "confidential": [
+        "hash",
+        "fastembed"
+      ]
+    },
+    "rerank": {
+      "public": [
+        "*"
+      ],
+      "internal": [
+        "rerank-default"
+      ],
+      "confidential": []
+    },
+    "observe": {
+      "public": [
+        "langfuse",
+        "otel"
+      ],
+      "internal": [
+        "langfuse",
+        "otel"
+      ],
+      "confidential": []
+    },
+    "fallback": {
+      "public": [
+        "*"
+      ],
+      "internal": [],
+      "confidential": []
+    },
+    "memory": {
+      "public": [],
+      "internal": [],
+      "confidential": []
+    }
+  },
+  "signoff": null
+}

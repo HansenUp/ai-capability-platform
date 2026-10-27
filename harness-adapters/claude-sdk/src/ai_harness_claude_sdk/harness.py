@@ -355,7 +355,9 @@ class ClaudeSdkHarness:
           resume 续接，进程重启后可由事件日志精确续跑（重放续跑探针为证），能力等级 L2；
         - internal_hook_points=[]：四个 hook 点全部由平台执行；
         - supports_vision=True：历史中的 image_ref（Contract V1.2）在合成转录时读成 Anthropic image 块（S6，D102）；
-        - supports_subagents=False：内置 Task 等工具全部禁用。
+        - supports_subagents=False：内置 Task 等工具全部禁用；
+        - parallel_tool_calls=False（Contract V1.4，S9 D155）：CLI 一条模型消息里的多个 tool_use 仍按调用顺序串行拆成多轮，
+          每轮只交回一个 ToolUseEvent（平台不按批处理；快照开启 parallel_tool_calls 时发布 409）。
         """
         return HarnessCapabilities(
             name="claude-sdk",
@@ -369,6 +371,7 @@ class ClaudeSdkHarness:
             tool_interception="enforcing",
             can_resume_from_events=True,
             internal_hook_points=[],
+            parallel_tool_calls=False,
         )
 
     async def open_session(self, spec: SessionSpec) -> SessionHandle:

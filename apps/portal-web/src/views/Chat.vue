@@ -1,14 +1,17 @@
-<!-- 对话页：从路由参数取 agentId，嵌入 <ai-assistant>；令牌由门户登录态提供，组件内置反馈控件（S3.5） -->
+<!-- Reuse the Console workbench and SDK ledger protocol; no legacy Messages or feedback writes. -->
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed } from "vue";
 import { useRoute } from "vue-router";
+import Workbench from "../../../console-web/src/views/Chat.vue";
 import { getToken } from "../auth";
-
-const agentId = useRoute().params.agentId as string; // 路由 /chat/:agentId
-const el = ref<HTMLElement & { tokenProvider?: () => Promise<string> }>();
-onMounted(() => { if (el.value) el.value.tokenProvider = getToken; });
+import { portalTokenKey } from "../runtime-session";
+import { inject } from "vue";
+const tokenProvider = inject(portalTokenKey, getToken);
+const route = useRoute();
+const agentId = computed(() => String(route.params.agentId ?? ""));
 </script>
 <template>
+  <router-link to="/">返回可用 Agent</router-link>
   <h2>{{ agentId }}</h2>
-  <ai-assistant ref="el" :agent-id="agentId" base-url=""></ai-assistant>
+  <Workbench :key="agentId" :portal-agent="agentId" :portal-token-provider="tokenProvider" />
 </template>

@@ -42,7 +42,8 @@ fn write_bumped(path: &Path, content: &str, secs_ahead: u64) {
         .unwrap();
 }
 
-/// 与 policy_service 的实体映射一致：principal=User、resource=Capability、context={approved,taint,agent?}。
+/// 与 policy_service 的实体映射一致：principal=User、resource=Capability（approve_skill 为 Skill，submitter=User）、
+/// context={approved,taint,agent?}。
 fn cedar_request(case: &Value, approved: bool) -> Value {
     let p = &case["principal"];
     let roles = match (&p["roles"], &p["role"]) {
@@ -50,29 +51,46 @@ fn cedar_request(case: &Value, approved: bool) -> Value {
         (_, Value::String(r)) => json!([r]),
         _ => json!([]),
     };
+    let sub = p.get("sub").and_then(Value::as_str).unwrap_or("u-1");
     let r = &case["resource"];
     let c = &case["context"];
     let mut context = json!({ "approved": approved, "taint": c["taint"].clone() });
     if let Some(agent) = c.get("agent") {
         context["agent"] = agent.clone();
     }
+    let action = case.get("action").and_then(Value::as_str).unwrap_or("invoke");
+    let (rtype, attrs) = if action == "approve_skill" {
+        (
+            "Skill",
+            json!({
+                "tenant": r["tenant"], "risk_level": r["risk_level"],
+                "submitter": {"__entity": {"type": "User", "id": r["submitted_by"]}}
+            }),
+        )
+    } else {
+        (
+            "Capability",
+            json!({
+                "system": r["system"], "risk_level": r["risk_level"], "data_class": r["data_class"], "tenant": r["tenant"]
+            }),
+        )
+    };
     json!({
-        "principal": {"type": "User", "id": "u-1"},
-        "action": {"type": "Action", "id": case.get("action").and_then(Value::as_str).unwrap_or("invoke")},
-        "resource": {"type": "Capability", "id": "cap.test"},
+        "principal": {"type": "User", "id": sub},
+        "action": {"type": "Action", "id": action},
+        "resource": {"type": rtype, "id": "res.test"},
         "context": context,
         "entities": [
-            {"uid": {"type": "User", "id": "u-1"}, "attrs": {"tenant": p["tenant"], "roles": roles}, "parents": []},
-            {"uid": {"type": "Capability", "id": "cap.test"}, "attrs": {
-                "system": r["system"], "risk_level": r["risk_level"], "data_class": r["data_class"], "tenant": r["tenant"]
-            }, "parents": []}
+            {"uid": {"type": "User", "id": sub}, "attrs": {"tenant": p["tenant"], "roles": roles}, "parents": []},
+            {"uid": {"type": rtype, "id": "res.test"}, "attrs": attrs, "parents": []}
         ]
     })
 }
 
-const FORBID_PRIORITY: [&str; 3] = [
+const FORBID_PRIORITY: [&str; 4] = [
     "forbid:cross_tenant",
     "forbid:agent_cross_tenant",
+    "forbid:self_approve_skill",
     "forbid:taint_outbound",
 ];
 
@@ -157,6 +175,8 @@ fn policy_ids_are_annotation_ids() {
         "forbid:cross_tenant",
         "forbid:agent_cross_tenant",
         "forbid:taint_outbound",
+        "permit:approve_skill_reviewer",
+        "forbid:self_approve_skill",
     ] {
         assert!(ids.iter().any(|i| i == want), "missing {want}");
     }

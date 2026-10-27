@@ -23,7 +23,7 @@ from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field, StrictBool, ValidationError
+from pydantic import BaseModel, Field, StrictBool, ValidationError, model_validator
 
 from policy_service.baseline import RawDecision, authorize, synthesize
 
@@ -102,13 +102,14 @@ class Principal(BaseModel):
 
 
 class Resource(BaseModel):
-    """目标能力：属性取自能力网关目录。"""
+    """目标资源：能力（属性取自能力网关目录），或 approve_skill 的 Skill 版本（submitted_by 为提交人 sub）。"""
 
     id: str = Field(min_length=1, max_length=256)
     tenant: str = Field(min_length=1, max_length=128)
     system: str = Field(default="", max_length=128)
     risk_level: str = Field(min_length=1, max_length=64)
     data_class: str = Field(default="", max_length=64)
+    submitted_by: str = Field(default="", max_length=256)
 
 
 class AgentRef(BaseModel):
@@ -127,6 +128,9 @@ class AuthzContext(BaseModel):
     agent: AgentRef | None = None
 
 
+SKILL_ACTIONS = frozenset({"approve_skill"})  # 资源为 Skill 实体的动作
+
+
 class AuthzRequest(BaseModel):
     """一条判定请求。"""
 
@@ -134,6 +138,13 @@ class AuthzRequest(BaseModel):
     action: str = Field(default="invoke", min_length=1, max_length=64)
     resource: Resource
     context: AuthzContext = Field(default_factory=AuthzContext)
+
+    @model_validator(mode="after")
+    def _skill_needs_submitter(self) -> AuthzRequest:
+        """approve_skill 必须带提交人（缺失时无法判定自批，按非法请求拒绝）。"""
+        if self.action in SKILL_ACTIONS and not self.resource.submitted_by:
+            raise ValueError("resource.submitted_by is required for approve_skill")
+        return self
 
 
 class BatchRequest(BaseModel):
@@ -171,20 +182,27 @@ def _context_dict(req: AuthzRequest, approved: bool) -> dict[str, Any]:
 
 
 def _cedar_query(req: AuthzRequest, approved: bool) -> dict[str, Any]:
-    """实体映射：principal=User::"<sub>"（tenant、roles）、resource=Capability::"<id>"、context={approved,taint,agent?}。"""
+    """实体映射：principal=User::"<sub>"（tenant、roles）、resource=Capability::"<id>"（approve_skill 为
+    Skill::"<id>"，submitter=User::"<submitted_by>"）、context={approved,taint,agent?}。"""
     p, r = req.principal, req.resource
+    if req.action in SKILL_ACTIONS:
+        rtype = "Skill"
+        attrs: dict[str, Any] = {
+            "tenant": r.tenant,
+            "risk_level": r.risk_level,
+            "submitter": {"__entity": {"type": "User", "id": r.submitted_by}},
+        }
+    else:
+        rtype = "Capability"
+        attrs = {"system": r.system, "risk_level": r.risk_level, "data_class": r.data_class, "tenant": r.tenant}
     return {
         "principal": {"type": "User", "id": p.sub},
         "action": {"type": "Action", "id": req.action},
-        "resource": {"type": "Capability", "id": r.id},
+        "resource": {"type": rtype, "id": r.id},
         "context": _context_dict(req, approved),
         "entities": [
             {"uid": {"type": "User", "id": p.sub}, "attrs": {"tenant": p.tenant, "roles": sorted(set(p.roles))}, "parents": []},
-            {
-                "uid": {"type": "Capability", "id": r.id},
-                "attrs": {"system": r.system, "risk_level": r.risk_level, "data_class": r.data_class, "tenant": r.tenant},
-                "parents": [],
-            },
+            {"uid": {"type": rtype, "id": r.id}, "attrs": attrs, "parents": []},
         ],
     }
 

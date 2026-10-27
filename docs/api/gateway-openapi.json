@@ -132,6 +132,20 @@
         "title": "Binding",
         "type": "object"
       },
+      "Body_submit_skill_skills_post": {
+        "properties": {
+          "package": {
+            "contentMediaType": "application/octet-stream",
+            "title": "Package",
+            "type": "string"
+          }
+        },
+        "required": [
+          "package"
+        ],
+        "title": "Body_submit_skill_skills_post",
+        "type": "object"
+      },
       "Capability": {
         "description": "一条能力登记记录；`to_tool_spec()` 输出 Runtime 需要的 ToolSpec 字段。",
         "properties": {
@@ -579,6 +593,134 @@
         "title": "ErrorDetail",
         "type": "object"
       },
+      "EvalItem": {
+        "properties": {
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "passed"
+        ],
+        "title": "EvalItem",
+        "type": "object"
+      },
+      "EvalOut": {
+        "properties": {
+          "pass_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pass Rate"
+          },
+          "run_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Ref"
+          }
+        },
+        "required": [
+          "run_ref",
+          "pass_rate"
+        ],
+        "title": "EvalOut",
+        "type": "object"
+      },
+      "EvalResultIn": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EvalItem"
+            },
+            "maxItems": 1000,
+            "title": "Items",
+            "type": "array"
+          },
+          "pass_rate": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Pass Rate",
+            "type": "number"
+          },
+          "run_ref": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Run Ref",
+            "type": "string"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
+          }
+        },
+        "required": [
+          "run_ref",
+          "pass_rate",
+          "items"
+        ],
+        "title": "EvalResultIn",
+        "type": "object"
+      },
+      "EvalSummary": {
+        "properties": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Items"
+          },
+          "pass_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pass Rate"
+          }
+        },
+        "required": [
+          "pass_rate",
+          "items"
+        ],
+        "title": "EvalSummary",
+        "type": "object"
+      },
       "ExchangeIn": {
         "description": "令牌交换请求。执行者身份不在此声明：请求体里即使混入 actor 等字段也会被忽略。\n已配置 Keycloak 时用户令牌只取 X-AI-User-Token（已验签），subject_token 被忽略。",
         "properties": {
@@ -731,6 +873,29 @@
         "title": "InvokeIn",
         "type": "object"
       },
+      "LockEntry": {
+        "properties": {
+          "manifest_sha256": {
+            "title": "Manifest Sha256",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "manifest_sha256"
+        ],
+        "title": "LockEntry",
+        "type": "object"
+      },
       "McpServerIn": {
         "description": "连接器登记信息。",
         "properties": {
@@ -785,6 +950,180 @@
           "endpoint"
         ],
         "title": "McpServerIn",
+        "type": "object"
+      },
+      "ResolveIn": {
+        "properties": {
+          "agent_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "discovery_scope": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Discovery Scope",
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/SkillRef"
+            },
+            "maxItems": 50,
+            "title": "Skills",
+            "type": "array"
+          },
+          "tenant": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Tenant",
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent_id",
+          "tenant"
+        ],
+        "title": "ResolveIn",
+        "type": "object"
+      },
+      "ResolveOut": {
+        "properties": {
+          "lock": {
+            "items": {
+              "$ref": "#/components/schemas/LockEntry"
+            },
+            "title": "Lock",
+            "type": "array"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lock",
+          "risk_level"
+        ],
+        "title": "ResolveOut",
+        "type": "object"
+      },
+      "RevocationsOut": {
+        "properties": {
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "revoked": {
+            "items": {
+              "$ref": "#/components/schemas/Revoked"
+            },
+            "title": "Revoked",
+            "type": "array"
+          }
+        },
+        "required": [
+          "revoked",
+          "generated_at"
+        ],
+        "title": "RevocationsOut",
+        "type": "object"
+      },
+      "RevokeIn": {
+        "properties": {
+          "reason": {
+            "default": "",
+            "maxLength": 512,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "RevokeIn",
+        "type": "object"
+      },
+      "Revoked": {
+        "properties": {
+          "manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Sha256"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "manifest_sha256",
+          "revoked_at"
+        ],
+        "title": "Revoked",
+        "type": "object"
+      },
+      "ScanSummary": {
+        "properties": {
+          "findings_count": {
+            "title": "Findings Count",
+            "type": "integer"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "rules_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules Version"
+          }
+        },
+        "required": [
+          "passed",
+          "findings_count",
+          "rules_version"
+        ],
+        "title": "ScanSummary",
         "type": "object"
       },
       "SearchIn": {
@@ -952,17 +1291,51 @@
         "title": "SearchOut",
         "type": "object"
       },
-      "SkillIn": {
-        "description": "Skill 上架申请。",
+      "SkillList": {
         "properties": {
-          "capabilities_declared": {
+          "items": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/SkillListItem"
             },
-            "title": "Capabilities Declared",
+            "title": "Items",
             "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SkillList",
+        "type": "object"
+      },
+      "SkillListItem": {
+        "properties": {
+          "eval": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "eval_dataset_ref": {
+          "listed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listed At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reviewed_by": {
             "anyOf": [
               {
                 "type": "string"
@@ -971,32 +1344,36 @@
                 "type": "null"
               }
             ],
-            "title": "Eval Dataset Ref"
+            "title": "Reviewed By"
           },
-          "name": {
-            "title": "Name",
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "scan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScanSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
             "type": "string"
           },
-          "owner": {
-            "title": "Owner",
-            "type": "string"
-          },
-          "package_uri": {
-            "title": "Package Uri",
-            "type": "string"
-          },
-          "risk_level": {
-            "default": "read",
-            "title": "Risk Level",
-            "type": "string"
-          },
-          "scan_passed": {
-            "default": false,
-            "title": "Scan Passed",
-            "type": "boolean"
-          },
-          "signature": {
-            "title": "Signature",
+          "submitted_by": {
+            "title": "Submitted By",
             "type": "string"
           },
           "version": {
@@ -1007,11 +1384,210 @@
         "required": [
           "name",
           "version",
-          "owner",
-          "package_uri",
-          "signature"
+          "status",
+          "scan",
+          "eval",
+          "submitted_by",
+          "reviewed_by",
+          "listed_at",
+          "revoked_at"
         ],
-        "title": "SkillIn",
+        "title": "SkillListItem",
+        "type": "object"
+      },
+      "SkillOut": {
+        "properties": {
+          "eval": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "eval_cases": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eval Cases"
+          },
+          "eval_min_pass_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eval Min Pass Rate"
+          },
+          "listed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listed At"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          },
+          "manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Sha256"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "scan_report": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Report"
+          },
+          "skill_md": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Md"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "submitted_by": {
+            "title": "Submitted By",
+            "type": "string"
+          },
+          "tenant": {
+            "title": "Tenant",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "tenant",
+          "status",
+          "manifest",
+          "manifest_sha256",
+          "scan_report",
+          "eval",
+          "submitted_by",
+          "reviewed_by",
+          "listed_at",
+          "revoked_at"
+        ],
+        "title": "SkillOut",
+        "type": "object"
+      },
+      "SkillRef": {
+        "properties": {
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "title": "SkillRef",
+        "type": "object"
+      },
+      "SubmitOut": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "status"
+        ],
+        "title": "SubmitOut",
         "type": "object"
       },
       "ValidationError": {
@@ -1835,7 +2411,7 @@
     },
     "/capabilities/search": {
       "post": {
-        "description": "硬过滤 → BM25 top50 + kNN top50 → RRF(k=60) → 取 3×limit 交策略批量判定（deny 剔除、require_approval 标注）→ 截断 limit。",
+        "description": "硬过滤 → BM25 top50 + kNN top50 → RRF(k=60) → 取 3×limit 交策略批量判定（deny 剔除、require_approval 标注）→ 截断 limit。\ntaint 的最高数据等级不被矩阵允许交给当前嵌入 provider 时只走 BM25（degraded=true）。",
         "operationId": "search_capabilities_capabilities_search_post",
         "parameters": [
           {
@@ -2934,35 +3510,314 @@
     },
     "/skills": {
       "get": {
-        "description": "列出已上架 Skill。",
+        "description": "Skill 版本列表（Console 审核页；服务令牌 + 用户令牌，服务态按用户租户过滤；可按 status / name 过滤）。",
         "operationId": "list_skills_skills_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response List Skills Skills Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/SkillList"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "List Skills"
       },
       "post": {
-        "description": "上架 Skill；供应链硬规则（签名、静态扫描、评测集）任一不满足即 409 拒绝。",
+        "description": "上传源包（未签名 tgz）并完成服务端扫描。",
         "operationId": "submit_skill_skills_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
-            "application/json": {
+            "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/SkillIn"
+                "$ref": "#/components/schemas/Body_submit_skill_skills_post"
               }
             }
           },
@@ -2973,13 +3828,1173 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Submit Skill Skills Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SubmitOut"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Submit Skill"
+      }
+    },
+    "/skills/resolve": {
+      "post": {
+        "description": "Agent 发布时冻结 skills_lock：每个 Skill 须 listed 且与 Agent 同租户，声明能力 ⊆ tools ∪ discovery_scope。",
+        "operationId": "resolve_skills_skills_resolve_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Resolve Skills"
+      }
+    },
+    "/skills/revocations": {
+      "get": {
+        "description": "吊销列表（节点随心跳拉取，命中即 SKILL_REVOKED）。",
+        "operationId": "revocations_skills_revocations_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevocationsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Revocations"
+      }
+    },
+    "/skills/{name}/versions/{version}": {
+      "get": {
+        "description": "版本状态（服务态带用户令牌时只看本租户；仅服务令牌时不过滤，供 Console 后台流程使用）。",
+        "operationId": "get_skill_skills__name__versions__version__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Skill"
+      }
+    },
+    "/skills/{name}/versions/{version}/approve": {
+      "post": {
+        "description": "审批（策略 approve_skill + 禁自批）→ 签名 → listed。",
+        "operationId": "approve_skill_skills__name__versions__version__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Approve Skill"
+      }
+    },
+    "/skills/{name}/versions/{version}/eval-result": {
+      "post": {
+        "description": "评测结果回写与复核：条数 ≥ SKILL_EVAL_MIN_CASES 且覆盖包内全部用例、通过率按 items 重算一致、达到阈值 → evaluated。",
+        "operationId": "eval_result_skills__name__versions__version__eval_result_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalResultIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Eval Result"
+      }
+    },
+    "/skills/{name}/versions/{version}/package": {
+      "get": {
+        "description": "已签名包（只经网关下发）；吊销 410，未上架 404。",
+        "operationId": "get_package_skills__name__versions__version__package_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/gzip": {}
+            },
+            "description": "已签名 Skill 包"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Package"
+      }
+    },
+    "/skills/{name}/versions/{version}/revoke": {
+      "post": {
+        "description": "吊销（即时生效）；已吊销时幂等返回。",
+        "operationId": "revoke_skill_skills__name__versions__version__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-gateway-client",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gateway-Client"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-user-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-User-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-roles",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Roles"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RevokeIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
           },
           "409": {
             "content": {
@@ -3002,7 +5017,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Submit Skill"
+        "summary": "Revoke Skill"
       }
     },
     "/token/exchange": {

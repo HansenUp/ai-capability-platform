@@ -338,7 +338,15 @@ def main(argv: list[str]) -> int:
     harness = ScriptedHarness()
     registry.register(HARNESS, harness)
 
+    from runtime.api import admin
     from runtime.main import app
+
+    # 快照沿用 S9 之前的发布语义：不经网关 /skills/resolve 冻结 skills_lock（锁为 NULL → 组装器按开发态读仓库 skills/，
+    # 与录制时的 Skill 内容一致；Skill 商店与验签另由各自的测试覆盖），保证事件日志与 S8 快照逐字节一致。
+    async def _no_skill_lock(*_: Any, **__: Any) -> admin.SkillResolution:
+        return admin.SkillResolution(None, None)
+
+    admin.resolve_skills = _no_skill_lock  # type: ignore[assignment]
 
     with TestClient(app) as client:
         draft = {"agent_id": AGENT, "version": "1", "harness": HARNESS, "system_prompt": SYSTEM}

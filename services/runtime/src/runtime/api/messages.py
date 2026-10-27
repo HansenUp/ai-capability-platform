@@ -19,7 +19,7 @@ from typing import Annotated, Any, Literal, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -37,10 +37,11 @@ from ai_contract import (
     ThinkingEvent,
     sniff_media_type,
 )
-from runtime import credentials
+from runtime import credentials, net
 from runtime.api import rollout
 from runtime.api.auth import Principal, approver_denial, check_approver, current_principal, is_admin
 from runtime.api.views import ApiError, ApprovalView, ErrorDetail, InputView, RunEventsView, RunStateView, RunView
+from runtime.api.workbench import ensure_unlocked
 from runtime.config import settings
 from runtime.harness import registry
 from runtime.loop import runner, user_input
@@ -52,7 +53,7 @@ from runtime.worker import enqueue, lease, publish_cancel
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(current_principal)])  # 全部 /v1 接口要求调用方身份（AUTH_REQUIRED=true 时即 JWT）
+router = APIRouter(dependencies=[Depends(current_principal), Depends(ensure_unlocked)])
 
 
 class MessagesRequest(BaseModel):
@@ -95,6 +96,16 @@ async def _load_agent(
             agent, reason = rollout.choose(published, subject or "")
     if agent is None:
         raise HTTPException(404, f"agent '{agent_id}' has no published version" + (f" '{version}'" if version else ""))
+    if version is None and not allow_unpublished:
+        from runtime.node.models import target_version
+
+        try:
+            selected = await target_version(agent)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if selected is not None and selected != agent.version:
+            selected_agent, _ = await _load_agent(agent_id, selected, tenant_id, subject)
+            return selected_agent, "node_model_switch"
     return agent, reason
 
 
@@ -137,20 +148,20 @@ RunAccess = Literal["full", "approval"]
 
 
 def _approval_view(events: list[RunEvent]) -> list[RunEvent]:
-    """审批视图：只保留待批调用（已请求、尚无结果的最近一次 tool.requested）的请求与闸口决策，加上 run.created
-    （只留元数据）与 run.state_changed；字段按 APPROVAL_VIEW_FIELDS 收窄。"""
+    """审批视图：只保留待批调用（已请求、尚无结果的 tool.requested；单个调用时为最近一次，并行批次时为同批全部尚无结果的
+    调用）的请求与闸口决策，加上 run.created（只留元数据）与 run.state_changed；字段按 APPROVAL_VIEW_FIELDS 收窄。"""
     resulted = {e.payload.get("call_id") for e in events if e.type == RunEventType.TOOL_RESULT}
-    pending = [
-        e.payload.get("call_id") for e in events if e.type == RunEventType.TOOL_REQUESTED and e.payload.get("call_id") not in resulted
-    ]
-    pending_call = pending[-1] if pending else None
+    pending = [e for e in events if e.type == RunEventType.TOOL_REQUESTED and e.payload.get("call_id") not in resulted]
+    batch = pending[-1].payload.get("batch") if pending else None
+    if isinstance(batch, dict):
+        pending_calls = {e.payload.get("call_id") for e in pending if (e.payload.get("batch") or {}).get("id") == batch.get("id")}
+    else:
+        pending_calls = {pending[-1].payload.get("call_id")} if pending else set()
     out: list[RunEvent] = []
     for e in events:
         if e.type not in APPROVAL_VIEW_EVENTS:
             continue
-        if e.type in (RunEventType.TOOL_REQUESTED, RunEventType.TOOL_DECISION) and (
-            pending_call is None or e.payload.get("call_id") != pending_call
-        ):
+        if e.type in (RunEventType.TOOL_REQUESTED, RunEventType.TOOL_DECISION) and e.payload.get("call_id") not in pending_calls:
             continue
         keep = APPROVAL_VIEW_FIELDS.get(e.type)
         out.append(e if keep is None else e.model_copy(update={"payload": {k: v for k, v in e.payload.items() if k in keep}}))
@@ -735,21 +746,59 @@ async def run_events(
     return [e.model_dump() for e in events]
 
 
+class ApprovalCall(BaseModel):
+    """批量审批中的一个调用：调用标识与卡片上展示的参数指纹。"""
+
+    call_id: str = Field(max_length=128)
+    params_hash: str = Field(max_length=64)
+
+
 class ApprovalBody(BaseModel):
-    """审批/拒绝工具调用请求体。
+    """审批/拒绝工具调用请求体：单个调用给 call_id + params_hash；并行批次的影响预览卡（payload.calls[]）可用 calls 一次批多个
+    （S9，D149），两种写法二选一。
 
     params_hash 是必填项：审批附着于具体参数与资源，审批人必须回传卡片上展示的那一份参数指纹，
     否则无从判断"批的到底是哪一组参数"。
     """
 
-    call_id: str  # 待审批的工具调用标识
-    params_hash: str  # 审批时卡片上展示的参数指纹，必须与闸口决策事件中记录的一致
+    call_id: str | None = None  # 待审批的工具调用标识（单个）
+    params_hash: str | None = None  # 审批时卡片上展示的参数指纹，必须与闸口决策事件中记录的一致（单个）
+    calls: list[ApprovalCall] | None = Field(default=None, min_length=1, max_length=32)  # 批量：同批待审批的调用
     ttl_seconds: int = 900  # 审批有效期（秒），超时后该批准失效，必须重新审批
     comment: str = ""  # 审批意见
 
+    @model_validator(mode="after")
+    def _one_form(self) -> ApprovalBody:
+        single = self.call_id is not None or self.params_hash is not None
+        if single == (self.calls is not None):
+            raise ValueError("give either call_id + params_hash, or calls[]")
+        if single and (not self.call_id or not self.params_hash):
+            raise ValueError("call_id and params_hash are both required")
+        return self
+
+    def items(self) -> list[ApprovalCall]:
+        """本次审批 / 拒绝涉及的调用（单个写法也规整为一项）。"""
+        if self.calls is not None:
+            return list(self.calls)
+        assert self.call_id is not None and self.params_hash is not None
+        return [ApprovalCall(call_id=self.call_id, params_hash=self.params_hash)]
+
+
+def _awaiting_approval(events: list[RunEvent]) -> list[str]:
+    """仍待审批的调用：最近一次闸口决策为 require_approval、尚无结果、且该决策之后没有批准记录（批次中可能多个）。"""
+    resulted = {str(e.payload.get("call_id")) for e in events if e.type == RunEventType.TOOL_RESULT}
+    waiting: dict[str, bool] = {}
+    for e in events:
+        cid = str(e.payload.get("call_id"))
+        if e.type == RunEventType.TOOL_DECISION:
+            waiting[cid] = e.payload.get("decision") == "require_approval"
+        elif e.type == RunEventType.TOOL_APPROVED and cid in waiting:
+            waiting[cid] = False
+    return [cid for cid, w in waiting.items() if w and cid not in resulted]
+
 
 async def _check_pending_approval(s: AsyncSession, run_id: str, body: ApprovalBody, request: Request, principal: Principal) -> EventLog:
-    """审批 / 拒绝的共同前置校验：Run 存在（否则 404）、处于 auth-required，且回传的参数指纹
+    """审批 / 拒绝的共同前置校验：Run 存在（否则 404）、处于 auth-required，且每个调用回传的参数指纹
     与该调用最近一次闸口决策记录的一致（否则 409）。返回绑定到同一会话的 EventLog。"""
     run = await s.get(Run, run_id)
     if run is None:
@@ -758,15 +807,48 @@ async def _check_pending_approval(s: AsyncSession, run_id: str, body: ApprovalBo
         raise HTTPException(409, "run is not awaiting approval")
     check_approver(request, principal, run.subject)  # 强制鉴权时：只有人员能审批，且不能审批自己发起的 Run
     log = EventLog(s)
-    decided = [
-        e.payload.get("params_hash")
-        for e in await log.list(run_id)
-        if e.type == RunEventType.TOOL_DECISION and e.payload.get("call_id") == body.call_id
-    ]
-    if not decided or decided[-1] != body.params_hash:
-        # 参数指纹对不上：说明待审批的参数已经变化（或审批人拿的是过期卡片），必须重新走审批。
-        raise HTTPException(409, "params_hash does not match the pending call; re-approval required（参数已变化，需重新审批）")
+    events = await log.list(run_id)
+    for item in body.items():
+        decided = [
+            e.payload.get("params_hash")
+            for e in events
+            if e.type == RunEventType.TOOL_DECISION and e.payload.get("call_id") == item.call_id
+        ]
+        if not decided or decided[-1] != item.params_hash:
+            # 参数指纹对不上：说明待审批的参数已经变化（或审批人拿的是过期卡片），必须重新走审批。
+            raise HTTPException(409, "params_hash does not match the pending call; re-approval required（参数已变化，需重新审批）")
     return log
+
+
+async def apply_approval(
+    session: AsyncSession,
+    run_id: str,
+    body: ApprovalBody,
+    request: Request,
+    principal: Principal,
+    approved: bool,
+    attempt_id: str | None = None,
+) -> tuple[RunState, bool]:
+    log = await _check_pending_approval(session, run_id, body, request, principal)
+    run = await session.get(Run, run_id)
+    durable = run is not None and bool(run.durable)
+    expires_at = (datetime.now(UTC) + timedelta(seconds=body.ttl_seconds)).isoformat() if approved else None
+    for item in body.items():
+        payload = {"call_id": item.call_id, "approver": principal.subject, "comment": body.comment, "params_hash": item.params_hash}
+        if approved:
+            payload["expires_at"] = str(expires_at)
+        if attempt_id is not None:
+            payload["workbench_attempt_id"] = attempt_id
+        await log.append(run_id, RunEventType.TOOL_APPROVED if approved else RunEventType.TOOL_REJECTED, payload)
+    if approved:
+        state = RunState.AUTH_REQUIRED if _awaiting_approval(await log.list(run_id)) else RunState.WORKING
+        if state == RunState.WORKING:
+            await log.transition(run_id, RunState.WORKING, "approved")
+    else:
+        state = RunState.FAILED
+        await log.transition(run_id, state, "rejected")
+        await credentials.delete_credential(run_id, session)
+    return state, durable
 
 
 @router.post(
@@ -776,32 +858,18 @@ async def _check_pending_approval(s: AsyncSession, run_id: str, body: ApprovalBo
     dependencies=[Depends(run_in_tenant)],
 )
 async def approve(run_id: str, body: ApprovalBody, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
-    """批准一次挂起中的高风险工具调用：仅在 Run 处于 auth-required 状态时允许，
-    记录 TOOL_APPROVED 事件并把状态迁回 working。持久化执行的 Run（S7，D108）随即入队，由 Worker 以发起人存储的
-    凭据自动续跑；S7 之前创建的 Run（非持久化）仍需发起人调用 /resume 才继续执行。
+    """批准挂起中的高风险工具调用（单个 call_id，或并行批次的 calls[]）：仅在 Run 处于 auth-required 状态时允许，
+    逐个记录 TOOL_APPROVED 事件；同批待审批的调用全部批准后才把状态迁回 working（否则保持 auth-required，返回的 state 即如此）。
+    持久化执行的 Run（S7，D108）迁回 working 后随即入队，由 Worker 以发起人存储的凭据自动续跑；S7 之前创建的 Run（非持久化）
+    仍需发起人调用 /resume 才继续执行。
 
     批准会绑定"参数指纹 + 有效期"：参数一旦变化或审批超时，闸口不会放行，必须重新审批。"""
     async with SessionLocal() as s:
-        log = await _check_pending_approval(s, run_id, body, request, principal)
-        run = await s.get(Run, run_id)
-        durable = run is not None and bool(run.durable)
-        expires_at = (datetime.now(UTC) + timedelta(seconds=body.ttl_seconds)).isoformat()
-        await log.append(
-            run_id,
-            RunEventType.TOOL_APPROVED,
-            {
-                "call_id": body.call_id,
-                "approver": principal.subject,
-                "comment": body.comment,
-                "params_hash": body.params_hash,
-                "expires_at": expires_at,
-            },
-        )
-        await log.transition(run_id, RunState.WORKING, "approved")
+        state, durable = await apply_approval(s, run_id, body, request, principal, True)
         await s.commit()
-    if durable:
+    if durable and state == RunState.WORKING:
         await continue_after_approval(run_id)
-    return {"run_id": run_id, "state": RunState.WORKING, "resume": f"/v1/runs/{run_id}/resume"}
+    return {"run_id": run_id, "state": state, "resume": f"/v1/runs/{run_id}/resume"}
 
 
 async def continue_after_approval(run_id: str) -> None:
@@ -819,14 +887,7 @@ async def reject(run_id: str, body: ApprovalBody, request: Request, principal: P
     """拒绝一次挂起中的高风险工具调用：记录 TOOL_REJECTED 事件并将 Run 直接置为 failed。
     与 approve 同样要求 Run 处于 auth-required 且参数指纹匹配，否则 409；Run 不存在 404。"""
     async with SessionLocal() as s:
-        log = await _check_pending_approval(s, run_id, body, request, principal)
-        await log.append(
-            run_id,
-            RunEventType.TOOL_REJECTED,
-            {"call_id": body.call_id, "approver": principal.subject, "comment": body.comment, "params_hash": body.params_hash},
-        )
-        await log.transition(run_id, RunState.FAILED, "rejected")
-        await credentials.delete_credential(run_id, s)  # 终态即删存储的发起人凭据（D113），与迁移同事务
+        await apply_approval(s, run_id, body, request, principal, False)
         await s.commit()
     return {"run_id": run_id, "state": RunState.FAILED}
 
@@ -1025,7 +1086,7 @@ async def provide_input(
     async with SessionLocal() as s:
         run = await s.get(Run, run_id)
         durable = run is not None and bool(run.durable)
-    if durable:
+    if durable and out.get("state") == RunState.WORKING.value:  # 并行批次还有未处置的结果未知调用时保持 input-required，不入队
         await _requeue(run_id, "input")
     return out
 
@@ -1063,7 +1124,7 @@ async def feedback(run_id: str, body: FeedbackBody, principal: Principal = Depen
         raise HTTPException(409, "run has no trace yet")
     payload = {"trace_id": run.trace_id, "run_id": run_id, "subject": principal.subject} | body.model_dump()
     try:
-        async with httpx.AsyncClient(timeout=10.0, transport=_observe_transport) as c:
+        async with net.client(timeout=10.0, transport=_observe_transport) as c:
             r = await c.post(f"{settings.observe_adapter_url.rstrip('/')}/feedback", json=payload)
         forwarded = r.status_code < 300 and bool(r.json().get("forwarded"))
     except (httpx.HTTPError, ValueError) as e:

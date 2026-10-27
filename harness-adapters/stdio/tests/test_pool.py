@@ -16,7 +16,7 @@ import pytest
 
 from ai_contract import HookSet, SessionSpec, TurnInput
 from ai_harness_stdio import PoolConfig, PoolExhausted, StdioHarness, WorkerPool
-from ai_harness_stdio.pool import group_alive, group_pids
+from ai_harness_stdio.pool import Worker, group_alive, group_pids
 
 SPEC = SessionSpec(run_id="r1", agent_id="a", agent_version="1", model_alias="m", system_prompt="s", subject="human:t")
 ECHO = [sys.executable, "-m", "ai_harness_stdio.echo_harness"]
@@ -151,6 +151,180 @@ async def test_max_workers_and_pool_exhausted():
         await h.close(s3)
         assert h.running_pids() == []
     finally:
+        await pool.aclose()
+
+
+async def test_released_capacity_is_reserved_for_waiting_acquire(monkeypatch: pytest.MonkeyPatch):
+    """释放中的槽位不能被慢预热抢占；容量等待期限不应变成后台握手期限。"""
+    pool = WorkerPool(ECHO, cfg(min_idle=0, max_workers=2, acquire_timeout_s=0.4))
+    waiting, retiring, allow_retire, allow_warm = (asyncio.Event() for _ in range(4))
+    waiter = release = None
+    try:
+        first, second = await pool.acquire(), await pool.acquire()
+        assert pool._task is not None
+        pool._task.cancel()
+        await asyncio.gather(pool._task, return_exceptions=True)
+        pool.config = cfg(min_idle=1, max_workers=2, acquire_timeout_s=0.4)
+        original_wait, original_terminate, original_spawn = pool._cond.wait, pool._terminate, pool._spawn
+        original_notify = pool._notify
+
+        async def observed_wait() -> bool:
+            waiting.set()
+            return await original_wait()
+
+        async def held_terminate(worker: Worker, *, graceful: bool) -> None:
+            if worker is first:
+                retiring.set()
+                await allow_retire.wait()
+            await original_terminate(worker, graceful=graceful)
+
+        async def delayed_background_spawn() -> Worker:
+            if asyncio.current_task() in pool._bg:
+                await allow_warm.wait()
+            return await original_spawn()
+
+        async def replenish_before_notify() -> None:
+            pool._replenish()
+            await original_notify()
+
+        monkeypatch.setattr(pool._cond, "wait", observed_wait)
+        monkeypatch.setattr(pool, "_terminate", held_terminate)
+        monkeypatch.setattr(pool, "_spawn", delayed_background_spawn)
+        monkeypatch.setattr(pool, "_notify", replenish_before_notify)
+        waiter = asyncio.create_task(pool.acquire())
+        await asyncio.wait_for(waiting.wait(), 5)
+        release = asyncio.create_task(pool.release(first))
+        await asyncio.wait_for(retiring.wait(), 5)
+        pool._replenish()
+        allow_retire.set()
+        await release
+        replacement = await waiter
+        assert replacement is not first and pool.stats()["total"] == 2
+        await pool.release(second)
+        await pool.release(replacement)
+    finally:
+        allow_retire.set()
+        allow_warm.set()
+        for task in (waiter, release):
+            if task is not None:
+                task.cancel()
+        await asyncio.gather(*(task for task in (waiter, release) if task is not None), return_exceptions=True)
+        await pool.aclose()
+
+
+async def test_retiring_worker_still_counts_toward_process_limit(monkeypatch: pytest.MonkeyPatch):
+    """进程真正回收之前不得补热，物理进程数也须满足 max_workers。"""
+    pool = WorkerPool(ECHO, cfg(min_idle=0, max_workers=1))
+    entered, finish = asyncio.Event(), asyncio.Event()
+    release = None
+    try:
+        worker = await pool.acquire()
+        assert pool._task is not None
+        pool._task.cancel()
+        await asyncio.gather(pool._task, return_exceptions=True)
+        pool.config = cfg(min_idle=1, max_workers=1)
+        original = pool._terminate
+
+        async def held_terminate(current: Worker, *, graceful: bool) -> None:
+            entered.set()
+            await finish.wait()
+            await original(current, graceful=graceful)
+
+        monkeypatch.setattr(pool, "_terminate", held_terminate)
+        release = asyncio.create_task(pool.release(worker))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert pool.stats()["total"] == 1 and group_alive(worker.pgid)
+        pool._replenish()
+        assert pool.stats()["starting"] == 0
+        finish.set()
+        await release
+        assert pool.stats()["total"] == 0 and not group_alive(worker.pgid)
+    finally:
+        finish.set()
+        if release is not None:
+            await asyncio.gather(release, return_exceptions=True)
+        await pool.aclose()
+
+
+async def test_cancelled_waiter_does_not_block_replenishment():
+    """容量等待取消后清除等待登记，后续正常补热。"""
+    pool = WorkerPool(ECHO, cfg(min_idle=1, max_workers=1, acquire_timeout_s=0.4))
+    waiter = None
+    try:
+        await pool.wait_warm()
+        worker = await pool.acquire()
+        waiter = asyncio.create_task(pool.acquire())
+        await eventually(lambda: pool._waiters == 1)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert pool._waiters == 0
+        await pool.release(worker)
+        await pool.wait_warm()
+        assert pool.stats()["total"] == pool.stats()["idle"] == 1
+    finally:
+        if waiter is not None:
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+        await pool.aclose()
+
+
+async def test_cancelled_release_remains_counted_and_pool_close_awaits_cleanup(monkeypatch: pytest.MonkeyPatch):
+    """release 调用者取消不能丢掉物理进程的容量登记与回收任务。"""
+    pool = WorkerPool(ECHO, cfg(min_idle=0, max_workers=1))
+    entered, finish = asyncio.Event(), asyncio.Event()
+    release = closing = None
+    try:
+        worker = await pool.acquire()
+        original = pool._terminate
+
+        async def held_terminate(current: Worker, *, graceful: bool) -> None:
+            entered.set()
+            await finish.wait()
+            await original(current, graceful=graceful)
+
+        monkeypatch.setattr(pool, "_terminate", held_terminate)
+        release = asyncio.create_task(pool.release(worker))
+        await asyncio.wait_for(entered.wait(), 5)
+        release.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await release
+        assert pool.stats()["retiring"] == pool.stats()["total"] == 1
+        closing = asyncio.create_task(pool.aclose())
+        await eventually(lambda: pool._closed)
+        assert not closing.done() and group_alive(worker.pgid)
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert pool.stats()["retiring"] == pool.stats()["total"] == 1
+        finish.set()
+        await pool.aclose()
+        assert pool.stats()["total"] == 0 and not group_alive(worker.pgid)
+        assert worker.root is not None and not _isdir(worker.root)
+    finally:
+        finish.set()
+        for task in (release, closing):
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
+        await pool.aclose()
+
+
+async def test_pool_close_wakes_capacity_waiters():
+    """关闭池立即终止容量等待，不等超时后再误报耗尽。"""
+    pool = WorkerPool(ECHO, cfg(min_idle=0, max_workers=1, acquire_timeout_s=0.4))
+    waiter = None
+    try:
+        await pool.acquire()
+        waiter = asyncio.create_task(pool.acquire())
+        await eventually(lambda: pool._waiters == 1)
+        await pool.aclose()
+        with pytest.raises(RuntimeError, match="pool is closed"):
+            await waiter
+        assert pool._waiters == 0 and pool.stats()["total"] == 0
+    finally:
+        if waiter is not None:
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
         await pool.aclose()
 
 

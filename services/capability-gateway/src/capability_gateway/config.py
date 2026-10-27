@@ -19,6 +19,14 @@
 | ``ES_INDEX_ALIAS`` | 检索索引别名（索引名 ``<别名>-v1-<provider><dim>``）；同一 ES 集群上的多套环境用不同别名隔离 | cg-capabilities |
 | ``EMBED_PROVIDER`` | hash / fastembed / litellm（见 embed.py） | hash |
 | ``GATEWAY_ACT_SIGNING_KEY_FILE`` | act 断言 ES256 私钥（PEM）；开发态缺省时启动生成临时密钥并告警 | 无 |
+| ``GATEWAY_JWKS_MAX_STALE_S`` | JWKS 刷新失败时沿用旧公钥的上限（秒），超过即 503 | 3600 |
+| ``SKILL_SIGNING_KEY_FILE`` | Skill 清单 ES256 签名私钥（PEM）；开发态缺省 ``~/.ai-platform/keys/skill-signing.pem``（无则生成） | 无 |
+| ``SKILL_STORE`` | Skill 包存储：fs（``SKILL_FS_DIR``）或 s3（MinIO / S3，``SKILL_S3_*``）；prod 必须 s3 | fs |
+| ``SKILL_FS_DIR`` | fs 存储根目录 | ``~/.ai-platform/skill-store`` |
+| ``SKILL_S3_ENDPOINT`` / ``_ACCESS_KEY`` / ``_SECRET_KEY`` / ``_BUCKET`` / ``_SECURE`` | S3 连接（prod 须配凭据） | compose-dev MinIO |
+| ``SKILL_EVAL_MIN_PASS_RATE`` / ``SKILL_EVAL_MIN_CASES`` | 评测复核下限（实际阈值取 max(包内声明, 本值)） | 0.8 / 10 |
+| ``SKILL_URL_ALLOWLIST`` | Skill 文本中允许出现的 URL 主机（逗号分隔，精确匹配） | 无 |
+| ``DATA_CLASS_MATRIX_FILE`` | 数据分级矩阵；检索向量化按 ``allows("embedding", 等级, provider)`` 判定 | 开发矩阵（services/runtime） |
 """
 
 from __future__ import annotations
@@ -53,7 +61,9 @@ JWKS_URL = os.environ.get("GATEWAY_JWKS_URL") or (f"{JWT_ISSUER}/protocol/openid
 SERVICE_AUDIENCE = os.environ.get("GATEWAY_SERVICE_AUDIENCE") or GATEWAY_CLIENT_ID
 USER_AUDIENCE = _csv(os.environ.get("GATEWAY_USER_AUDIENCE", ""))
 TRUSTED_CALLERS = _csv(os.environ.get("GATEWAY_TRUSTED_CALLERS", "ai-runtime-svc"))
+SKILL_EVAL_TRUSTED_CALLERS = _csv(os.environ.get("SKILL_EVAL_TRUSTED_CALLERS", "console-api"))
 JWKS_TTL_S = float(os.environ.get("GATEWAY_JWKS_TTL_S", "300"))
+JWKS_MAX_STALE_S = float(os.environ.get("GATEWAY_JWKS_MAX_STALE_S", "3600"))  # 刷新失败沿用旧钥的上限
 
 CATALOG_BACKEND = os.environ.get("CATALOG_BACKEND", "memory")  # memory | mysql
 DATABASE_URL = os.environ.get("GATEWAY_DATABASE_URL") or None
@@ -72,6 +82,21 @@ INVOKE_TIMEOUT_S = float(os.environ.get("INVOKE_TIMEOUT_S", "30"))
 PROBE_INTERVAL_S = float(os.environ.get("GATEWAY_PROBE_INTERVAL_S", "30"))  # 连接器探活周期
 PROBE_FAIL_THRESHOLD = int(os.environ.get("GATEWAY_PROBE_FAIL_THRESHOLD", "3"))  # 连续失败次数达到即 down
 PROBE_TIMEOUT_S = float(os.environ.get("GATEWAY_PROBE_TIMEOUT_S", "5"))
+
+# ---- Skill 商店（S9） ----
+SKILL_SIGNING_KEY_FILE = os.environ.get("SKILL_SIGNING_KEY_FILE") or None
+SKILL_DEV_KEY_FILE = os.path.expanduser("~/.ai-platform/keys/skill-signing.pem")  # 开发态缺省私钥位置（与 devkit 一致）
+SKILL_STORE = (os.environ.get("SKILL_STORE") or "fs").strip().lower()  # fs | s3
+SKILL_FS_DIR = os.environ.get("SKILL_FS_DIR") or os.path.expanduser("~/.ai-platform/skill-store")
+SKILL_S3_ENDPOINT = os.environ.get("SKILL_S3_ENDPOINT", "127.0.0.1:9000")
+SKILL_S3_ACCESS_KEY = os.environ.get("SKILL_S3_ACCESS_KEY") or ("" if GATEWAY_ENV == "prod" else "minio")
+SKILL_S3_SECRET_KEY = os.environ.get("SKILL_S3_SECRET_KEY") or ("" if GATEWAY_ENV == "prod" else "minio12345")  # compose-dev 开发值
+SKILL_S3_BUCKET = os.environ.get("SKILL_S3_BUCKET", "ai-skills")
+SKILL_S3_SECURE = os.environ.get("SKILL_S3_SECURE", "false").strip().lower() == "true"
+SKILL_EVAL_MIN_PASS_RATE = float(os.environ.get("SKILL_EVAL_MIN_PASS_RATE", "0.8"))
+SKILL_EVAL_MIN_CASES = int(os.environ.get("SKILL_EVAL_MIN_CASES", "10"))
+SKILL_URL_ALLOWLIST = _csv(os.environ.get("SKILL_URL_ALLOWLIST", ""))
+DATA_CLASS_MATRIX_FILE = os.environ.get("DATA_CLASS_MATRIX_FILE") or None
 
 # 测试注入：网关发出的全部 HTTP 请求（Keycloak、JWKS、策略服务、连接器、ES、模型网关）经该 transport
 transport: httpx.AsyncBaseTransport | None = None
@@ -96,10 +121,16 @@ def prod_problems() -> list[str]:
         "GATEWAY_ACT_SIGNING_KEY_FILE": ACT_KEY_FILE,
         "GATEWAY_DATABASE_URL": DATABASE_URL,
         "GATEWAY_JWKS_URL / GATEWAY_JWT_ISSUER": JWKS_URL and JWT_ISSUER,
+        "SKILL_SIGNING_KEY_FILE": SKILL_SIGNING_KEY_FILE,
+        "DATA_CLASS_MATRIX_FILE": DATA_CLASS_MATRIX_FILE,
     }
     out = [k for k, v in need.items() if not v]
     if CATALOG_BACKEND != "mysql":
         out.append("CATALOG_BACKEND=mysql")
+    if SKILL_STORE != "s3":
+        out.append("SKILL_STORE=s3")
+    elif not (SKILL_S3_ACCESS_KEY and SKILL_S3_SECRET_KEY):
+        out.append("SKILL_S3_ACCESS_KEY / SKILL_S3_SECRET_KEY")
     return out
 
 

@@ -1,6 +1,12 @@
 ---
 name: ticket-summary
 description: 对售后工单进行摘要、归因并整理可复用经验。仅做只读检索与总结，不执行任何写操作。
+metadata:
+  version: "1.0.0"
+  ai-platform.capabilities: "cap.ticket.search cap.ticket.get"
+  ai-platform.risk-level: read
+  ai-platform.data-class: internal
+  ai-platform.sandbox: read-only
 ---
 
 # 工单摘要
@@ -19,3 +25,6 @@ description: 对售后工单进行摘要、归因并整理可复用经验。仅�
 ## 依赖能力
 - cap.ticket.search（只读）
 - cap.ticket.get（只读）
+
+## 辅助脚本
+`scripts/summarize.py`（只读沙箱、无网络）：从标准输入读 `{"tickets": [...]}`，输出工单数量。

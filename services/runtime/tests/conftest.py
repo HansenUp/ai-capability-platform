@@ -57,6 +57,11 @@ os.environ["TOOL_RESULT_OFFLOAD_TOKENS"] = "20"
 # 会话级 TestClient 的进程内 Worker（InMemory）也运行 reaper（S7 评审 #1）；周期扫描会接走其他用例故意留在 working 的
 # 持久化 Run（如审批后关闭自动续跑、等用例自己 /resume 的 Run），因此测试期把间隔调到实际不触发。reaper 用例用自己的 Worker。
 os.environ["REAPER_S"] = "3600"
+# 统一出站客户端（S9.6，runtime.net）按白名单精确匹配：测试里假网关 / 假 IdP / 假 Console 的主机名（请求实际由注入的
+# MockTransport 应答，不出网）登记进白名单；越界拒绝本身由 evals/security/test_s9_egress 覆盖。
+os.environ["EGRESS_ALLOWLIST"] = ",".join(
+    ("http://gw.test", "http://idp", "https://idp", "http://idp.test", "http://kc.test:8180", "http://console.test:8081")
+)
 os.environ["CONFIDENTIAL_MODEL_ALIASES"] = (
     "default-chat"  # 测试默认允许 demo 的别名接收机密数据；阻断场景在用例中单独覆盖  # 调小阈值，便于测试触发工具结果外置逻辑
 )
@@ -93,6 +98,7 @@ def client():
     from runtime.main import app
 
     with TestClient(app) as c:
+        c.runtime_worker = app.state.node_lifecycle.background.worker
         yield c
 
 

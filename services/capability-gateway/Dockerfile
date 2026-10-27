@@ -7,7 +7,7 @@ ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY packages/contract /build/packages/contract
 COPY services/capability-gateway /build/services/capability-gateway
-RUN pip install --prefix=/install /build/packages/contract "/build/services/capability-gateway[mysql]"
+RUN pip install --prefix=/install /build/packages/contract "/build/services/capability-gateway[mysql,s3]"
 
 # ---- runtime：仅包含安装产物，非 root 用户运行 ----
 FROM python:3.12-slim AS runtime

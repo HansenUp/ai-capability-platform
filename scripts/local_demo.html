@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>AI平台 · 独立本机演示</title><link rel="stylesheet" href="/src/platform.css">
+<style>body{max-width:1100px;margin:40px auto;padding:0 24px}h1{font-size:36px}h2{margin-top:36px}body>p>a{display:inline-block;padding:12px 20px;background:white;border:1px solid #dce3ef;border-radius:10px}aside{padding:18px 22px;background:#e9effc;border:1px solid #d5e1f8;border-radius:12px;color:#3e587c}textarea{width:95%;height:60px}button,a{margin:6px}code{background:#eee;padding:3px}li{margin:10px 0}</style></head>
+<body><h1>AI平台 · 独立本机演示</h1>
+<aside>仅临时SQLite、签名测试身份、模拟模型／策略／工具；不连接真实业务或Langfuse，不执行数据库迁移。发布是显式开发评测，不是真实评测验收。服务仅127.0.0.1可访问，约30分钟后自动停止。</aside>
+<p id="status">正在读取本机演示信息…</p>
+<p>应用页面顶部现有统一演示栏：选择Alice或Bob后，点击“应用演示身份并定位同Run”，无需反复复制令牌；Agent／Run定位仅在当前标签内存保留。切换主体清空旧页面，不解除服务端写锁。下方手动令牌入口保留用于排查。</p>
+<p><a href="/manage/agents" target="_blank">① 打开Agent配置／发布</a><a href="/chat" target="_blank">② 打开使用工作台</a><a href="/manage/runs" target="_blank">③ 打开只读轨迹</a></p>
+<p><a id="portal-link">打开 Portal 使用入口</a>：已发布 Agent 列表、搜索、同 Run 工作台；与 Console 共用本次临时数据。</p>
+<h2>功能状态</h2><ul><li>已实现：Console 配置、开发发布、节点与运营页面；Portal 已发布目录、搜索和工作台；Runtime 登记、回执、审批、输入与持久事件。</li><li>本次模拟：模型、工具、策略、测试身份和开发评测。节点及运营页面无真实节点／指标接入。</li><li>待接入／验收：正式 OIDC、真实模型与业务接口、真实 Langfuse、正式 agentgateway、生产部署。多轮会话和附件暂缓。</li></ul><h2>临时测试身份（不是正式账号）</h2>
+<p>Alice发起对话并回答，Bob作为另一人审批。切换后需要重新填写同一个Run ID；令牌仅粘贴到测试页面，不用于其他服务。</p>
+<label>Alice测试令牌<textarea id="alice" readonly autocomplete="off"></textarea></label><button data-copy="alice">复制Alice</button>
+<label>Bob测试令牌<textarea id="bob" readonly autocomplete="off"></textarea></label><button data-copy="bob">复制Bob</button>
+<h2>体验主链路</h2><ol>
+<li>在Agent配置页输入一个新ID（例如<code>demo-my-agent</code>），版本<code>1</code>，Harness选择<code>mock</code>；完整config填写：<pre>{"tools":["ticket.close_batch"],"user_input":true}</pre>点击“仅保存草稿”。</li>
+<li>该行“评测与发布”→勾选“显式确认开发态评测通过（非真实评测验收）”→“检查并发布”→确认执行。发布仅写此演示临时库。</li>
+<li>使用工作台粘贴Alice令牌→“应用身份并清空旧数据”，填写上述Agent ID，消息填<code>S12_E2E_APPROVAL_THEN_INPUT</code>。点击“登记新 Run（尚未创建）”→“确认执行已登记创建一次”→“预览本人确认收口”→“确认收口此回执”。记录Run ID。</li>
+<li>读取Run与待办卡片。状态auth-required后，换Bob令牌并应用，填写同一Run ID→读取→“预览批准”→“确认登记一次”→“确认执行已登记批准一次”；读取到input-required后，由Bob预览并确认本人回执收口。不要让Alice自批。</li>
+<li>换回Alice并应用，同一Run ID→读取，补充输入填写<code>{"id":"SYNTHETIC-E2E"}</code>，点击“登记回答一次”→“确认执行已登记回答一次”→预览并确认本人收口，再读取，看到completed和“仅合成工具，无外部效果”。未知结果只读对账，不重复执行。</li>
+<li>在轨迹页粘贴Alice令牌→“应用读取身份并清空旧数据”→输入同一Run ID→“读取指定 Run”，查看tool.approved／tool.executed／input.provided及模型输出。仅展示本机事件与Trace ID，不连接真实Langfuse。</li>
+</ol><p>也可直接用预置Agent <code>s12-workbench</code>从第3步开始。模拟模型只对上述专用消息触发完整审批链，不代表真实自然语言模型能力。</p>
+<p id="verified"></p><p>停止方式：在启动终端按Ctrl+C，或请助手停止本次演示；到期自动停止，不设置自动跟进。页面刷新需重新粘贴令牌；令牌到期需重新启动独立演示。</p>
+<script type="module">
+const response = await fetch('/__demo/info', { cache:'no-store' });
+if (!response.ok) throw new Error('演示信息不可用');
+const info = await response.json();
+document.getElementById('portal-link').href = info.portal;
+for (const name of ['alice','bob']) document.getElementById(name).value = info.tokens[name];
+document.getElementById('status').textContent = `演示有效至 ${new Date(info.expires_at).toLocaleString()}。所有操作仅作用本次临时数据。`;
+document.getElementById('verified').textContent = info.verified ? `已自动验证主链路；示例Run：${info.verified.run_id}；示例Agent：${info.verified.agent}。可在轨迹页用Alice查看。` : '主链路自动验证中。';
+for(const button of document.querySelectorAll('[data-copy]')) button.onclick = async () => { await navigator.clipboard.writeText(document.getElementById(button.dataset.copy).value); button.textContent='已复制测试令牌'; };
+</script></body></html>

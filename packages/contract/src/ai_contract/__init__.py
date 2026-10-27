@@ -40,7 +40,7 @@ from .run import TRANSITIONS, RunEvent, RunEventType, RunState, can_transition
 from .tools import RiskLevel, SandboxLevel, SkillDir, ToolSpec
 
 # 契约版本号：Contract V1 冻结后，任何变更须走接口变更单或 ADR，破坏性变更只在阶段边界合并（见 CONTRACT_V1.md）。
-CONTRACT_VERSION = "1.3.0"
+CONTRACT_VERSION = "1.4.0"
 
 __all__ = [
     "CONTRACT_VERSION",

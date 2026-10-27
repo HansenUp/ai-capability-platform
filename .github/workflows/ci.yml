@@ -77,12 +77,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -f services/${{ matrix.service }}/Dockerfile -t ai-platform/${{ matrix.service }}:ci .
-      - uses: aquasecurity/trivy-action@v0.33.1
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0（按 commit SHA 钉定，防 tag 被改写；trivy 版本随之固定）
         with:
+          version: v0.70.0
           image-ref: ai-platform/${{ matrix.service }}:ci
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true            # 仅关注已有修复版本的漏洞，避免基础镜像无补丁项造成噪声
+  security:                               # S9 安全门禁（D154）：bandit -lll + pip-audit + evals/security（make security）、pnpm audit、Trivy 文件系统扫描
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: make setup
+      - run: .venv/bin/pip install bandit==1.9.4 pip-audit==2.10.1   # 精确版本，与本机一致
+      # bandit 只报 HIGH（services / mcp-servers 源码，不含测试；有文件未能解析即失败）→ pip-audit（跳过本地可编辑包）
+      # → 出站审计 runtime.net.audit_sources（Runtime 源码中 net.py 之外构造 httpx 客户端即失败，D147）
+      # → pytest evals/security（单元层：验签 / 篡改 / 吊销、出站白名单精确匹配与 net.py 之外不得构造 httpx 客户端、沙箱失败关闭、坏包规则）
+      - run: make security
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod             # 生产依赖的已知漏洞（默认 low 及以上即失败）
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0（按 commit SHA 钉定）
+        with:
+          version: v0.70.0
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln                    # 锁文件依赖漏洞；密钥由 secrets job（gitleaks）负责，镜像由 images job 负责
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+          skip-dirs: node_modules,.venv,evals/security/fixtures
   secrets:                                # 密钥扫描：gitleaks 全历史扫描（本机 DLP 环境无法编译 hook，故在 CI 强制）
     runs-on: ubuntu-latest
     steps:

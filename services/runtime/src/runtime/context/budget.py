@@ -57,13 +57,16 @@ def assemble(blocks: dict[str, str], budget: dict[str, int] | None = None, *, hi
     """按 BLOCK_ORDER 固定顺序遍历各区块：超预算的区块按字符数近似截断，并记录截断标记；
     最后对前三个稳定区块（system/skills/tools）拼接求哈希，作为稳定前缀哈希。
     history_images 为历史中的图片张数：history 区块的用量另加每张 IMAGE_REF_TOKENS（文本里只有引用）。
+
+    history 区块不截断（DEF-2，S9 D150）：模型实际收到的历史是 runner 的 rc.history，在这里截断只会让组装报告失真；
+    超预算由 runtime.context.compact 在 model.request 前按边界压缩并写 CONTEXT_COMPACTED。这里如实记录其用量。
     """
     plan = ContextPlan(budget=dict(budget or DEFAULT_BUDGET_200K))
     for name in BLOCK_ORDER:
         text = blocks.get(name, "")
         limit = plan.budget.get(name, 0)
         extra = history_images * IMAGE_REF_TOKENS if name == "history" else 0
-        if estimate_tokens(text) + extra > limit:
+        if name != "history" and estimate_tokens(text) + extra > limit:
             text = text[: max(0, limit - extra) * 3]  # 按 estimate_tokens 的反向近似（每 token ≈ 3 字符）裁剪到预算内
             plan.truncated.append(name)
         plan.blocks[name] = text

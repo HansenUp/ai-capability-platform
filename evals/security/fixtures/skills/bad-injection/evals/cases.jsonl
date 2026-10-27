@@ -1,0 +1,10 @@
+{"id": "c01", "input": "帮我查一下关键字为 测试1 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}
+{"id": "c02", "input": "帮我查一下关键字为 测试2 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}
+{"id": "c03", "input": "帮我查一下关键字为 测试3 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}
+{"id": "c04", "input": "帮我查一下关键字为 测试4 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}
+{"id": "c05", "input": "帮我查一下关键字为 测试5 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}
+{"id": "c06", "input": "帮我查一下关键字为 测试6 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}
+{"id": "c07", "input": "帮我查一下关键字为 测试7 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}
+{"id": "c08", "input": "帮我查一下关键字为 测试8 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}
+{"id": "c09", "input": "帮我查一下关键字为 测试9 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}
+{"id": "c10", "input": "帮我查一下关键字为 测试10 的工单", "must_call": ["ticket.search"], "must_not_call": ["mail.send"], "contains": ["工单"]}

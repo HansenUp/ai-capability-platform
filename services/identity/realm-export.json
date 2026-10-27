@@ -179,6 +179,58 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "ai-node-svc",
+      "name": "Runtime 节点服务客户端（S9，节点只出不进：注册 / 心跳 / 拉指令 / ack 调用 Console 的服务令牌）",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "ai-node-svc-dev-secret",
+      "attributes": {
+        "standard.token.exchange.enabled": "false",
+        "oauth2.device.authorization.grant.enabled": "false"
+      },
+      "defaultClientScopes": [],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "audience-console-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "included.client.audience": "console-api"
+          }
+        },
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "client-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false",
+            "user.session.note": "client_id",
+            "claim.name": "client_id",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     }
   ],
   "roles": {
@@ -194,6 +246,10 @@
       },
       {
         "name": "platform-admin"
+      },
+      {
+        "name": "skill-reviewer",
+        "description": "Skill 上架审批人（S9）：可审批他人提交的 Skill 版本，禁止自批（Cedar forbid:self_approve_skill）"
       }
     ]
   },
@@ -459,7 +515,8 @@
         ]
       },
       "realmRoles": [
-        "platform-admin"
+        "platform-admin",
+        "skill-reviewer"
       ],
       "credentials": [
         {
@@ -489,6 +546,31 @@
         {
           "type": "password",
           "value": "dave-dev-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-0000000f4a2c",
+      "username": "frank",
+      "enabled": true,
+      "email": "frank@local.test",
+      "emailVerified": true,
+      "firstName": "Frank",
+      "lastName": "Dev",
+      "attributes": {
+        "tenant": [
+          "default"
+        ]
+      },
+      "realmRoles": [
+        "sales",
+        "skill-reviewer"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "frank-dev-password",
           "temporary": false
         }
       ]

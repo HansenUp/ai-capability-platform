@@ -40,7 +40,8 @@ def _unauthorized(code: str, detail: str) -> GatewayError:
 
 
 class JWKSCache:
-    """JWKS 公钥缓存（按 kid）；未知 kid 时提前刷新，两次刷新至少间隔 JWKS_MIN_REFRESH_S。"""
+    """JWKS 公钥缓存（按 kid）；未知 kid 时提前刷新，两次刷新至少间隔 JWKS_MIN_REFRESH_S；
+    刷新失败沿用旧公钥的时长以 GATEWAY_JWKS_MAX_STALE_S（默认 1 小时）为上限，超过即视为不可用（503）。"""
 
     def __init__(self, url: str, ttl_s: float) -> None:
         self.url, self.ttl_s = url, ttl_s
@@ -79,6 +80,9 @@ class JWKSCache:
                 except (httpx.HTTPError, ValueError, TypeError, AttributeError):
                     if kid not in self._keys:
                         raise httpx.HTTPError("JWKS unavailable") from None
+            # 刷新失败时沿用旧公钥，但最多 GATEWAY_JWKS_MAX_STALE_S（防止 IdP 已轮换 / 吊销的密钥被无限期信任）
+            if time.monotonic() - self._fetched_at > config.JWKS_MAX_STALE_S:
+                raise httpx.HTTPError("JWKS stale beyond GATEWAY_JWKS_MAX_STALE_S")
             return self._keys.get(kid)
 
 
@@ -242,6 +246,34 @@ async def require_runtime_client(
         token=user_token,
     )
     return Caller(client, user, dev=True)
+
+
+async def require_service_client(
+    authorization: Annotated[str | None, Header()] = None,
+    x_gateway_client: Annotated[str | None, Header()] = None,
+) -> str:
+    """FastAPI 依赖：只要求受信服务令牌（azp ∈ GATEWAY_TRUSTED_CALLERS），不要求终端用户令牌。
+    用于节点取包、吊销列表、Console 回写评测结果、Runtime 发布时的 Skill 解析。返回调用方 client id。"""
+    client = await resolve_caller_client(authorization, x_gateway_client)
+    trusted = config.TRUSTED_CALLERS if config.keycloak_enabled() else config.TRUSTED_CALLERS | {config.GATEWAY_CLIENT_ID}
+    if client not in trusted:
+        if config.keycloak_enabled():
+            raise _unauthorized("untrusted_caller", "caller is not a trusted service client")
+        raise GatewayError(403, "untrusted_caller", "untrusted gateway client")
+    return client
+
+
+async def require_skill_eval_client(
+    authorization: Annotated[str | None, Header()] = None,
+    x_gateway_client: Annotated[str | None, Header()] = None,
+) -> str:
+    client = await resolve_caller_client(authorization, x_gateway_client)
+    trusted = config.SKILL_EVAL_TRUSTED_CALLERS
+    if not config.keycloak_enabled() and config.GATEWAY_ENV != "prod":
+        trusted = trusted | {config.GATEWAY_CLIENT_ID}
+    if client not in trusted:
+        raise GatewayError(403, "untrusted_eval_client", "caller is not a trusted skill evaluation service")
+    return client
 
 
 def require_gateway_admin(x_gateway_admin_token: Annotated[str | None, Header()] = None) -> None:

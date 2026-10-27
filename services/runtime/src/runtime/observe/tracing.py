@@ -239,14 +239,22 @@ def record_usage(span: Span, usage: UsageEvent, model_response_seq: int | None, 
         span.set_attribute("ai.event.seq.model_response", model_response_seq)
 
 
-def record_model_content(span: Span, prompt: str, completion: str, redact: bool = False) -> None:
+def record_model_content(span: Span, prompt: str, completion: str, redact: bool = False, mode: str | None = None) -> None:
     """写入本轮提示词（最后一条用户消息）与补全文本，各自截断到 CONTENT_LIMIT。
 
-    redact=True（Run 带 confidential 污点，ADR-0010 机密数据只记元数据）时不写原文，只标记已脱敏。
+    观测通道（S9 OPT-4，D152）按 Run 数据等级给出 mode：``full`` 记原文；``redacted``（internal）先经 redact_pii 同一套规则
+    脱敏（手机号 / 邮箱 / 身份证号 / 银行卡号）再记录，并标记 ai.content_pii_redacted；``metadata``（confidential 或矩阵未准许）
+    不写原文，只标记已脱敏。redact=True 等同 mode="metadata"（ADR-0010 旧入参）。
     """
-    if redact:
+    if redact or mode == "metadata":
         span.set_attribute("ai.content_redacted", True)
         return
+    if mode == "redacted":
+        from runtime.guard.hooks import PII_PATTERNS, redact_text  # 延迟导入：hooks 依赖 llm 客户端
+
+        kinds = list(PII_PATTERNS)
+        prompt, completion = redact_text(prompt, kinds)[0], redact_text(completion, kinds)[0]
+        span.set_attribute("ai.content_pii_redacted", True)
     if prompt:
         span.set_attribute("gen_ai.prompt", truncate(prompt))
     if completion:

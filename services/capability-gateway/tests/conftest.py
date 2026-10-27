@@ -1,27 +1,34 @@
-"""网关测试的公共夹具：每个测试使用全新的内存目录、无 ES、开发态鉴权，测试结束由 monkeypatch 还原。"""
+"""网关测试的公共夹具：每个测试使用全新的内存目录与 Skill 仓储、临时目录包存储、测试签名密钥、无 ES、开发态鉴权，
+测试结束由 monkeypatch 还原。"""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import httpx
 import pytest
 from gateway_testkit import CONNECTOR_URL, JWKS_URL, TOKEN_URL, Upstream
 from gateway_testkit import ISSUER as TEST_ISSUER
+from skill_testkit import SKILL_KEY
 
-from capability_gateway import auth, config, main, state
+from capability_gateway import auth, config, main, skill_sign, state
 from capability_gateway.catalog import ConnectorVersion, MemoryCatalog
+from capability_gateway.skill_repo import MemorySkillRepo
+from capability_gateway.skill_store import FsStore
 
 
 @pytest.fixture(autouse=True)
-def fresh_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def fresh_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
     monkeypatch.setattr(state, "catalog", MemoryCatalog())
     monkeypatch.setattr(state, "es", None)
+    monkeypatch.setattr(state, "skills", MemorySkillRepo())
+    monkeypatch.setattr(state, "skill_store", FsStore(str(tmp_path / "skill-store")))
+    skill_sign.reset_for_tests(SKILL_KEY)
     monkeypatch.setattr(config, "KEYCLOAK_TOKEN_URL", None)
     monkeypatch.setattr(config, "POLICY_URL", "http://policy.test")
     monkeypatch.setattr(config, "GATEWAY_ADMIN_TOKEN", "")
     monkeypatch.setattr(config, "GATEWAY_AUTHZ_TOKEN", "")
-    monkeypatch.setattr(main, "SKILLS", {})
     main.set_invoke_transport_for_tests(None)
     yield
     main.set_invoke_transport_for_tests(None)

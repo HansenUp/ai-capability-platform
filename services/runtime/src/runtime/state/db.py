@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, overload
+from weakref import WeakSet
 
 from alembic import command
 from alembic.config import Config
@@ -50,6 +53,23 @@ class Base(DeclarativeBase):
     """所有 ORM 模型的声明式基类。"""
 
     pass
+
+
+class NodeModelRoute(Base):
+    __tablename__ = "t_node_model_route"
+    node_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    base_version: Mapped[str] = mapped_column(String(32))
+    target_version: Mapped[str] = mapped_column(String(32))
+
+
+class NodeCommandReceipt(Base):
+    __tablename__ = "t_node_command_receipt"
+    node_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    command_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    args_hash: Mapped[str] = mapped_column(String(64))
+    result: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
 def _now() -> datetime:
@@ -111,6 +131,9 @@ class AgentVersion(Base):
     harness_version: Mapped[str | None] = mapped_column(String(32), nullable=True)  # 发布时所选 harness 的版本
     model_resolved: Mapped[str | None] = mapped_column(String(128), nullable=True)  # 模型别名解析后的真实模型标识
     skills_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 全部技能 SKILL.md 内容的总摘要
+    # 发布时经能力网关 POST /skills/resolve 冻结的 Skill 锁（S9 D143，契约 ②）：[{name, version, manifest_sha256}]；
+    # 物化与加载前验签据此逐项核对（runtime.skills）。未声明 Skill 的版本为空列表，S9 之前发布的版本为 NULL。
+    skills_lock: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     tools_schema_version: Mapped[str | None] = mapped_column(String(32), nullable=True)  # 工具 schema 版本
     retrieval_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)  # 检索（RAG）配置快照
     eval_run_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)  # 评测运行引用
@@ -186,6 +209,48 @@ class ToolOperation(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
 
+class WorkbenchScope(Base):
+    __tablename__ = "t_workbench_scope"
+    scope_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    active_attempt: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class WorkbenchAttempt(Base):
+    __tablename__ = "t_workbench_attempt"
+    attempt_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[str] = mapped_column(String(40))
+    action: Mapped[str] = mapped_column(String(16), default="credential", server_default="credential")
+    call_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    params_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    value_hmac: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    create_agent: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    create_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    create_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    create_snapshot: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    create_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    request_seq: Mapped[int] = mapped_column(Integer)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="PREPARED")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    evidence_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rejection: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+
+
+class FeedbackOutbox(Base):
+    __tablename__ = "t_feedback_outbox"
+    attempt_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40))
+    score_revision: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    observed_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    __table_args__ = (UniqueConstraint("run_id", "score_revision", name="uq_feedback_run_revision"),)
+
+
 class RunEventRow(Base):
     """Append-only event log: the source of truth for a Run.
     （追加写事件日志表：一个 Run 的唯一事实来源，Run 的当前状态与消息历史都可从此表重建。）
@@ -228,13 +293,48 @@ def normalize_database_url(url: str) -> URL:
     return u
 
 
+_Cursor = TypeVar("_Cursor", bound=sqlite3.Cursor)
+
+
+class _SQLiteConnection(sqlite3.Connection):
+    """连接退出前显式回收游标，避免取消读取后残留语句继续持有 SQLite 读锁。"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._cursors: WeakSet[sqlite3.Cursor] = WeakSet()
+        self._closed = False
+
+    @overload
+    def cursor(self, factory: None = None) -> sqlite3.Cursor: ...
+
+    @overload
+    def cursor(self, factory: Callable[[sqlite3.Connection], _Cursor]) -> _Cursor: ...
+
+    def cursor(self, factory: Callable[[sqlite3.Connection], sqlite3.Cursor] | None = None) -> sqlite3.Cursor:
+        cursor = super().cursor() if factory is None else super().cursor(factory)
+        self._cursors.add(cursor)
+        return cursor
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        for cursor in list(self._cursors):
+            cursor.close()
+        self._cursors.clear()
+        super().close()
+        self._closed = True
+
+
 def make_engine(url: str) -> AsyncEngine:
     """按连接串创建异步引擎。MySQL 额外开启 pool_pre_ping 与 pool_recycle=3600，
-    避免连接池拿到被服务端 wait_timeout 断开的陈旧连接。供本模块与 Alembic env.py 共用。"""
+    避免连接池拿到被服务端 wait_timeout 断开的陈旧连接。SQLite 关闭连接前显式回收游标，
+    防止取消读取留下的活跃语句继续持锁。供本模块与 Alembic env.py 共用。"""
     u = normalize_database_url(url)
     kwargs: dict[str, Any] = {}
     if u.get_backend_name() == "mysql":
         kwargs.update(pool_pre_ping=True, pool_recycle=3600)
+    elif u.get_backend_name() == "sqlite":
+        kwargs["connect_args"] = {"factory": _SQLiteConnection}
     return create_async_engine(u, **kwargs)
 
 

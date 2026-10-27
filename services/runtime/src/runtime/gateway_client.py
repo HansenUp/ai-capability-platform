@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from runtime import net
 from runtime.config import settings
 
 TOKEN_REFRESH_MARGIN_S = 30.0  # 服务令牌到期前提前刷新的秒数
@@ -68,7 +69,7 @@ async def _fetch_service_token() -> tuple[str, float]:
         "client_secret": settings.gateway_client_secret,
     }
     try:
-        async with httpx.AsyncClient(timeout=TOKEN_TIMEOUT_S, transport=_transport) as c:
+        async with net.client(timeout=TOKEN_TIMEOUT_S, transport=_transport) as c:
             r = await c.post(str(settings.gateway_token_url), data=data)
     except httpx.HTTPError as e:
         raise GatewayAuthError(f"service token endpoint unreachable: {type(e).__name__}") from e
@@ -123,7 +124,7 @@ async def request(
     网关返回 401 时丢弃缓存的服务令牌（可能已被吊销），由调用方按失败处理（不自动重试，写操作不重放）。"""
     url = f"{settings.capability_gateway_url.rstrip('/')}{path}"
     hdrs = await headers(user_token)
-    async with httpx.AsyncClient(timeout=timeout_s, transport=_transport) as c:
+    async with net.client(timeout=timeout_s, transport=_transport) as c:
         r = await c.request(method, url, json=json, params=params, headers=hdrs)
     if r.status_code == 401 and service_auth_enabled():
         invalidate_service_token()

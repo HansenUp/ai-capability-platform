@@ -12,7 +12,8 @@
 维度 4 可观测：T1 traceparent 透传率（100 次调用，上游收到同一 trace-id）；T2 Langfuse 可查到该网关的 Span 且带
   run_id、call_id、工具名、判定结果；另记流式工具经网关时进度通知是否逐条实时到达（首字节）。
 
-用法：python evals/dataplane-poc/cases.py [--targets selfbuilt,agentgateway,contextforge]
+用法：python evals/dataplane-poc/cases.py [--targets agentgateway,contextforge]
+（自研候选 selfbuilt 的数据面已于 S9 删除，其结果见 results/ 历史数据；selfbuilt 容器只提供判定端点。）
 过期令牌：首次运行时取一组令牌存到 evals/dataplane-poc/.tmp/aged-tokens.json（0600，已被 .gitignore 忽略），
 若尚未过期则等待到过期（本机 realm 访问令牌有效期 15 分钟）；`poc.py bench` 开始时会预先生成。
 """
@@ -366,10 +367,12 @@ def token_log_check(targets: list[str], used: list[str]) -> dict[str, Any]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--targets", default="selfbuilt,agentgateway,contextforge")
+    ap.add_argument("--targets", default="agentgateway,contextforge")
     ap.add_argument("--no-wait", action="store_true", help="调试用：令牌未过期时跳过 A4，不等待")
     args = ap.parse_args()
     targets = args.targets.split(",")
+    if "selfbuilt" in targets:
+        raise SystemExit("selfbuilt 数据面（mcp_proxy）已于 S9 删除（D153），只保留判定端点；历史结果见 results/")
     aged = {} if args.no_wait else aged_tokens()
     poc.trace_sink(forward=True)
     used: list[str] = []

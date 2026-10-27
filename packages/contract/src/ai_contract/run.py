@@ -72,6 +72,8 @@ class RunEventType(StrEnum):
     # V1.3 新增（S8 两级发现）：search_capabilities 元工具检索到并动态加入本 Run 的工具（规格 + 哈希）；重放 / 接管据此恢复，
     # 不重新检索
     CAPABILITIES_DISCOVERED = "capabilities.discovered"
+    # 说明（V1.4，S9）：TOOL_REQUESTED 的 payload 可带 batch{id, index, size}（同一轮模型输出的多个工具调用，并行工具调用）；
+    # CONTEXT_COMPACTED 的 payload 为 {upto_index, summary, method, tokens, dropped_hmac, data_class}（上下文压缩事件化）。
     RUN_ERROR = "run.error"  # Run 出现错误
     RUN_DONE = "run.done"  # Run 正常结束
 

@@ -359,7 +359,9 @@ def test_discovery_intercepts_caps_events_and_gates(client: Any, gateway: Any) -
     # 网关第二道防线（评审 #3）：/invoke 带闸口的审批结论、污点与 Agent 租户；只有审批后的执行 approved=true
     close = [b for b in gateway["invoke"] if b["tool"] == "crm.opportunity.close"]
     assert [(b["dry_run"], b["approved"]) for b in close] == [(True, False), (False, True)]
-    assert all(b["taint"] == [] and b["agent_tenant"] == "default" for b in gateway["invoke"])
+    # S9 OPT-4（D152）起 internal 污点同样传播：读过 internal 工具结果之后的调用带 ["internal"]（不含 confidential）
+    assert gateway["invoke"][0]["taint"] == [] and all(b["agent_tenant"] == "default" for b in gateway["invoke"])
+    assert all(b["taint"] in ([], ["internal"]) for b in gateway["invoke"])
     assert harness.tools_seen[-1][-2:] == ["crm.opportunity.search", "crm.opportunity.close"]  # 续跑会话的工具列表含恢复的工具
 
 

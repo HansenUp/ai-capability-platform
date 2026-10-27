@@ -115,7 +115,9 @@ def test_taint_of_counts_ok_and_error_only():
     assert taint_of("ok", "confidential") == {"confidential"}
     assert taint_of("error", "confidential") == {"confidential"}
     assert taint_of("denied", "confidential") == set()
-    assert taint_of("ok", "internal") == set() and taint_of("error", None) == set()
+    # S9 OPT-4（D152）：internal 同样传播；public 与分级缺失不带污点，无法识别的分级按 confidential（失败关闭）
+    assert taint_of("ok", "internal") == {"internal"} and taint_of("denied", "internal") == set()
+    assert taint_of("ok", "public") == set() and taint_of("error", None) == set() and taint_of("ok", "top-secret") == {"confidential"}
 
 
 def test_confidential_error_result_taints_live(client, monkeypatch, confidential_error):

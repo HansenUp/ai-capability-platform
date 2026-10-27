@@ -4,7 +4,7 @@
   harness 派生的孙进程（如 ACP 桥下的 goose / dsh）随之回收，不再泄漏；
 - 预热：保持 `min_idle` 个已完成握手（hello → ready）、尚未 open 的 worker；`handshake=False` 时
   "已启动"即视为就绪（兼容不认识 hello 帧的 harness）；
-- 上限：总进程（空闲 + 租出 + 启动中）≤ `max_workers`；无可用 worker 时 acquire 等待 `acquire_timeout_s`，
+- 上限：总进程（空闲 + 租出 + 启动中 + 回收中）≤ `max_workers`；无可用 worker 时 acquire 等待 `acquire_timeout_s`，
   超时抛 PoolExhausted（code=POOL_EXHAUSTED）；
 - 只在会话内复用：worker 被一个会话租用直到会话结束，release 即回收进程组（不回空闲队列、不跨会话/租户），
   随后后台补足热 worker（D26：interrupt → close → 回收 → 补热）；
@@ -212,6 +212,8 @@ class WorkerPool:
         self.config = config or PoolConfig()
         self._idle: deque[Worker] = deque()
         self._leased: set[Worker] = set()
+        self._retiring: dict[Worker, asyncio.Task[None]] = {}
+        self._waiters = 0
         self._starting = 0  # 正在启动 / 握手的 worker（含预热中）
         self._warming = 0  # 其中为补足空闲而启动的
         self._cond = asyncio.Condition()
@@ -231,6 +233,7 @@ class WorkerPool:
             "idle": len(self._idle),
             "leased": len(self._leased),
             "starting": self._starting,
+            "retiring": len(self._retiring),
             "total": self._total(),
             "spawned": self.spawned,
             "reaped": dict(self.reaped),
@@ -262,18 +265,25 @@ class WorkerPool:
         deadline = loop.time() + cfg.acquire_timeout_s
         worker: Worker | None = None
         async with self._cond:
-            while True:
-                worker = self._pop_idle()
-                if worker is not None or self._total() < cfg.max_workers:
-                    break
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    raise PoolExhausted(f"stdio pool exhausted: {cfg.max_workers} workers busy for {cfg.acquire_timeout_s}s")
-                with contextlib.suppress(TimeoutError):
-                    async with asyncio.timeout(remaining):
-                        await self._cond.wait()
-            if worker is None:
-                self._starting += 1
+            self._waiters += 1
+            try:
+                while True:
+                    if self._closed:
+                        raise RuntimeError("pool is closed")
+                    worker = self._pop_idle()
+                    if worker is not None or self._total() < cfg.max_workers:
+                        break
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise PoolExhausted(f"stdio pool exhausted: {cfg.max_workers} workers busy for {cfg.acquire_timeout_s}s")
+                    with contextlib.suppress(TimeoutError):
+                        async with asyncio.timeout(remaining):
+                            await self._cond.wait()
+                if worker is None:
+                    self._starting += 1
+            finally:
+                self._waiters -= 1
+                self._wake.set()
         if worker is None:  # 冷启动（锁外进行，不阻塞其他 acquire / release）
             try:
                 worker = await self._spawn()
@@ -281,6 +291,9 @@ class WorkerPool:
                 self._starting -= 1
                 if worker is None:
                     await self._notify()
+        if self._closed:
+            await self.release(worker)
+            raise RuntimeError("pool is closed")
         worker.state, worker.leased_at, worker.busy = "leased", time.monotonic(), False
         worker.touch()
         self._leased.add(worker)
@@ -289,27 +302,23 @@ class WorkerPool:
 
     async def release(self, worker: Worker) -> None:
         """会话结束：close 帧 → 等待自行退出（至多 close_grace_s）→ killpg 整组；随后补热。幂等。"""
-        self._leased.discard(worker)
-        await self._terminate(worker, graceful=True)
-        await self._notify()
-        self._wake.set()
+        if worker.state == "dead" and worker not in self._retiring:
+            return
+        await asyncio.shield(self._retire(worker, graceful=True))
 
     async def kill(self, worker: Worker, reason: str) -> None:
-        """强制回收（超时 / 超限）：记录原因，立即 killpg 整组；不再占用上限名额。"""
-        if worker.state == "dead":
+        """强制回收（超时 / 超限）：记录原因，killpg 整组；物理回收完成后释放名额。"""
+        if worker.state == "dead" and worker not in self._retiring:
             return
-        worker.kill_reason = reason
-        self.reaped[reason] = self.reaped.get(reason, 0) + 1
-        self._leased.discard(worker)
-        with contextlib.suppress(ValueError):
-            self._idle.remove(worker)
-        await self._terminate(worker, graceful=False)
-        await self._notify()
-        self._wake.set()
+        if worker not in self._retiring:
+            worker.kill_reason = reason
+            self.reaped[reason] = self.reaped.get(reason, 0) + 1
+        await asyncio.shield(self._retire(worker, graceful=False))
 
     async def aclose(self) -> None:
         """关闭池：停止维护循环，回收全部 worker（含租出中的）。"""
         self._closed = True
+        await self._notify()
         tasks = [t for t in (self._task, *self._bg) if t is not None]
         for t in tasks:
             t.cancel()
@@ -317,22 +326,40 @@ class WorkerPool:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         workers = [*self._idle, *self._leased]
-        self._idle.clear()
-        self._leased.clear()
         for w in workers:
-            await self._terminate(w, graceful=True)
+            self._retire(w, graceful=True)
+        await asyncio.shield(asyncio.gather(*self._retiring.values()))
 
     # ---- 内部 ----
 
     def _total(self) -> int:
-        return len(self._idle) + len(self._leased) + self._starting
+        return len(self._idle) + len(self._leased) + self._starting + len(self._retiring)
+
+    def _retire(self, worker: Worker, *, graceful: bool) -> asyncio.Task[None]:
+        if worker in self._retiring:
+            return self._retiring[worker]
+        self._leased.discard(worker)
+        with contextlib.suppress(ValueError):
+            self._idle.remove(worker)
+
+        async def finish() -> None:
+            try:
+                await self._terminate(worker, graceful=graceful)
+            finally:
+                self._retiring.pop(worker)
+                await self._notify()
+                self._wake.set()
+
+        task = asyncio.create_task(finish(), name="stdio-pool-retire")
+        self._retiring[worker] = task
+        return task
 
     def _pop_idle(self) -> Worker | None:
         while self._idle:
             w = self._idle.popleft()
             if w.proc.returncode is None:
                 return w
-            self._spawn_bg(self._terminate(w, graceful=False))
+            self._retire(w, graceful=False)
         return None
 
     def _spawn_bg(self, coro: Any) -> None:
@@ -432,8 +459,9 @@ class WorkerPool:
             await self._notify()
 
     def _replenish(self) -> None:
+        """容量等待者优先取得释放的槽位，其冷启动握手使用独立握手期限。"""
         cfg = self.config
-        if self._closed or time.monotonic() < self._retry_at:
+        if self._closed or self._waiters or time.monotonic() < self._retry_at:
             return
         need = min(cfg.min_idle - len(self._idle) - self._warming, cfg.max_workers - self._total())
         for _ in range(max(0, need)):

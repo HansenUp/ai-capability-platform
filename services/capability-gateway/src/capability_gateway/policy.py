@@ -62,6 +62,25 @@ def build_request(
     }
 
 
+def build_skill_request(
+    principal: Principal, *, name: str, version: str, tenant: str, risk_level: str, submitted_by: str
+) -> dict[str, Any]:
+    """Skill 审批判定（action=approve_skill，Cedar 资源 Skill::"<name>@<version>"）：仅 skill-reviewer 同租户放行，
+    审批人与提交人相同由 forbid:self_approve_skill 拒绝。"""
+    return {
+        "principal": {"sub": principal.sub, "tenant": principal.tenant, "roles": list(principal.roles)},
+        "action": "approve_skill",
+        "resource": {
+            "id": f"{name}@{version}",
+            "tenant": tenant,
+            "system": "skill",
+            "risk_level": risk_level,
+            "submitted_by": submitted_by,
+        },
+        "context": {"approved": False, "taint": []},
+    }
+
+
 async def check_batch(requests: list[dict[str, Any]]) -> list[Decision]:
     """批量判定；任何失败整批 deny。"""
     if not requests:

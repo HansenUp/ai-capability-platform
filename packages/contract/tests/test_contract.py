@@ -113,7 +113,7 @@ def test_contract_version_exported():
     """CONTRACT_VERSION 存在、是语义化版本号，并在 __all__ 中导出。"""
     import ai_contract
 
-    assert ai_contract.CONTRACT_VERSION == "1.3.0"
+    assert ai_contract.CONTRACT_VERSION == "1.4.0"
     assert "CONTRACT_VERSION" in ai_contract.__all__
     for name in ("InputRequiredEvent", "CardType", "ThinkingVisibility"):
         assert name in ai_contract.__all__
@@ -310,3 +310,60 @@ def test_image_ref_load_and_validation(tmp_path: Path) -> None:
     (tmp_path / f"{aid}.png").write_bytes(b"not an image")
     with pytest.raises(ImageRefError):  # 指纹与内容一致但不是 png
         load_image_ref(str(tmp_path), part | {"sha256": hashlib.sha256(b"not an image").hexdigest()})
+
+
+def test_v14_parallel_tool_calls_and_context_compacted() -> None:
+    """V1.4（CR-1.4）：HarnessCapabilities.parallel_tool_calls 默认 False、可声明为 True 且不参与能力等级判定；
+    CONTEXT_COMPACTED 取值不变；TOOL_REQUESTED 的 batch 只放在 payload 里（RunEvent 结构不变）。"""
+    base = HarnessCapabilities(name="h", version="1", transport="in-process", loop_owner="platform")
+    assert base.parallel_tool_calls is False
+    par = base.model_copy(update={"parallel_tool_calls": True})
+    assert capability_tier(par) == capability_tier(base) == "L2"
+    with pytest.raises(ValidationError):
+        HarnessCapabilities(name="h", version="1", transport="in-process", parallel_tool_calls="maybe")  # type: ignore[arg-type]
+    assert RunEventType.CONTEXT_COMPACTED == "context.compacted"
+    ev = RunEvent(
+        run_id="r",
+        seq=3,
+        type=RunEventType.TOOL_REQUESTED,
+        payload={"call_id": "c1", "tool": "t", "input": {}, "batch": {"id": "b1", "index": 0, "size": 2}},
+    )
+    assert ev.payload["batch"] == {"id": "b1", "index": 0, "size": 2}
+
+
+def test_v14_data_class_levels_and_matrix(tmp_path: Path) -> None:
+    """契约 ④：Level 可比较（public < internal < confidential，未知按 confidential）；Matrix 未覆盖即拒绝，"*" 为任意；
+    signed 需要 signoff.by 与 signoff.at；未知通道 / 等级与非字符串列表在加载时拒绝。"""
+    from ai_contract.data_class import CHANNELS, Level, Matrix, MatrixError
+
+    assert CHANNELS == ("model", "embedding", "rerank", "observe", "fallback", "memory")
+    assert Level.PUBLIC < Level.INTERNAL < Level.CONFIDENTIAL and Level.CONFIDENTIAL >= "internal"
+    assert Level.parse("secret") is Level.CONFIDENTIAL and Level.parse(None) is Level.PUBLIC
+    assert Level.highest(["public", "internal"]) is Level.INTERNAL and Level.highest([]) is Level.PUBLIC
+    data = {
+        "schema": "ai-platform.data-class-matrix/v1",
+        "version": "t1",
+        "channels": {"model": {"public": ["*"], "internal": ["alias-a"], "confidential": []}, "observe": {"public": ["langfuse"]}},
+        "signoff": None,
+    }
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    m = Matrix.load(path)
+    assert m.allows("model", "public", "anything") and m.allows("model", Level.INTERNAL, "alias-a")
+    assert not m.allows("model", "internal", "alias-b") and not m.allows("model", "confidential", "alias-a")
+    assert not m.allows("embedding", "public", "embed-default")  # 通道未覆盖即拒绝
+    assert not m.allows("observe", "internal", "langfuse")  # 等级未覆盖即拒绝
+    assert not m.allows("model", "top-secret", "alias-a")  # 未知等级按 confidential
+    assert m.signed is False
+    signed = Matrix.from_dict(data | {"signoff": {"by": "合规部", "at": "2026-10-18"}})
+    assert signed.signed is True and Matrix.from_dict(data | {"signoff": {"by": "x", "at": ""}}).signed is False
+    with pytest.raises(ValueError):
+        m.allows("telepathy", "public", "x")
+    for bad in (
+        {"channels": {"telepathy": {}}},
+        {"channels": {"model": {"secret": ["*"]}}},
+        {"channels": {"model": {"public": "*"}}},
+        {"schema": "other/v9", "channels": {}},
+    ):
+        with pytest.raises(MatrixError):
+            Matrix.from_dict(bad)

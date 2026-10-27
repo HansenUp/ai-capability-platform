@@ -185,6 +185,7 @@ async def test_capabilities_enforcing_and_replayable() -> None:
     assert (caps.loop_owner, caps.tool_interception, caps.can_resume_from_events) == ("harness", "enforcing", True)
     assert caps.supports_native_resume and caps.internal_hook_points == []
     assert capability_tier(caps) == "L2"
+    assert caps.parallel_tool_calls is False  # S9 D155：一条消息的多个 tool_use 串行拆轮，平台不按批处理
 
 
 async def test_text_turn_event_order(tmp_path: Any) -> None:

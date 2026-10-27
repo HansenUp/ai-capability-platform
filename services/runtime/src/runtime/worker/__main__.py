@@ -10,10 +10,15 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import os
 import signal
+import sys
+from types import SimpleNamespace
 
 from runtime.config import settings, validate_for_production
 from runtime.harness import registry
+from runtime.node import agent as node_agent_mod
+from runtime.node.lifecycle import NodeLifecycle
 from runtime.observe import tracing
 from runtime.state.db import init_db
 from runtime.worker.settings import validate, worker_settings
@@ -22,7 +27,7 @@ from runtime.worker.worker import start_background
 logger = logging.getLogger("runtime.worker")
 
 
-async def main() -> None:
+async def main(*, managed: bool = False) -> int:
     ws = dataclasses.replace(worker_settings, role="worker")
     validate_for_production(settings)
     validate(ws, settings.runtime_env)
@@ -34,15 +39,30 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
     bg = await start_background(ws)
+    restarting = False
+
+    def request_exit() -> None:
+        nonlocal restarting
+        restarting = True
+        stop.set()
+
+    lifecycle = NodeLifecycle(bg, request_exit if managed else None, durable=bool(ws.redis_url))
+    os.environ.setdefault("NODE_LABELS", "worker")
+    node_agent = await node_agent_mod.start(SimpleNamespace(state=SimpleNamespace(node_lifecycle=lifecycle, node_serves_requests=False)))
     logger.info("runtime worker started (node=%s, concurrency=%d)", settings.node_id, ws.concurrency)
     try:
         await stop.wait()
     finally:
+        if node_agent is not None:
+            await node_agent.stop()
         await bg.stop()
+        if restarting:
+            await registry.shutdown_pools()
         tracing.force_flush()
         logger.info("runtime worker stopped")
+    return 75 if restarting else 0
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

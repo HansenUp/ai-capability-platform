@@ -29,7 +29,7 @@ def _batch_item(case: dict, i: int) -> dict:
     p = case["principal"]
     roles = p.get("roles", [p["role"]] if "role" in p else [])
     return {
-        "principal": {"sub": f"user-{i}", "tenant": p["tenant"], "roles": roles},
+        "principal": {"sub": p.get("sub", f"user-{i}"), "tenant": p["tenant"], "roles": roles},
         "action": case.get("action", "invoke"),
         "resource": {"id": f"cap.case.{i}", **case["resource"]},
         "context": case["context"],

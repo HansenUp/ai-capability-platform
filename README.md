@@ -231,7 +231,33 @@ make compose-up
 .venv/bin/ruff check . && pnpm -r build
 ```
 
-已覆盖的行为：契约状态迁移；SSE 对话；只读工具执行与结果外置；高风险写操作挂起 → 审批 → 重放恢复 → 幂等去重；非法迁移拒绝；发布评测闸门；策略基线判定；Skill 供应链 422 规则；stdio 协议探针；MCP 模板幂等与 dry-run。
+已覆盖的行为：契约状态迁移；SSE 对话；高风险写审批与跨 Worker 重放恢复；Cedar 授权与 OBO；Skill 扫描、评测、双人审批、签名上架、验签物化与吊销；沙箱隔离、出站白名单、数据分级；并行工具调用和上下文压缩后的日志重建。
+
+S9 验证入口：`make verify-s9`（需本机依赖，默认 MinIO 与真实模型，会产生模型费用）；`S9_MODEL=scripted SKILL_STORE=fs make verify-s9` 使用脚本化模型与临时文件存储。`make security` 运行 Bandit、联网依赖审计、Runtime 出站代码审计与安全单测；全栈安全用例由 `verify-s9` 启动专用测试栈执行。
+
+真实 Langfuse 专项：`.venv/bin/python scripts/verify_s9_e2e.py --subset langfuse`，模型采用脚本化，Trace 经本机 OTel Collector 写入真实 Langfuse；检查评分重算、低分拒绝、Trace 的 Agent / 版本 / 租户绑定和跨条目复用拒绝。`S9_LANGFUSE=true` 可为完整 S9 验收启用真实评测。数据集使用独立随机前缀，保留验收证据；默认连接本机开发项目，可通过 `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` 指定项目，Collector 须对应同一项目。
+
+签名写脚本专项：`.venv/bin/python scripts/verify_s9_e2e.py --subset script-writes`，验证真实 Docker 写入、持久审批、MySQL 写前登记、`kill -9` Worker 后接管和人工对账。写脚本全部按高风险写处理，结果未知时禁止重试；对账先清理原操作容器，`skip` 不撤销副作用。故障接管须共享 Docker 引擎及同路径持久工作区；完整约束见 `skills/README.md`。
+
+S10.3 本机节点控制：`make verify-s10-node`，需要 Docker 与已缓存的 `redis:7-alpine` 镜像；使用随机回环端口、临时库及独立 Redis 容器，不调用真实模型。覆盖版本化模型切换、在途 Run 保持原版本、固定版本不受影响、排空后持久回执、实际新 PID／boot_id 注册，以及纯 Worker 重启。安全契约见 `docs/decisions/2026-10-18-S10节点控制安全契约.md`。
+
+S10.4 真实本机网关：预先拉取官方 `apache/apisix:3.11.0-debian` 与 `redis:7-alpine`，执行 `make verify-s10-routing`（Docker Desktop／macOS）。入口仅随机回环端口，使用临时 Console／双 Runtime／共享 SQLite／Redis、RSA JWKS 与模型／策略／工具桩；验证租户服务拉取鉴权、静态节点白名单、权重与失败关闭、原节点退出后的审批恢复及 SSE、缓存与 POST 不重试。结束清理自有容器／进程，不启用 Helm／Argo CD。
+
+插件与状态池约束见 `docs/decisions/2026-10-18-S10路由契约.md`。路由拉取只调用 `/internal/routing`，服务 JWT 须为 `ai-routing-svc`、含 `routing:read` 及单一租户；Runtime 保持 JWT 鉴权。静态节点映射不是 Console 注册自动发现的连接地址；生产服务客户端、令牌轮换、TLS／mTLS、容量及网络隔离仍待验收。不要开启会记录令牌的 OIDC debug 日志，含凭据的临时 YAML 不进入证据或版本库。
+
+S10.5 闸门复核：`make verify-s10-eval` 只读既有本机 Langfuse 中已归档的 S9 运行，不创建评测数据或服务资源；Runtime 同步边界用明确替身。默认阈值仍为 `EVAL_MIN_ITEMS=30`、`EVAL_MIN_PASS_RATE=0.8`，非法／非有限配置、分页不完整及坏评分失败关闭。管理员通过 `GET /agents/{agent_id}/eval-gate` 查看进程级非秘密策略，成功发布／灰度记录策略审计；没有在线调阈值接口，生产标准仍需人工签署。
+
+S10.6 管理员分配：`GET／PUT /agents/{agent_id}/admins` 由当前租户的租户管理员及以上查询／替换归属，空 users 数组撤销；普通 ADMIN 仅管理和列出已分配 Agent。此接口不创建身份账号、不修改角色，不把开发身份头视为生产鉴权。
+
+S10.6 只读运营接口：`GET /audit/search` 支持本租户精确过滤、带时区时间窗及 `before_id` keyset 分页，返回最新优先的 items／next_before_id；旧 `/audit` 列表契约保留。`GET /metrics/operations` 仅提供租户 Console 控制面计数，Runtime 执行率／延迟／Token 统计明确不可用，不是零值。不进行生产部署。
+
+S10.6 本机 Trace 指标：`GET /metrics/traces?agent_id=...&since=...&until=...` 只读既有本机 Langfuse v3，需要租户管理员、当前租户 Agent 和不超过 7 天的带时区时间窗；完整分页后统计匹配的 Trace、GENERATION、Token 与 USD 费用。未知总量为 null，覆盖数和已知 Trace 小计单列；Trace 不等于 Run，不提供 Run 成功率或费用结算。超限／来源故障 503，不截断为“完整结果”。`make verify-s10-traces` 可复核真实只读来源。
+
+现有 Agent 页面已将草稿保存与发布拆开，读取闸门策略、填写真实评测引用，支持灰度白名单与页面内发布／回滚确认。Langfuse 模式不发送伪造的手动评测通过；开发 flag 模式必须显式勾选。`make verify-s10-publishing` 启动隔离临时 Console→Runtime 验证；正向复用 12 条归档样本的阈值只作用该测试进程，项目默认仍为 30 条／80%。完整边界与执行报告见 `docs/decisions/2026-10-20-S10指标与发布页执行报告.md`。
+
+S10.6 目录范围已由用户确认仅 Console 映射元数据：`/manage/directory` 页面提供当前租户展示信息和外部 issuer／subject 用户映射的增改删与分页。接口为 `GET／PUT /directory/tenant`、`GET／POST /directory/users`、`PUT／DELETE /directory/users/{id}`，仅当前租户 TENANT_ADMIN 及以上可访问；身份不可变、重复映射 409、跨租户 404，变更与审计同事务。删除仅移除展示记录，不撤销既有 Agent 分配、角色、令牌或 Run；不会创建／停用真实 IdP 账号。Console 迁移升级至 `0006`，不会从旧分配记录推断身份目录。安全契约见 `docs/decisions/2026-10-19-S10Console目录契约.md`。
+
+本机运行受管节点：先配置持久数据库、Redis、Console 与节点服务鉴权，再执行 `NODE_ID=node-demo .venv/bin/python -m runtime.node --role all --port 8080`（支持 api／worker／all）。它不是生产 supervisor，拒绝生产模式；普通 uvicorn 启动不接受远程重启。模型切换只选择已发布的全量版本，不改已发布快照或在途 Run。D47 和生产部署继续延期。
 
 ---
 
@@ -239,11 +265,9 @@ make compose-up
 
 | 项目 | 现状 | 计划 |
 |---|---|---|
-| JWT / JWKS 验签 | 开发态头部身份，`AUTH_REQUIRED=true` 返回 501 | S2 |
-| Claude Agent SDK 适配器回合循环 | 骨架，SDK 缺失时 ImportError | S5 |
-| Run 领取与 Worker（Redis Streams） | API 内后台任务执行 | S7 |
-| Console / 网关持久化 | 内存存储 | S8 / S10 迁移 MySQL |
-| MCP 分发（OBO Token） | 开发态本地执行器 | S6 |
-| Cedar 引擎绑定 | Python 基线评估器 + HTTP 判定服务 | ADR-0001，S3 |
-| Langfuse / OTel 转发 | 未配置时本地缓冲 | S4 |
-| APISIX 路由插件 | 路由表 API 已就绪 | ADR-0003，S9 |
+| 身份与策略 | JWT / JWKS、服务令牌、Cedar sidecar 与 OBO 已实现；开发态保留显式替身 | S2 / S8 本机验证 |
+| Harness 与持久执行 | Claude SDK / stdio 适配、Redis Streams、MySQL 租约、跨节点接管已实现 | S5–S7 本机验证 |
+| 能力目录与 Skill | MySQL + ES 目录；签名包、扫描、审批、验签与吊销链路已实现 | S8 / S9；验收范围见阶段纪要 |
+| 安全与节点 | 应用层出站控制、Docker L1 沙箱、节点服务鉴权与拉取指令已实现 | S9；集群网络隔离尚未验收 |
+| 观测与评测 | Langfuse / OTel 接入；未配置 Langfuse 时仅允许开发态本地评测 | 正式环境需单独验收 |
+| APISIX 与集中式投产 | 路由插件已完成真实本机验证，生产部署与外部边界未验收；Helm / Argo CD 延期 | S10 / M2 |

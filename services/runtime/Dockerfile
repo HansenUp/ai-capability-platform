@@ -17,6 +17,9 @@ COPY --from=builder /install /usr/local
 COPY --from=builder /build/services/runtime/migrations /opt/runtime/migrations
 COPY --from=builder /build/services/runtime/alembic.ini /opt/runtime/alembic.ini
 ENV RUNTIME_MIGRATIONS_DIR=/opt/runtime/migrations
+# 数据分级矩阵（S9 OPT-4）：镜像内默认随附开发矩阵（未签署）；生产以 DATA_CLASS_MATRIX_FILE 指向挂载的已签署矩阵
+COPY --from=builder /build/services/runtime/data_class_matrix.dev.json /opt/runtime/data_class_matrix.dev.json
+ENV DATA_CLASS_MATRIX_FILE=/opt/runtime/data_class_matrix.dev.json
 RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
  && mkdir /app && chown app:app /app   # /app 可写：Runtime 默认把 SQLite 与工作区放在当前目录
 USER app

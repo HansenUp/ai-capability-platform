@@ -61,11 +61,34 @@
         "type": "object"
       },
       "ApprovalBody": {
-        "description": "审批/拒绝工具调用请求体。\n\nparams_hash 是必填项：审批附着于具体参数与资源，审批人必须回传卡片上展示的那一份参数指纹，\n否则无从判断\"批的到底是哪一组参数\"。",
+        "description": "审批/拒绝工具调用请求体：单个调用给 call_id + params_hash；并行批次的影响预览卡（payload.calls[]）可用 calls 一次批多个\n（S9，D149），两种写法二选一。\n\nparams_hash 是必填项：审批附着于具体参数与资源，审批人必须回传卡片上展示的那一份参数指纹，\n否则无从判断\"批的到底是哪一组参数\"。",
         "properties": {
           "call_id": {
-            "title": "Call Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Id"
+          },
+          "calls": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ApprovalCall"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calls"
           },
           "comment": {
             "default": "",
@@ -73,8 +96,15 @@
             "type": "string"
           },
           "params_hash": {
-            "title": "Params Hash",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params Hash"
           },
           "ttl_seconds": {
             "default": 900,
@@ -82,11 +112,28 @@
             "type": "integer"
           }
         },
+        "title": "ApprovalBody",
+        "type": "object"
+      },
+      "ApprovalCall": {
+        "description": "批量审批中的一个调用：调用标识与卡片上展示的参数指纹。",
+        "properties": {
+          "call_id": {
+            "maxLength": 128,
+            "title": "Call Id",
+            "type": "string"
+          },
+          "params_hash": {
+            "maxLength": 64,
+            "title": "Params Hash",
+            "type": "string"
+          }
+        },
         "required": [
           "call_id",
           "params_hash"
         ],
-        "title": "ApprovalBody",
+        "title": "ApprovalCall",
         "type": "object"
       },
       "ApprovalView": {
@@ -147,6 +194,34 @@
         ],
         "title": "CardType",
         "type": "string"
+      },
+      "CreateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "attempt_id": {
+            "format": "uuid",
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "agent_id",
+          "text"
+        ],
+        "title": "CreateBody",
+        "type": "object"
       },
       "DoneEvent": {
         "additionalProperties": false,
@@ -289,6 +364,31 @@
           }
         ],
         "title": "Event"
+      },
+      "EvidenceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "revision",
+          "fingerprint"
+        ],
+        "title": "EvidenceBody",
+        "type": "object"
       },
       "FeedbackBody": {
         "description": "对一次 Run 的用户反馈：点赞 +1 / 点踩 -1，可附说明或修正后的正确答案（可沉淀为评测样本）。",
@@ -529,6 +629,104 @@
           "messages"
         ],
         "title": "MessagesRequest",
+        "type": "object"
+      },
+      "Prepare": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_id": {
+            "format": "uuid",
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "expected_revision": {
+            "maximum": 2147483646.0,
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "title": "Score",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "run_id",
+          "expected_revision",
+          "score"
+        ],
+        "title": "Prepare",
+        "type": "object"
+      },
+      "PrepareBody": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "credential",
+            "enum": [
+              "credential",
+              "approve",
+              "reject",
+              "answer"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "attempt_id": {
+            "format": "uuid",
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "call_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Id"
+          },
+          "params_hash": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params Hash"
+          },
+          "run_id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "run_id"
+        ],
+        "title": "PrepareBody",
         "type": "object"
       },
       "PublishIn": {
@@ -1383,7 +1581,7 @@
     },
     "/admin/agents/{agent_id}/versions/{version}/publish": {
       "post": {
-        "description": "将草稿版本置为已发布状态，并冻结可复现快照（技能摘要、harness 版本）。\n\n以下闸门依次生效，任一不满足都按业务规则拒绝返回 409（422 只保留给请求参数校验）：\n1) 评测闸门——eval_passed=False 直接阻断；\n2) Hooks 配置闸门（S5，D73）——config.hooks 只能引用平台内置 hook，点与参数须合规；\n3) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，\n   否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障；\n4) harness 持有循环的高风险写白名单（S5 §4-1，D79）——loop_owner=harness 的适配器即便达到 L2，\n   声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）；\n5) budget / user_input 配置闸门（S7）——budget 须为合规的双预算对象（DEF-1），user_input 须为布尔值；\n6) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的\n   harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值；\n7) discovery 配置闸门（S8.2）——{enabled, scope?, max_tools?} 须合规；开启后运行期可能动态加入高风险写工具，\n   按声明了高风险写处理（须 L2，harness 持有循环的还须在白名单内）。\n\n已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。",
+        "description": "将草稿版本置为已发布状态，并冻结可复现快照（技能摘要、harness 版本）。\n\n以下闸门依次生效，任一不满足都按业务规则拒绝返回 409（422 只保留给请求参数校验）：\n1) 评测闸门——eval_passed=False 直接阻断；\n2) Hooks 配置闸门（S5，D73）——config.hooks 只能引用平台内置 hook，点与参数须合规；\n3) 能力等级闸门——声明了高风险写工具的 Agent，其所选 harness 的 capability_tier 必须达到 L2，\n   否则平台既无法在执行前强制拦截，也无法在审批挂起后精确续跑，高风险写就失去了治理保障；\n4) harness 持有循环的高风险写白名单（S5 §4-1，D79）——loop_owner=harness 的适配器即便达到 L2，\n   声明高风险写工具的 Agent 也须在 HARNESS_LOOP_HIGH_RISK_ALLOWLIST 中（默认空 = 拒绝）；\n5) budget / user_input 配置闸门（S7）——budget 须为合规的双预算对象（DEF-1），user_input 须为布尔值；\n6) harness 版本（S6 评审）——loop_owner=harness 的适配器（goose / dsh 等）取不到二进制版本时拒绝：快照冻结的\n   harness_version 是开会话时核对实际版本的依据（HARNESS_VERSION_MISMATCH），不能冻结空值；\n7) discovery 配置闸门（S8.2）——{enabled, scope?, max_tools?} 须合规；开启后运行期可能动态加入高风险写工具，\n   按声明了高风险写处理（须 L2，harness 持有循环的还须在白名单内）；\n8) S9：parallel_tool_calls 须为布尔值，开启时所选 harness 须声明支持（claude-sdk 不支持，D155）；context（上下文压缩，\n   DEF-2）须合规；用到 llm 摘要（thinking_summary llm 模式、context.compaction=llm）时摘要别名须在模型网关上存在（D151）；\n9) Skill 锁（S9 D143，契约 ②）——TOOL_DISPATCH=gateway 时经能力网关 POST /skills/resolve 校验声明的 Skill（listed、同租户、\n   声明能力 ⊆ Agent 工具 ∪ 发现范围）并冻结 skills_lock；风险等级以网关判定为准（不再查本地工具表）。网关拒绝 409（带网关\n   错误码），网关不可达 / 应答不合规同样 409（失败关闭）。进程内开发执行器（TOOL_DISPATCH=local）不经网关：不冻结锁，\n   风险等级取本地工具表。\n\n已发布版本重复发布是幂等的（Console 重试用）；已退役版本不能直接重新发布，应走回滚。",
         "operationId": "publish_admin_agents__agent_id__versions__version__publish_post",
         "parameters": [
           {
@@ -2136,6 +2334,234 @@
         "summary": "Messages"
       }
     },
+    "/v1/metrics/feedback-cohort": {
+      "get": {
+        "operationId": "feedback_cohort_v1_metrics_feedback_cohort_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Since",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Until",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Feedback Cohort V1 Metrics Feedback Cohort Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Feedback Cohort",
+        "tags": [
+          "Local feedback audit"
+        ]
+      }
+    },
+    "/v1/metrics/feedback-evidence": {
+      "get": {
+        "operationId": "feedback_evidence_v1_metrics_feedback_evidence_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Since",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Until",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Feedback Evidence V1 Metrics Feedback Evidence Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Feedback Evidence",
+        "tags": [
+          "Local feedback audit"
+        ]
+      }
+    },
     "/v1/runs": {
       "get": {
         "description": "本人的 Run 列表（最新在前）。管理员默认看本租户全部，可用 subject 只看某人；非管理员只能看自己\n（subject 给成别人 403）。next_cursor 原样传回即取下一页，为 null 表示没有更多。",
@@ -2558,7 +2984,7 @@
     },
     "/v1/runs/{run_id}/approve": {
       "post": {
-        "description": "批准一次挂起中的高风险工具调用：仅在 Run 处于 auth-required 状态时允许，\n记录 TOOL_APPROVED 事件并把状态迁回 working。持久化执行的 Run（S7，D108）随即入队，由 Worker 以发起人存储的\n凭据自动续跑；S7 之前创建的 Run（非持久化）仍需发起人调用 /resume 才继续执行。\n\n批准会绑定\"参数指纹 + 有效期\"：参数一旦变化或审批超时，闸口不会放行，必须重新审批。",
+        "description": "批准挂起中的高风险工具调用（单个 call_id，或并行批次的 calls[]）：仅在 Run 处于 auth-required 状态时允许，\n逐个记录 TOOL_APPROVED 事件；同批待审批的调用全部批准后才把状态迁回 working（否则保持 auth-required，返回的 state 即如此）。\n持久化执行的 Run（S7，D108）迁回 working 后随即入队，由 Worker 以发起人存储的凭据自动续跑；S7 之前创建的 Run（非持久化）\n仍需发起人调用 /resume 才继续执行。\n\n批准会绑定\"参数指纹 + 有效期\"：参数一旦变化或审批超时，闸口不会放行，必须重新审批。",
         "operationId": "approve_v1_runs__run_id__approve_post",
         "parameters": [
           {
@@ -3574,6 +4000,1221 @@
           }
         },
         "summary": "Stream Run"
+      }
+    },
+    "/v1/workbench/attempts": {
+      "get": {
+        "operationId": "attempts_v1_workbench_attempts_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Attempts V1 Workbench Attempts Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Attempts"
+      },
+      "post": {
+        "operationId": "prepare_v1_workbench_attempts_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Prepare V1 Workbench Attempts Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare"
+      }
+    },
+    "/v1/workbench/attempts/{attempt_id}": {
+      "get": {
+        "operationId": "receipt_v1_workbench_attempts__attempt_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Receipt V1 Workbench Attempts  Attempt Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receipt"
+      }
+    },
+    "/v1/workbench/attempts/{attempt_id}/acknowledge": {
+      "post": {
+        "operationId": "acknowledge_v1_workbench_attempts__attempt_id__acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Acknowledge V1 Workbench Attempts  Attempt Id  Acknowledge Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Acknowledge"
+      }
+    },
+    "/v1/workbench/attempts/{attempt_id}/execute": {
+      "post": {
+        "operationId": "execute_v1_workbench_attempts__attempt_id__execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Execute V1 Workbench Attempts  Attempt Id  Execute Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute"
+      }
+    },
+    "/v1/workbench/create-attempts": {
+      "post": {
+        "operationId": "prepare_create_v1_workbench_create_attempts_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Prepare Create V1 Workbench Create Attempts Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare Create"
+      }
+    },
+    "/v1/workbench/feedback-attempts": {
+      "post": {
+        "operationId": "prepare_v1_workbench_feedback_attempts_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Prepare"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Prepare V1 Workbench Feedback Attempts Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare",
+        "tags": [
+          "Local feedback protocol"
+        ]
+      }
+    },
+    "/v1/workbench/feedback-attempts/runs/{run_id}/head": {
+      "get": {
+        "operationId": "head_v1_workbench_feedback_attempts_runs__run_id__head_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Head V1 Workbench Feedback Attempts Runs  Run Id  Head Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Head",
+        "tags": [
+          "Local feedback protocol"
+        ]
+      }
+    },
+    "/v1/workbench/feedback-attempts/{attempt_id}": {
+      "get": {
+        "operationId": "receipt_v1_workbench_feedback_attempts__attempt_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Receipt V1 Workbench Feedback Attempts  Attempt Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receipt",
+        "tags": [
+          "Local feedback protocol"
+        ]
+      }
+    },
+    "/v1/workbench/feedback-attempts/{attempt_id}/acknowledge": {
+      "post": {
+        "operationId": "acknowledge_v1_workbench_feedback_attempts__attempt_id__acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Acknowledge V1 Workbench Feedback Attempts  Attempt Id  Acknowledge Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Acknowledge",
+        "tags": [
+          "Local feedback protocol"
+        ]
+      }
+    },
+    "/v1/workbench/feedback-attempts/{attempt_id}/execute": {
+      "post": {
+        "operationId": "execute_v1_workbench_feedback_attempts__attempt_id__execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Execute V1 Workbench Feedback Attempts  Attempt Id  Execute Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute",
+        "tags": [
+          "Local feedback protocol"
+        ]
+      }
+    },
+    "/v1/workbench/feedback-attempts/{attempt_id}/reconcile": {
+      "post": {
+        "operationId": "reconcile_v1_workbench_feedback_attempts__attempt_id__reconcile_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reconcile V1 Workbench Feedback Attempts  Attempt Id  Reconcile Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile",
+        "tags": [
+          "Local feedback protocol"
+        ]
+      }
+    },
+    "/v1/workbench/identity": {
+      "get": {
+        "operationId": "identity_v1_workbench_identity_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-subject",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Subject"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-ai-tenant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ai-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Identity V1 Workbench Identity Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Identity"
       }
     }
   },

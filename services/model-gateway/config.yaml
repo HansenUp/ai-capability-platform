@@ -15,6 +15,15 @@ model_list:
     litellm_params:
       model: deepseek/deepseek-v4-pro
       api_key: os.environ/DEEPSEEK_API_KEY
+  # 非推理摘要别名（S5 #7，D151）：思维链摘要（thinking_summary llm 模式）与上下文压缩摘要的缺省模型
+  # （Runtime THINKING_SUMMARY_MODEL_ALIAS）。DeepSeek-V4.1-Flash 关闭思考模式（thinking.type=disabled），不产出 reasoning，
+  # 低延迟；不配回退链（摘要失败时 Runtime 退回截断模式）。
+  - model_name: summary-fast-2026-10
+    litellm_params:
+      model: deepseek/deepseek-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
+      extra_body: { thinking: { type: disabled } }
+      timeout: 30
   - model_name: embed-default           # 向量化模型（知识检索）
     litellm_params:
       model: openai/text-embedding-3-large
@@ -26,7 +35,10 @@ model_list:
 
 router_settings:
   routing_strategy: simple-shuffle      # 同别名多部署时随机分流
-  fallbacks:                            # 主模型失败时的回退链
+  # 主模型失败时的回退链。数据分级（S9 OPT-4，D152）：Runtime 对等级 ≥ internal 的请求逐个带 disable_fallbacks=true
+  # （LiteLLM 1.107 按请求关闭回退），回退只发生在矩阵 fallback 通道允许的请求上；CI（runtime test_s9_data_class）
+  # 校验每条回退链的目标在源别名获准的每个等级上同样获准（回退不降级）。
+  fallbacks:
     - { default-chat: ["deepseek-v4-pro-2026-08"] }
   allowed_fails: 3                      # 连续失败 3 次后进入冷却
   cooldown_time: 60                     # 冷却秒数

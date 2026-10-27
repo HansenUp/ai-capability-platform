@@ -43,6 +43,8 @@ if _external:
 else:
     os.environ["CONSOLE_DATABASE_URL"] = f"sqlite+aiosqlite:///{tempfile.mkdtemp(prefix='console-test-')}/console.db"
 os.environ.pop("CONSOLE_CLIENT_SECRET", None)  # 测试走开发态身份头，不去取令牌
+os.environ.pop("CONSOLE_NODE_JWKS_URL", None)
+os.environ["CONSOLE_NODE_TOKEN"] = "test-node-token"  # noqa: S105 —— 测试用节点静态令牌（S9.8）
 
 if _external:
     # 异步驱动的连接绑定创建它的事件循环；TestClient 与 async 用例各有循环，测试期改用 NullPool

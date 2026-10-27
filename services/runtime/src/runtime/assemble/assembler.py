@@ -3,6 +3,13 @@ skill dirs, and — when the snapshot enables discovery — the `search_capabili
 （能力组装：把一个 Agent 版本快照组装为可直接注入 harness 的系统提示词、核心工具集
 （agent 声明 ∪ skill 声明的并集）、技能目录列表；版本快照开启 `discovery.enabled` 时再注入
 `search_capabilities` 元工具——两级能力发现中的第二级（按意图检索，见 runtime.loop.discovery）。）
+
+技能加载（S9.5，D144/D145）：快照带 ``skills_lock``（发布时经网关 resolve 冻结的 ``[{name, version, manifest_sha256}]``）时，
+按 lock 从 ``SKILLS_DIR`` 加载已验签的技能（缺包经网关懒拉取并原子物化；验签 / 哈希失败抛 ``SkillVerifyError``，Run 以
+``SKILL_VERIFY_FAILED`` 失败；命中吊销列表为 ``SKILL_REVOKED``），不再读仓库 ``skills/`` 目录；无 ``skills_lock`` 的旧快照
+沿用开发态行为（读 ``skills/<name>``）。``skills_mode=progressive`` 时系统提示词只注入技能名称与描述，正文经平台工具
+``load_skill`` / ``read_skill_file`` 按需读取；已验签且声明了可执行脚本的技能注入 ``run_skill_script``（见 runtime.skills.tools）。
+技能正文、名称描述与交给 harness 的原生目录统一继承签名清单的数据等级；未经独立签署的元数据不得降级。
 """
 
 from __future__ import annotations
@@ -16,7 +23,11 @@ import httpx
 from pydantic import ValidationError
 
 from ai_contract import RiskLevel, SkillDir, ToolSpec
+from ai_contract.data_class import Level
 from runtime import gateway_client
+from runtime.skills import store as skill_store
+from runtime.skills import tools as skill_tools
+from runtime.skills.verify import SKILL_VERIFY_FAILED, SkillVerifyError
 from runtime.state.db import AgentVersion
 
 _TOOLSPEC_FIELDS = frozenset(ToolSpec.model_fields)
@@ -105,6 +116,7 @@ class Assembled:
     core_tool_limit: int = 20  # 核心工具数量上限
     report: dict[str, Any] = field(default_factory=dict)  # 组装报告，写入 CONTEXT_ASSEMBLED 事件
     resources: dict[str, dict[str, Any]] = field(default_factory=dict)  # 工具名 → 目录资源属性 {system, tenant}（闸口策略请求用）
+    data_class: str = "public"
 
 
 async def discover_core_tools(
@@ -180,21 +192,38 @@ async def assemble(agent: AgentVersion, subject: str, user_token: str | None = N
     from runtime.loop import discovery
 
     cfg = agent.config or {}
+    declared_class = cfg.get("data_class", "public")
+    if not isinstance(declared_class, str) or declared_class not in {level.value for level in Level}:
+        raise SkillVerifyError(SKILL_VERIFY_FAILED, "agent config.data_class is invalid")
     resources: dict[str, dict[str, Any]] = {}
+    lock = skills_lock_of(agent)
+    # 先加载技能：验签 / 吊销失败直接抛 SkillVerifyError（Run 失败关闭），不必再查能力目录
+    skills = await skill_store.load_locked(lock, agent.tenant_id) if lock is not None else load_skills(cfg.get("skills", []))
     tools = await discover_core_tools(subject, agent.agent_id, cfg.get("tools", ["echo"]), resources, user_token)
-    skills = load_skills(cfg.get("skills", []))
     limit = int(cfg.get("core_tool_limit", 20))
+    progressive = cfg.get("skills_mode") == "progressive"
     # 第二级能力发现的元工具：仅在版本快照开启 discovery 时注入（拦截与检索见 runtime.loop.discovery）
     meta_tools = [discovery.TOOL, READ_ARTIFACT_TOOL] if discovery.enabled(agent) else [READ_ARTIFACT_TOOL]
-    tools = tools[:limit] + meta_tools
+    platform = skill_tools.platform_tools(skills, progressive) if (lock is not None or progressive) else []
+    tools = tools[:limit] + meta_tools + platform
     report: dict[str, Any] = {"tools": [t.name for t in tools], "skills": [s.name for s in skills]}
+    if lock is not None:
+        report["skills_lock"] = [{"name": e["name"], "version": str(e["version"]), "manifest_sha256": e["manifest_sha256"]} for e in lock]
     if discovery.enabled(agent):
         report["discovery"] = {"scope": discovery.scope(agent), "max_tools": discovery.max_tools(agent)}
     system_prompt = agent.system_prompt
-    if cfg.get("skills_inline") is True and skills:
+    if progressive and skills:
+        system_prompt = progressive_skills(system_prompt, skills)
+        report["skills_mode"] = "progressive"
+    elif cfg.get("skills_inline") is True and skills:
         system_prompt = inline_skills(system_prompt, skills)
         report["skills_inline"] = True
-    return Assembled(system_prompt, tools, skills, limit, report, {n: m for n, m in resources.items() if any(t.name == n for t in tools)})
+    manifests = [skill_store.manifest_of(skill) for skill in skills]
+    data_class = Level.highest([declared_class, *(manifest.data_class for manifest in manifests if manifest is not None)]).value
+    report["skills_data_class"] = data_class
+    return Assembled(
+        system_prompt, tools, skills, limit, report, {n: m for n, m in resources.items() if any(t.name == n for t in tools)}, data_class
+    )
 
 
 def inline_skills(system_prompt: str, skills: list[SkillDir]) -> str:
@@ -205,3 +234,25 @@ def inline_skills(system_prompt: str, skills: list[SkillDir]) -> str:
     ]
     head = system_prompt.rstrip()
     return (head + "\n\n" if head else "") + "\n\n".join(blocks)
+
+
+def skills_lock_of(agent: AgentVersion) -> list[dict[str, Any]] | None:
+    """快照冻结的 skills_lock（列 ``t_agent_version.skills_lock``，WP-B 迁移 0005）；未冻结（旧快照 / 开发态）返回 None。
+    冻结了但不合规（非对象列表）抛 SkillVerifyError，失败关闭。"""
+    lock = getattr(agent, "skills_lock", None)
+    if lock is None:
+        return None
+    if not isinstance(lock, list) or not all(isinstance(e, dict) for e in lock):
+        raise SkillVerifyError(SKILL_VERIFY_FAILED, "skills_lock is malformed")
+    return lock
+
+
+def progressive_skills(system_prompt: str, skills: list[SkillDir]) -> str:
+    """渐进披露（DEF-3）：只把技能名称与描述（SKILL.md 头部 description）追加到系统提示词，正文经 load_skill 按需加载。"""
+    lines = []
+    for sk in skills:
+        desc = skill_tools.frontmatter((sk.path / "SKILL.md").read_text(encoding="utf-8")).get("description", "")
+        lines.append(f'<skill name="{sk.name}" version="{sk.version}">{desc}</skill>')
+    block = "<available_skills>\n" + "\n".join(lines) + "\n</available_skills>\n需要使用某个技能时，先调用 load_skill 读取其完整说明。"
+    head = system_prompt.rstrip()
+    return (head + "\n\n" if head else "") + block

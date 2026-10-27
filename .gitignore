@@ -16,3 +16,10 @@ runtime-workspace/
 .env.local
 .dev/
 probe-report*.json
+
+# Local coding-agent execution artifacts (keep reusable source/tests tracked)
+docs/evidence/
+**/.playwright/
+**/playwright-report/
+**/test-results/
+*.pid

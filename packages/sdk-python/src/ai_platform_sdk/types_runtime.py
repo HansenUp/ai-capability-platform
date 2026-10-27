@@ -23,18 +23,13 @@ class AgentVersionIn(BaseModel):
     version: constr(min_length=1, max_length=32) = Field(..., title="Version")
 
 
-class ApprovalBody(BaseModel):
+class ApprovalCall(BaseModel):
     """
-    审批/拒绝工具调用请求体。
-
-    params_hash 是必填项：审批附着于具体参数与资源，审批人必须回传卡片上展示的那一份参数指纹，
-    否则无从判断"批的到底是哪一组参数"。
+    批量审批中的一个调用：调用标识与卡片上展示的参数指纹。
     """
 
-    call_id: str = Field(..., title="Call Id")
-    comment: str | None = Field("", title="Comment")
-    params_hash: str = Field(..., title="Params Hash")
-    ttl_seconds: int | None = Field(900, title="Ttl Seconds")
+    call_id: constr(max_length=128) = Field(..., title="Call Id")
+    params_hash: constr(max_length=64) = Field(..., title="Params Hash")
 
 
 class CardType(StrEnum):
@@ -399,6 +394,22 @@ class ValidationError(BaseModel):
     loc: list[str | int] = Field(..., title="Location")
     msg: str = Field(..., title="Message")
     type: str = Field(..., title="Error Type")
+
+
+class ApprovalBody(BaseModel):
+    """
+    审批/拒绝工具调用请求体：单个调用给 call_id + params_hash；并行批次的影响预览卡（payload.calls[]）可用 calls 一次批多个
+    （S9，D149），两种写法二选一。
+
+    params_hash 是必填项：审批附着于具体参数与资源，审批人必须回传卡片上展示的那一份参数指纹，
+    否则无从判断"批的到底是哪一组参数"。
+    """
+
+    call_id: str | None = Field(None, title="Call Id")
+    calls: list[ApprovalCall] | None = Field(None, title="Calls")
+    comment: str | None = Field("", title="Comment")
+    params_hash: str | None = Field(None, title="Params Hash")
+    ttl_seconds: int | None = Field(900, title="Ttl Seconds")
 
 
 class ApprovalView(BaseModel):

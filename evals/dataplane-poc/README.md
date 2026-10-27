@@ -1,5 +1,10 @@
 # 数据面 POC（ADR-0005 / S6.6）
 
+> **历史说明（S9，D153）**：自研候选（`capability_gateway/mcp_proxy.py`）已删除。`selfbuilt` 容器现在只提供第三方数据面的
+> 判定端点 `POST /authz/mcp-check`（网关 `dataplane_authz.py`，全环境挂载，prod 必配 `GATEWAY_AUTHZ_TOKEN`），不再是压测 /
+> 功能用例目标（`poc.py` / `cases.py` 的目标列表已移除 selfbuilt 与 selfbuilt-4cpu）。下文与 `results/` 中有关自研数据面的
+> 描述、数据与结论均为 S6.6 时的历史记录，保留供 ADR-0005 追溯。
+
 对比三种能力网关数据面：自研最小数据面（`capability_gateway/mcp_proxy.py`）、agentgateway v1.6.0、IBM ContextForge v1.0.11，
 对照基线为直连上游 MCP Server。结论与评审见 `docs/adr/0005-capability-gateway-dataplane-poc.md`，数据见 `results/`。
 

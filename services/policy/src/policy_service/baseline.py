@@ -18,7 +18,7 @@ from typing import Any
 RawDecision = tuple[bool, list[str], list[str]]
 
 # 多条 forbid 同时命中时，reason 取最根本的那条（租户边界优先于污点规则）
-FORBID_PRIORITY = ("forbid:cross_tenant", "forbid:agent_cross_tenant", "forbid:taint_outbound")
+FORBID_PRIORITY = ("forbid:cross_tenant", "forbid:agent_cross_tenant", "forbid:self_approve_skill", "forbid:taint_outbound")
 
 
 def authorize(principal: dict[str, Any], action: str, resource: dict[str, Any], context: dict[str, Any]) -> RawDecision:
@@ -35,8 +35,16 @@ def authorize(principal: dict[str, Any], action: str, resource: dict[str, Any], 
     # forbid:taint_outbound —— 读过 confidential 数据后调用出站类能力必须先审批
     if action == "invoke" and "confidential" in context["taint"] and resource["system"] == "outbound" and not context["approved"]:
         forbids.append("forbid:taint_outbound")
+    # forbid:self_approve_skill —— 提交人不能批准自己提交的 Skill（双人审批）
+    if action == "approve_skill" and principal.get("sub") is not None and principal.get("sub") == resource.get("submitted_by"):
+        forbids.append("forbid:self_approve_skill")
     if forbids:
         return False, sorted(forbids), []
+    if action == "approve_skill":
+        # permit:approve_skill_reviewer —— 同租户的 skill-reviewer 才能批准
+        if "skill-reviewer" in principal.get("roles", []) and tenant == resource["tenant"]:
+            return True, ["permit:approve_skill_reviewer"], []
+        return False, [], []
     if action != "invoke":
         return False, [], []  # read_data / approve 当前没有任何 permit
     risk = resource["risk_level"]

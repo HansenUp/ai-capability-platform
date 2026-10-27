@@ -1,4 +1,4 @@
-# 夜间评测：每天 18:00 UTC（北京时间次日 02:00）回放 evals/ 下的快照并跑 S8 五条链路 e2e，也可手动触发。全程不调用任何模型。
+# 夜间评测：每天 18:00 UTC（北京时间次日 02:00）回放 evals/ 下的快照并跑 S8 五条链路 e2e 与 S9 子集，也可手动触发。全程不调用任何模型。
 name: nightly-evals
 on:
   schedule:
@@ -66,3 +66,59 @@ jobs:
           docker logs keycloak | tail -50; exit 1
       # 脚本化模型（OpenAI 兼容，脚本内置）经真实 litellm harness；Runtime 以 ai-runtime-svc 服务令牌调用网关
       - run: .venv/bin/python scripts/verify_s8_e2e.py
+  s9-e2e:                                 # S9 子集（scripts/verify_s9_e2e.py --subset nightly）：脚本化模型、SKILL_STORE=fs（不起 MinIO）、docker 沙箱
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env: { MYSQL_ROOT_PASSWORD: root }
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 -proot" --health-interval 5s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+      elasticsearch:
+        image: elasticsearch:8.15.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          cluster.routing.allocation.disk.threshold_enabled: "false"
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports: ["9200:9200"]
+        options: --health-cmd "curl -fs http://localhost:9200/_cluster/health" --health-interval 5s --health-timeout 5s --health-retries 40
+    env:
+      S9_MODEL: scripted                  # 脚本化模型（OpenAI 兼容，脚本内置），不调用真实模型
+      SKILL_STORE: fs                     # Skill 包存本地文件系统
+      SANDBOX_BACKEND: docker             # 沙箱 L1 用 runner 自带的 docker（镜像按 digest 预拉取，运行时 --pull never）
+      S9_SECURITY_STACK: "1"              # evals/security 的全栈用例随本栈运行
+      S9_EMBED_PROVIDER: hash
+      S9_MYSQL_URL: mysql+asyncmy://root:root@localhost:3306
+      ES_URL: http://localhost:9200
+      KEYCLOAK_URL: http://localhost:8180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "services/policy/cedar-engine -> target" }
+      # realm 含 ai-node-svc（节点服务令牌，aud=console-api）与 skill-reviewer 角色（carol / frank）
+      - run: >-
+          docker run -d --name keycloak -p 8180:8080
+          -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+          -v "$PWD/services/identity/realm-export.json:/opt/keycloak/data/import/realm.json:ro"
+          quay.io/keycloak/keycloak:26.3 start-dev --import-realm
+      - run: make setup GATEWAY_EXTRAS=dev,mysql RUNTIME_EXTRAS=dev,probe,mysql
+      - run: .venv/bin/pip install bandit==1.9.4   # 网关扫描的 bandit 规则（stdin 喂入）
+      - run: make cedar-build CEDAR_CARGO=cargo
+      - name: 预拉取沙箱镜像（digest 取自 runtime.sandbox.settings，与 Runtime 一致）
+        run: docker pull "$(.venv/bin/python -c 'from runtime.sandbox.settings import load; print(load().image)')"
+      - name: 等待 Keycloak 导入 realm
+        run: |
+          for i in $(seq 1 90); do
+            curl -fs http://localhost:8180/realms/ai-platform/.well-known/openid-configuration >/dev/null && exit 0
+            sleep 2
+          done
+          docker logs keycloak | tail -50; exit 1
+      - run: .venv/bin/python scripts/verify_s9_e2e.py --subset nightly

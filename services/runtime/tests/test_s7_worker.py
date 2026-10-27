@@ -401,11 +401,17 @@ async def test_inmemory_mode_keeps_single_process_behavior() -> None:
     rid = await _new_run()
     drive = StubDrive({rid})
     await q.enqueue(rid, "created")
-    async with _running(Worker(q, WS, drive=drive)):
+    worker = Worker(q, WS, drive=drive)
+    async with _running(worker):
         await _until(lambda: _true(len(drive.calls) == 1))
 
         async def done() -> bool:
-            return await _state(rid) == RunState.COMPLETED.value and (await lease_info(rid))[0] is None
+            return (
+                await _state(rid) == RunState.COMPLETED.value
+                and (await lease_info(rid))[0] is None
+                and worker.idle.is_set()
+                and len(q) == 0
+            )
 
         await _until(done)
     assert len(q) == 0
@@ -425,6 +431,53 @@ async def test_inmemory_enqueue_dedupe() -> None:
     assert await q.enqueue("r1", "reaper", dedupe_s=60) is False
     assert await q.enqueue("r1", "created") is True
     assert [d.run_id for d in await q.read("c", 10, 10)] == ["r1", "r1"]
+
+
+async def test_inmemory_startup_recovery_precedes_consumption(monkeypatch: pytest.MonkeyPatch) -> None:
+    entered, finish = asyncio.Event(), asyncio.Event()
+    read_started = asyncio.Event()
+
+    class ObservedQueue(InMemoryQueue):
+        async def read(self, consumer: str, count: int, block_ms: int) -> list[Delivery]:
+            read_started.set()
+            return await super().read(consumer, count, block_ms)
+
+    queue = ObservedQueue()
+    worker = Worker(queue, WS, drive=StubDrive(set()))
+
+    async def recover() -> int:
+        entered.set()
+        await finish.wait()
+        return 0
+
+    monkeypatch.setattr(worker, "reap_once", recover)
+    async with _running(worker):
+        await entered.wait()
+        await asyncio.sleep(0)
+        assert not read_started.is_set()
+        assert worker.idle.is_set()
+        finish.set()
+        await read_started.wait()
+    assert len(queue) == 0 and not worker._tasks
+
+
+async def test_inmemory_cancel_during_startup_does_not_start_consumption(monkeypatch: pytest.MonkeyPatch) -> None:
+    entered = asyncio.Event()
+    worker = Worker(InMemoryQueue(), WS, drive=StubDrive(set()))
+
+    async def recover() -> int:
+        entered.set()
+        await asyncio.Event().wait()
+        return 0
+
+    async def consume() -> None:
+        pytest.fail("consumer started before startup recovery completed")
+
+    monkeypatch.setattr(worker, "reap_once", recover)
+    monkeypatch.setattr(worker, "_consume_loop", consume)
+    async with _running(worker):
+        await entered.wait()
+    assert worker.idle.is_set() and not worker._tasks
 
 
 def test_role_settings_validation() -> None:

@@ -291,6 +291,35 @@ async def test_multiple_tool_uses_in_one_message_are_serialized_into_rounds(make
     ]
 
 
+async def test_three_tool_uses_in_one_message_serialize_into_rounds_in_order(make_target: Any) -> None:
+    """S6 遗留 #4 / S9 D155：ScriptedCliTransport 下一条模型消息带三个 tool_use（两种工具）——适配器声明不支持并行，
+    按 CLI 的调用顺序串行拆成三轮，每轮只交回一个 ToolUseEvent；平台逐个执行后三个结果一起回到模型。"""
+    t = make_target(
+        reply(
+            thinking="三个都要做",
+            calls=[("c1", "echo", {"text": "a"}), ("c2", "mail_send", {"to": "x@example.com"}), ("c3", "echo", {"text": "b"})],
+            inp=10,
+            out=6,
+        ),
+        reply(text="三件事都完成了", inp=40, out=3),
+    )
+    assert t.adapter.capabilities().parallel_tool_calls is False
+    sim = PlatformSim(t.adapter, tools=[ECHO, MAIL])
+    assert await sim.run("做三件事") == "end_turn"
+    assert [kinds(turn) for turn in sim.turns] == [
+        ["thinking", "tool_use", "usage", "done:tool_use"],
+        ["tool_use", "usage", "done:tool_use"],
+        ["tool_use", "usage", "done:tool_use"],
+        ["text", "usage", "done:end_turn"],
+    ]
+    assert [(e.call_id, e.tool_name) for e in sim.executions] == [("c1", "echo"), ("c2", "mail_send"), ("c3", "echo")]
+    assert all(sum(isinstance(e, ToolUseEvent) for e in turn) <= 1 for turn in sim.turns)  # 每轮至多一个工具调用
+    usages = [e for e in sim.events if isinstance(e, UsageEvent)]
+    assert sum(u.output_tokens for u in usages) == 9  # 串行拆出的轮次不重复计用量
+    # 模型看到的是同一条消息里的三个调用及其结果（按调用顺序）
+    assert [m.get("call_id") for m in t.received()[1] if m.get("role") == "tool"] == ["c1", "c2", "c3"]
+
+
 # ---- 结构化续跑 ----
 
 

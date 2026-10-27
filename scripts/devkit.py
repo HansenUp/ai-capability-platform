@@ -1,5 +1,6 @@
 """本机联调与验证脚本共用的小工具：Keycloak 登录（授权码 + PKCE，与门户相同的请求参数）、Client Credentials 令牌、
-Langfuse 公共 API，以及 S8 起的策略栈（Cedar 引擎 sidecar + 策略服务）子进程启停、Runtime 服务客户端配置、建 MySQL 库。
+Langfuse 公共 API，以及 S8 起的策略栈（Cedar 引擎 sidecar + 策略服务）子进程启停、Runtime 服务客户端配置、建 MySQL 库；
+S9 起的 Skill 签名密钥 / 信任公钥导出、Runtime 节点代理（ai-node-svc）与 Console 节点鉴权配置。
 口令与密钥均为本机 compose 的开发值（services/identity/realm-export.json），只在本机有效。
 
 命令行：``python scripts/devkit.py ensure-db <mysql+asyncmy://...>``（库不存在时创建，供 Makefile / CI 使用）。"""
@@ -41,7 +42,10 @@ USER_IDS = {
     "bob": "00000000-0000-4000-8000-000000000b0b",
     "carol": "00000000-0000-4000-8000-0000000ca201",
     "dave": "00000000-0000-4000-8000-0000000da7e0",
+    "frank": "00000000-0000-4000-8000-0000000f4a2c",  # S9：Skill 提交人（同时持 skill-reviewer，用于验证禁自批）
 }
+# 开发态 Skill 签名私钥位置（与能力网关 SKILL_DEV_KEY_FILE 一致；方案 S9 §8：不入库，生产用 Vault / KMS）
+SKILL_DEV_KEY_FILE = Path.home() / ".ai-platform" / "keys" / "skill-signing.pem"
 
 
 def dev_password(user: str) -> str:
@@ -111,6 +115,31 @@ def runtime_svc_env() -> dict[str, str]:
     }
 
 
+def node_svc_env() -> dict[str, str]:
+    """Runtime 节点代理（S9.8）以服务客户端 ai-node-svc 的 client credentials 令牌（aud=console-api）访问 Console 节点接口。"""
+    return {"NODE_TOKEN_URL": TOKEN_URL, "NODE_CLIENT_ID": "ai-node-svc", "NODE_CLIENT_SECRET": "ai-node-svc-dev-secret"}
+
+
+def console_node_auth_env() -> dict[str, str]:
+    """Console 节点接口（/nodes/*）只接受 ai-node-svc 服务令牌：Keycloak JWKS 验签 + iss / aud=console-api + azp 白名单。"""
+    return {
+        "CONSOLE_NODE_JWKS_URL": CERTS_URL,
+        "CONSOLE_NODE_ISSUER": REALM,
+        "CONSOLE_NODE_AUDIENCE": "console-api",
+        "CONSOLE_NODE_CLIENT_IDS": "ai-node-svc",
+    }
+
+
+def skill_trust_keys(key_file: Path, out: Path) -> Path:
+    """Skill 签名私钥（不存在时生成）→ 经 ``python -m capability_gateway.skill_sign jwks`` 导出信任公钥 JWKS 到 out
+    （Runtime 的 SKILL_TRUST_KEYS_FILE；与网关同一份导出代码，kid 为 RFC 7638 指纹）。"""
+    act_key_file(key_file)  # 同为 PEM / PKCS8 / P-256
+    env = os.environ | {"SKILL_SIGNING_KEY_FILE": str(key_file)}
+    cmd = [PY, "-m", "capability_gateway.skill_sign", "jwks", "--out", str(out)]
+    subprocess.run(cmd, cwd=ROOT, env=env, check=True, capture_output=True)  # noqa: S603 —— 固定参数
+    return out
+
+
 def act_key_file(path: Path) -> Path:
     """能力网关 act 断言的 ES256 签名密钥（PEM，P-256）；不存在时生成。本机持久化，网关重启后连接器缓存的 JWKS 仍然有效。"""
     if not path.exists():
@@ -119,7 +148,7 @@ def act_key_file(path: Path) -> Path:
 
         key = ec.generate_private_key(ec.SECP256R1())
         pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.write_bytes(pem)
         path.chmod(0o600)
     return path

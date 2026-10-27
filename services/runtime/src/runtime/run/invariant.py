@@ -48,9 +48,16 @@ def rebuild_messages(log: list[RunEvent], initial_messages: list[dict[str, Any]]
     """Deterministically rebuild the model-visible message list from the event log.
     （确定性地从事件日志重建模型可见的消息列表：从初始消息出发，按日志顺序依次应用
     上下文压缩、模型响应、工具请求、工具结果四类事件，得到与当时驱动循环中完全一致的历史。）
+
+    并行工具调用（Contract V1.4，S9）：TOOL_REQUESTED 带 batch{id, index, size} 的同批调用重建为一条
+    ``{"role": "assistant", "tool_uses": [...], "reasoning"?}``（按 index；reasoning 取 index 0 的调用），其后的工具结果
+    按 index 排列——与 toolbroker.handle_batch 实时写入的历史同形，与结果实际落日志的先后无关。
+    上下文压缩（DEF-2）：CONTEXT_COMPACTED 把当前历史的前 upto_index 条替换为一条压缩摘要系统消息。
     """
     msgs: list[dict[str, Any]] = list(initial_messages)
-    compacted_upto = 0
+    batches: dict[str, dict[str, Any]] = {}  # batch id → 批消息（assistant tool_uses）
+    batch_of: dict[str, tuple[str, int]] = {}  # call_id → (batch id, index)
+    placed: dict[str, list[int]] = {}  # batch id → 已放入历史的结果 index（升序）
     for ev in log:
         if ev.type == RunEventType.CONTEXT_COMPACTED:
             # 上下文被压缩：丢弃 upto_index 之前的原始消息，替换为一条压缩摘要系统消息。
@@ -60,20 +67,43 @@ def rebuild_messages(log: list[RunEvent], initial_messages: list[dict[str, Any]]
         elif ev.type == RunEventType.MODEL_RESPONSE and ev.payload.get("text"):
             msgs.append({"role": "assistant", "content": ev.payload["text"]})
         elif ev.type == RunEventType.TOOL_REQUESTED:
-            msg: dict[str, Any] = {
-                "role": "assistant",
-                "tool_use": {"call_id": ev.payload["call_id"], "name": ev.payload["tool"], "input": ev.payload.get("input", {})},
-            }
+            use = {"call_id": ev.payload["call_id"], "name": ev.payload["tool"], "input": ev.payload.get("input", {})}
+            batch = ev.payload.get("batch")
+            if isinstance(batch, dict) and batch.get("id") is not None:
+                bid, index = str(batch["id"]), int(batch.get("index", 0))
+                batch_of[use["call_id"]] = (bid, index)
+                bmsg = batches.get(bid)
+                if bmsg is None:
+                    bmsg = batches[bid] = {"role": "assistant", "tool_uses": []}
+                    msgs.append(bmsg)
+                    placed[bid] = []
+                indexes = [batch_of[u["call_id"]][1] for u in bmsg["tool_uses"]]
+                bmsg["tool_uses"].insert(sum(1 for i in indexes if i < index), use)
+                if index == 0 and ev.payload.get("reasoning"):
+                    bmsg["reasoning"] = ev.payload["reasoning"]
+                continue
+            msg: dict[str, Any] = {"role": "assistant", "tool_use": use}
             if ev.payload.get("reasoning"):
                 # 产生该调用的那一轮带思维链时，reasoning 随 tool_use 消息一起重建（与 toolbroker 写历史的约定一致）。
                 msg["reasoning"] = ev.payload["reasoning"]
             msgs.append(msg)
         elif ev.type == RunEventType.TOOL_RESULT:
             # 工具结果优先使用 output_ref（外置引用），没有外置时才回退到内联的 output 内容。
-            msgs.append(
-                {"role": "tool", "call_id": ev.payload["call_id"], "content": ev.payload.get("output_ref") or ev.payload.get("output")}
-            )
-    return msgs
+            result = {"role": "tool", "call_id": ev.payload["call_id"], "content": ev.payload.get("output_ref") or ev.payload.get("output")}
+            located = batch_of.get(ev.payload["call_id"])
+            if located is None or located[0] not in batches:
+                msgs.append(result)
+                continue
+            bid, index = located
+            try:
+                start = next(i for i in range(len(msgs) - 1, -1, -1) if msgs[i] is batches[bid]) + 1
+            except StopIteration:  # 批消息已被压缩进摘要（不会发生：压缩不拆同批），按普通结果追加
+                msgs.append(result)
+                continue
+            before = sum(1 for i in placed[bid] if i < index)
+            msgs.insert(start + before, result)
+            placed[bid] = sorted([*placed[bid], index])
+    return [dict(m, tool_uses=list(m["tool_uses"])) if "tool_uses" in m else m for m in msgs]
 
 
 def check(log: list[RunEvent], initial_messages: list[dict[str, Any]], about_to_send: list[dict[str, Any]]) -> str:

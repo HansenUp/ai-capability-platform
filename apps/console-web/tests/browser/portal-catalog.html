@@ -1,0 +1,13 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>Portal catalog fixture</title></head><body>
+<button id="remount">切换测试身份</button><div id="component"></div>
+<script type="module">
+import { createApp, h, ref } from "vue";
+import Catalog from "../../../portal-web/src/views/AgentList.vue";
+import { portalTokenKey } from "../../../portal-web/src/runtime-session.ts";
+let epoch = ref(0);
+const app = createApp({ setup: () => () => h(Catalog, { key: epoch.value }) });
+app.provide(portalTokenKey, async () => `synthetic-${epoch.value}`);
+app.component("RouterLink", { props: ["to"], setup(props, { slots }) { return () => h("a", { href: props.to }, slots.default?.()); } });
+app.mount('#component');
+document.querySelector('#remount').onclick = () => { epoch.value++; };
+</script></body></html>

@@ -138,7 +138,7 @@ def test_vault_failure_fails_fast(monkeypatch: pytest.MonkeyPatch, clean_vault: 
         secret_store.get("MODEL_GATEWAY_API_KEY")
 
 
-def test_production_baseline(monkeypatch: pytest.MonkeyPatch, clean_vault: None) -> None:
+def test_production_baseline(monkeypatch: pytest.MonkeyPatch, clean_vault: None, tmp_path: Any) -> None:
     """RUNTIME_ENV=prod：缺鉴权配置、开发主密钥、明文环境变量密钥都拒绝启动；dev 不检查。"""
     monkeypatch.setenv("MODEL_GATEWAY_API_KEY", "sk-real")
     prod = dataclasses.replace(config.settings, runtime_env="prod", model_gateway_api_key="sk-real")
@@ -170,6 +170,14 @@ def test_production_baseline(monkeypatch: pytest.MonkeyPatch, clean_vault: None)
     assert "POLICY_SERVICE_TOKEN 未配置（调用策略服务的服务间令牌）" in config.production_problems(ok)
     ok = dataclasses.replace(ok, gateway_token_url="https://idp/token", gateway_client_secret="svc-real")  # noqa: S106
     ok = dataclasses.replace(ok, policy_service_token="pst-real")  # noqa: S106
+    # S9 OPT-4：生产须用已签署的数据分级矩阵（不是随源码的开发矩阵），且不再配置旧的 CONFIDENTIAL_MODEL_ALIASES
+    matrix_problems = [p for p in config.production_problems(ok) if "矩阵" in p or "CONFIDENTIAL_MODEL_ALIASES" in p]
+    assert any("DATA_CLASS_MATRIX_FILE" in p for p in matrix_problems) and any("未签署" in p for p in matrix_problems)
+    signed = tmp_path / "matrix.json"
+    signed.write_text(
+        json.dumps({"channels": {"model": {"public": ["*"]}}, "signoff": {"by": "合规部", "at": "2026-10-18"}}), encoding="utf-8"
+    )
+    ok = dataclasses.replace(ok, data_class_matrix_file=str(signed), confidential_model_aliases=())
     assert config.production_problems(ok) == ["HOOK_DIGEST_KEY 未配置或仍为开发默认值"]  # hook 指纹密钥仍是开发默认值
     ok = dataclasses.replace(ok, hook_digest_key="hk-real")
     assert config.production_problems(ok) == []
