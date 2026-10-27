@@ -1,6 +1,7 @@
-<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>Portal adapter fixture</title></head><body>
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Portal adapter fixture</title></head><body>
 <button id="unmount">卸载测试组件</button><div id="component"></div>
 <script type="module">
+import "../../src/platform.css";
 import { createApp, h } from "vue";
 import Chat from "../../src/views/Chat.vue";
 // Explicit synthetic provider, independent of real IdP/sessionStorage.

@@ -80,3 +80,29 @@ test('Portal history: explicit subject filter, next page replacement, errors cle
     assert.equal((await page.locator('body').innerText()).includes('PRIVATE'), false);
   } finally { await context.close(); await engine.close(); }
 });
+
+
+test('Workbench narrow viewport and keyboard navigation preserve route and never write', async () => {
+  const engine = await browser();
+  const page = await engine.newPage({ viewport: { width: 390, height: 844 } });
+  page.setDefaultTimeout(5000);
+  const calls = [];
+  await page.route('**/v1/**', route => { calls.push(route.request().method()); return route.fulfill({status: 503, json: {detail: 'synthetic unavailable'}}); });
+  try {
+    await page.goto(`${profile.url}/tests/browser/portal-workbench.html`);
+    const target = page.getByRole('button', {name: '结果与待办', exact: true});
+    await target.focus(); await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'workbench-results');
+    const before = page.url();
+    const identity = page.getByRole('button', {name: '身份与状态', exact: true});
+    await identity.focus(); await page.keyboard.press('Space');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'workbench-identity');
+    assert.equal(page.url(), before);
+    assert.deepEqual(calls, []);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const summary = page.locator('summary'); await summary.focus(); await page.keyboard.press('Enter');
+    assert.equal(await page.locator('details').evaluate(el => el.open), true);
+    await page.keyboard.press('Tab');
+    assert.notEqual(await page.evaluate(() => document.activeElement?.tagName), 'BODY');
+  } finally { await page.close(); await engine.close(); }
+});

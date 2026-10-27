@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +23,33 @@ from runtime.state.db import Audit, SessionLocal
 H = {"X-AI-Subject": "human:alice", "X-AI-Tenant": "default"}
 
 
+class CompletedRunExporter(InMemorySpanExporter):
+    """SSE done precedes tracing finalization; synchronize on exported root, not polling."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.finished = threading.Condition()
+        self.runs: set[str] = set()
+
+    def export(self, spans: Any) -> Any:
+        with self.finished:
+            result = super().export(spans)
+            for span in spans:
+                if span.parent is None and "ai.run_id" in (span.attributes or {}):
+                    self.runs.add(str(span.attributes["ai.run_id"]))
+            self.finished.notify_all()
+            return result
+
+    def wait_for_run(self, run_id: str) -> None:
+        with self.finished:
+            assert self.finished.wait_for(lambda: run_id in self.runs, timeout=5), "Run root span did not finish"
+
+
 @pytest.fixture(scope="module")
 def exporter(client: Any) -> InMemorySpanExporter:
     from runtime.observe import tracing
 
-    exp = InMemorySpanExporter()
+    exp = CompletedRunExporter()
     tracing.add_span_processor(SimpleSpanProcessor(exp))
     return exp
 
@@ -193,10 +216,11 @@ def test_production_baseline(monkeypatch: pytest.MonkeyPatch, clean_vault: None,
 # ---------------- S2.6 Prompt Cache 命中统计 ----------------
 
 
-def test_prompt_cache_stats_in_event_log_and_trace(client: Any, exporter: InMemorySpanExporter) -> None:
+def test_prompt_cache_stats_in_event_log_and_trace(client: Any, exporter: CompletedRunExporter) -> None:
     """MODEL_RESPONSE 事件与模型 span 都带稳定前缀哈希与命中统计；hit_ratio = cache_read / input。"""
     turns = [[TextEvent(delta="ok"), UsageEvent(input_tokens=200, output_tokens=5, cache_read_tokens=150), DoneEvent(run_id="x")]]
     _, run_id, _ = _run_with(client, "cache-probe", turns)
+    exporter.wait_for_run(run_id)
     log = client.get(f"/v1/runs/{run_id}/events").json()
     prefix = next(e for e in log if e["type"] == "context.assembled")["payload"]["stable_prefix_hash"]
     cache = next(e for e in log if e["type"] == "model.response")["payload"]["prompt_cache"]

@@ -376,7 +376,7 @@ async def test_no_grandchild_leak_on_close_and_pool_close():
 
 def _ps(field: str, pid: int) -> str:
     """ps 查询单个进程的一个字段（测试自己构造的参数，非外部输入）。"""
-    return subprocess.run(["/bin/ps", "-o", f"{field}=", "-p", str(pid)], capture_output=True, text=True, check=False).stdout  # noqa: S603
+    return subprocess.run(["/bin/ps", "-ww", "-o", f"{field}=", "-p", str(pid)], capture_output=True, text=True, check=False).stdout  # noqa: S603
 
 
 def _is_zombie(pid: int) -> bool:

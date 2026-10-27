@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
-import { mkdtemp, readFile, writeFile, access, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, access, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -14,11 +14,12 @@ const temporary = await mkdtemp(join(tmpdir(), "ai-platform-demo-")), metadata =
 const ticketReadonly = process.argv.includes("--ticket-readonly");
 const evidence = process.env.S12_DEMO_EVIDENCE || join(root, ticketReadonly ? "docs/evidence/s4/2026-10-27-readonly-demo" : "docs/evidence/s12/2026-10-26-local-demo");
 const verifyOnly = process.argv.includes("--verify-only");
-const safeEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: ticketReadonly ? temporary : process.env.TMPDIR, LANG: "en_US.UTF-8", PYTHONUNBUFFERED: "1" };
+const safeEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: temporary, LANG: "en_US.UTF-8", PYTHONUNBUFFERED: "1" };
 let server, portal, fixture, tests, info, interrupted = false, fixtureLog = "", base;
 const stop = () => { interrupted = true; tests?.kill("SIGTERM"); };
 process.on("SIGINT", stop); process.on("SIGTERM", stop);
 try {
+  await mkdir(evidence, { recursive: true });
   fixture = spawn(join(root, ".venv/bin/python"), ["scripts/verify_s12_workbench.py", "--serve", "--browser-info", metadata, "--demo-no-migrations", ...(ticketReadonly ? ["--ticket-readonly-demo"] : [])],
     { cwd: root, env: safeEnv, stdio: ["ignore", "pipe", "pipe"] });
   fixture.stdout.on("data", value => { fixtureLog += value.toString(); }); fixture.stderr.on("data", value => { fixtureLog += value.toString(); });
@@ -75,15 +76,19 @@ try {
   while (!verifyOnly && !interrupted && Date.now() < expiresAt && fixture.exitCode === null) await sleep(500);
 } catch (error) { console.error(error.message); process.exitCode = 1; }
 finally {
-  tests?.exitCode === null && tests.kill("SIGTERM");
+  if (tests?.exitCode === null && tests.signalCode === null) { tests.kill("SIGTERM"); await once(tests, "exit"); }
   await portal?.close();
   await server?.close();
-  if (fixture?.exitCode === null) { fixture.kill("SIGINT"); await once(fixture, "exit"); }
+  if (fixture?.exitCode === null && fixture.signalCode === null) { fixture.kill("SIGINT"); await once(fixture, "exit"); }
+  await mkdir(evidence, { recursive: true });
   await writeFile(join(evidence, "fixture.log"), fixtureLog);
+  // Every child temporary file is under this invocation's private TMPDIR.
+  // Remove it only after the owned processes have exited.
+  await rm(temporary, { recursive: true, force: false });
   if (info) {
     try { await access(info.tokens); console.error("Demo test token file remains"); process.exitCode = 1; }
     catch { console.log("CLEANUP: demo stopped; ephemeral test token file removed; original databases untouched"); }
   }
-  if (ticketReadonly) { await rm(temporary, { recursive: true, force: false }); console.log("CLEANUP: readonly demo Vite temporary root removed"); }
+  console.log("CLEANUP: owned demo temporary root removed");
   process.off("SIGINT", stop); process.off("SIGTERM", stop);
 }

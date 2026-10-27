@@ -576,6 +576,10 @@ def main() -> None:
     except KeyboardInterrupt:
         print("STOP isolated workbench fixture requested", flush=True)
     finally:
+        # A terminal interrupt can reach both parent and child; do not interrupt cleanup twice.
+        import signal
+
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         if console_server is not None:
             console_server.should_exit = True
         if console_thread is not None:

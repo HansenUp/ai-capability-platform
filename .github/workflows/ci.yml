@@ -11,7 +11,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable   # Cedar 判定引擎 sidecar 从源码编译（官方 crates.io，Cargo.lock 锁定）
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "services/policy/cedar-engine -> target" }
-      - run: make setup CLAUDE_SDK_EXTRAS=dev,sdk   # 一次性安装全部本地包；test_probe_gate 要求 claude-sdk 探针工厂可导入（需 SDK）
+      - run: make setup CLAUDE_SDK_EXTRAS=dev,sdk GATEWAY_EXTRAS=dev,mysql,s3   # 一次性安装全部本地包；test_probe_gate 要求 claude-sdk 探针工厂可导入（需 SDK）
       - run: .venv/bin/ruff check .
       - run: make openapi-check             # docs/api 下的 OpenAPI 必须与代码一致
       - run: make cedar-build CEDAR_CARGO=cargo
