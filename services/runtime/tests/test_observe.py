@@ -140,3 +140,23 @@ def test_traces_endpoint_follows_otlp_spec(monkeypatch):
     assert tracing.traces_endpoint() == "http://localhost:4318/v1/traces"
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://collector:4318/custom")
     assert tracing.traces_endpoint() == "http://collector:4318/custom"
+
+
+def test_run_trace_is_root_under_ambient_span(client, exporter):
+    """An ambient request/instrumentation span must not adopt an independent Run trace."""
+    from types import SimpleNamespace
+
+    from runtime.observe import tracing
+
+    agent = SimpleNamespace(agent_id="ambient-probe", version="1", model_alias="mock", tenant_id="default", harness="mock")
+    with tracing.get_tracer().start_as_current_span("ambient-request") as ambient:
+        with tracing.run_span("ambient-run", agent, "human:alice") as run:
+            with tracing.model_span("mock", 1, run) as child:
+                child_id = child.get_span_context().span_id
+            run_id = run.span.get_span_context().span_id
+            assert run.span.get_span_context().trace_id != ambient.get_span_context().trace_id
+    root = next(s for s in exporter.get_finished_spans() if s.context.span_id == run_id)
+    model = next(s for s in exporter.get_finished_spans() if s.context.span_id == child_id)
+    assert root.parent is None
+    assert model.parent.span_id == run_id
+    assert model.context.trace_id == root.context.trace_id

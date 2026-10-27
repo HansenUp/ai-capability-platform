@@ -163,7 +163,8 @@ def run_span(run_id: str, agent: AgentVersion, subject: str, model_alias: str | 
         "langfuse.user.id": subject,
         "langfuse.trace.name": name,
     }
-    span = get_tracer().start_span(name, kind=trace.SpanKind.INTERNAL, attributes=attrs)
+    # 每次 drive 按契约独立成 Trace；不能继承请求/测试埋点的 ambient parent。
+    span = get_tracer().start_span(name, context=Context(), kind=trace.SpanKind.INTERNAL, attributes=attrs)
     with _ended(span):
         yield RunSpan(span=span, trace_id=format_trace_id(span.get_span_context().trace_id), context=trace.set_span_in_context(span))
 
