@@ -8,6 +8,7 @@ MySQL 下迁移包在 ``GET_LOCK('cg_migrate')`` 里，多副本并发启动只�
 
 from __future__ import annotations
 
+import builtins
 import os
 import time
 from datetime import UTC, datetime
@@ -507,7 +508,7 @@ class SqlSkillRepo(SkillRepo):
             rows = (await s.execute(q.order_by(SkillVersionRow.name, SkillVersionRow.version))).scalars().all()
             return [_sv(r) for r in rows]
 
-    async def events(self, name: str, version: str) -> list[SkillEvent]:
+    async def events(self, name: str, version: str) -> builtins.list[SkillEvent]:
         q = select(SkillEventRow).where(SkillEventRow.name == name, SkillEventRow.version == version).order_by(SkillEventRow.id)
         async with self.session() as s:
             rows = (await s.execute(q)).scalars().all()

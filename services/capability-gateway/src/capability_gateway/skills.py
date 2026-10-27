@@ -38,7 +38,7 @@ from capability_gateway.errors import GatewayError, responses
 from capability_gateway.scan import RULES_VERSION, ScanReport, SkillPackage, parse_package, scan
 from capability_gateway.scan.capabilities import lookup
 from capability_gateway.scan.model import RISK_LEVELS
-from capability_gateway.skill_repo import TRANSITIONS, SkillConflict, SkillEvent, SkillVersion, now
+from capability_gateway.skill_repo import TRANSITIONS, SkillConflict, SkillEvent, SkillVersion, Status, now
 from capability_gateway.skill_sign import PackageError, canonical, sha256_hex
 from capability_gateway.skill_store import key_for
 
@@ -210,13 +210,37 @@ def _event(rec: SkillVersion, event: str, actor: str, **detail: Any) -> SkillEve
     return SkillEvent(name=rec.name, version=rec.version, event=event, actor=actor, detail=detail)
 
 
+_STATUSES: tuple[Status, ...] = (
+    "submitted",
+    "scanned",
+    "scan_failed",
+    "evaluated",
+    "eval_failed",
+    "approved",
+    "listed",
+    "deprecated",
+    "revoked",
+)
+assert set(_STATUSES) == set(TRANSITIONS)
+assert all(item in _STATUSES for targets in TRANSITIONS.values() for item in targets)
+
+
+def _known_status(value: str) -> Status | None:
+    """已知状态原样返回；未知字符串返回 None。不抛错，调用方沿用原有拒绝。"""
+    for item in _STATUSES:
+        if value == item:
+            return item
+    return None
+
+
 async def _move(rec: SkillVersion, path: list[str], actor: str, detail: dict[str, Any] | None = None, **changes: Any) -> SkillVersion:
     """沿 path 依次迁移状态（每步须在 TRANSITIONS 中），一次写入、每步一条事件。"""
     cur = rec.status
     for s in path:
-        if s not in TRANSITIONS[cur]:
+        nxt = _known_status(s)
+        if nxt is None or nxt not in TRANSITIONS[cur]:
             raise GatewayError(409, "invalid_state", f"{rec.name}@{rec.version} is {rec.status}; cannot move to {s}")
-        cur = s
+        cur = nxt
     new = rec.model_copy(update={"status": path[-1], **changes})
     return await _save(new, [_event(rec, s, actor, **(detail or {})) for s in path])
 

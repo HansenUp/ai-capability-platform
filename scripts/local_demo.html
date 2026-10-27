@@ -7,7 +7,7 @@
 <p>应用页面顶部现有统一演示栏：选择Alice或Bob后，点击“应用演示身份并定位同Run”，无需反复复制令牌；Agent／Run定位仅在当前标签内存保留。切换主体清空旧页面，不解除服务端写锁。下方手动令牌入口保留用于排查。</p>
 <p><a href="/manage/agents" target="_blank">① 打开Agent配置／发布</a><a href="/chat" target="_blank">② 打开使用工作台</a><a href="/manage/runs" target="_blank">③ 打开只读轨迹</a></p>
 <p><a id="portal-link">打开 Portal 使用入口</a>：已发布 Agent 列表、搜索、同 Run 工作台；与 Console 共用本次临时数据。</p>
-<h2>功能状态</h2><ul><li>已实现：Console 配置、开发发布、节点与运营页面；Portal 已发布目录、搜索和工作台；Runtime 登记、回执、审批、输入与持久事件。</li><li>本次模拟：模型、工具、策略、测试身份和开发评测。节点及运营页面无真实节点／指标接入。</li><li>待接入／验收：正式 OIDC、真实模型与业务接口、真实 Langfuse、正式 agentgateway、生产部署。多轮会话和附件暂缓。</li></ul><h2>临时测试身份（不是正式账号）</h2>
+<h2>功能状态</h2><ul><li>已实现：Console 配置、开发发布、节点与运营页面；Portal 已发布目录、搜索和工作台；Runtime 登记、回执、审批、输入与持久事件。</li><li>本次模拟：模型、工具、策略、测试身份和开发评测。节点及运营页面无真实节点／指标接入。</li><li>待接入／验收：正式 OIDC、真实模型与业务接口、真实 Langfuse、正式 agentgateway、生产部署。多轮会话和附件暂缓。</li></ul><section aria-label="演示到期与重启"><h2>演示到期后怎么办？</h2><p>到期后两个前端与临时后端会停止，旧地址和测试令牌失效。刷新页面不能延长有效期，也不能恢复临时数据。请让助手重新启动隔离演示，使用返回的新地址、新测试身份重新体验。</p><p>新演示使用新临时库，旧 Agent、Run 与回执不会迁移；这不是原业务写的重试或解锁。演示中断前如出现未知结果，应在当前环境只读核对，不能在真实业务中照此删除数据。</p></section><h2>临时测试身份（不是正式账号）</h2>
 <p>Alice发起对话并回答，Bob作为另一人审批。切换后需要重新填写同一个Run ID；令牌仅粘贴到测试页面，不用于其他服务。</p>
 <label>Alice测试令牌<textarea id="alice" readonly autocomplete="off"></textarea></label><button data-copy="alice">复制Alice</button>
 <label>Bob测试令牌<textarea id="bob" readonly autocomplete="off"></textarea></label><button data-copy="bob">复制Bob</button>

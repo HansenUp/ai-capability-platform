@@ -84,10 +84,12 @@ class S3Store:
         key = _check(key)
         resp = self.client.get_object(self.bucket, key)
         try:
-            return resp.read()
+            # minio 返回的 urllib3 响应 read() 在不传 amt 时得到完整对象字节。客户端本身是 Any。
+            payload: bytes = resp.read()
         finally:
             resp.close()
             resp.release_conn()
+        return payload
 
     async def put(self, key: str, data: bytes) -> None:
         await asyncio.to_thread(self._put, key, data)

@@ -1,7 +1,8 @@
 <!doctype html>
-<html lang="zh"><head><meta charset="utf-8"><title>Chat component fixture</title></head><body>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chat component fixture</title></head><body>
 <button id="unmount">卸载测试组件</button><div id="component"></div>
 <script type="module">
+import "../../src/platform.css";
 import { createApp, h } from "vue";
 import Chat from "../../src/views/Chat.vue";
 const app = createApp(Chat);

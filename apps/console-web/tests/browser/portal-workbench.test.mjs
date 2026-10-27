@@ -47,8 +47,11 @@ test('Portal adapter: explicit identity, fixed agent, fresh identity clears Run,
 });
 
 test('Portal history: explicit subject filter, next page replacement, errors clear records', async () => {
+  console.log("B1_HISTORY phase=launch");
   const engine = await browser();
+  console.log("B1_HISTORY phase=context");
   const context = await engine.newContext();
+  console.log("B1_HISTORY phase=page");
   const page = await context.newPage(); page.setDefaultTimeout(5000);
   let mode = 'first';
   await page.route('**/v1/**', async route => {
@@ -64,6 +67,7 @@ test('Portal history: explicit subject filter, next page replacement, errors cle
     return route.fulfill({ json: { items: [{ run_id: id, subject: 'human:alice', agent_id: 'synthetic-agent', state: 'completed', last_seq: 3 }], next_cursor: id === 'first-run' ? 'opaque' : null } });
   });
   try {
+    console.log("B1_HISTORY phase=navigate");
     await page.goto(`${profile.url}/tests/browser/portal-workbench.html`);
     await page.getByRole('button', { name: '应用门户登录身份并核对账本', exact: true }).click();
     await page.getByRole('status').filter({ hasText: '验签身份与账本读取完成' }).waitFor();
@@ -78,18 +82,28 @@ test('Portal history: explicit subject filter, next page replacement, errors cle
     await page.getByRole('status').filter({ hasText: 'HTTP 403' }).waitFor();
     assert.equal(await page.getByRole('region', { name: '本人 Run 记录' }).getByRole('listitem').count(), 0);
     assert.equal((await page.locator('body').innerText()).includes('PRIVATE'), false);
-  } finally { await context.close(); await engine.close(); }
+  } finally {
+    console.log("B1_HISTORY phase=context-close");
+    await context.close();
+    console.log("B1_HISTORY phase=browser-close");
+    await engine.close();
+    console.log("B1_HISTORY phase=closed");
+  }
 });
 
 
 test('Workbench narrow viewport and keyboard navigation preserve route and never write', async () => {
+  console.log("B1_NARROW phase=launch");
   const engine = await browser();
+  console.log("B1_NARROW phase=new-page");
   const page = await engine.newPage({ viewport: { width: 390, height: 844 } });
   page.setDefaultTimeout(5000);
   const calls = [];
   await page.route('**/v1/**', route => { calls.push(route.request().method()); return route.fulfill({status: 503, json: {detail: 'synthetic unavailable'}}); });
   try {
+    console.log("B1_NARROW phase=navigate");
     await page.goto(`${profile.url}/tests/browser/portal-workbench.html`);
+    console.log("B1_NARROW phase=keyboard");
     const target = page.getByRole('button', {name: '结果与待办', exact: true});
     await target.focus(); await page.keyboard.press('Enter');
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'workbench-results');
@@ -104,5 +118,11 @@ test('Workbench narrow viewport and keyboard navigation preserve route and never
     assert.equal(await page.locator('details').evaluate(el => el.open), true);
     await page.keyboard.press('Tab');
     assert.notEqual(await page.evaluate(() => document.activeElement?.tagName), 'BODY');
-  } finally { await page.close(); await engine.close(); }
+  } finally {
+    console.log("B1_NARROW phase=page-close");
+    await page.close();
+    console.log("B1_NARROW phase=browser-close");
+    await engine.close();
+    console.log("B1_NARROW phase=closed");
+  }
 });

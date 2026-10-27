@@ -6,6 +6,7 @@ Skill 名全局唯一并归属首次上传者的租户；版本 ``(name, version
 
 from __future__ import annotations
 
+import builtins
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -90,7 +91,7 @@ class SkillRepo(ABC):
     async def list(self, *, statuses: list[str] | None = None, tenant: str | None = None) -> list[SkillVersion]: ...
 
     @abstractmethod
-    async def events(self, name: str, version: str) -> list[SkillEvent]: ...
+    async def events(self, name: str, version: str) -> builtins.list[SkillEvent]: ...
 
 
 class MemorySkillRepo(SkillRepo):
@@ -130,5 +131,5 @@ class MemorySkillRepo(SkillRepo):
         ]
         return sorted(out, key=lambda r: (r.name, r.version))
 
-    async def events(self, name: str, version: str) -> list[SkillEvent]:
+    async def events(self, name: str, version: str) -> builtins.list[SkillEvent]:
         return [e for e in self.log if e.name == name and e.version == version]

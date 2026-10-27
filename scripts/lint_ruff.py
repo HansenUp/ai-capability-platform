@@ -42,11 +42,11 @@ def run_one(path: Path, mode: str) -> tuple[int, str]:
     data = path.read_bytes()
     rel = str(path.relative_to(ROOT))
     if mode == "format":
-        cmd = [str(RUFF), "format", "--check", "--stdin-filename", rel, "-"]
+        cmd = [str(RUFF), "format", "--check", "--force-exclude", "--stdin-filename", rel, "-"]
     elif mode == "fix":
-        cmd = [str(RUFF), "check", "--fix", "--stdin-filename", rel, "-"]
+        cmd = [str(RUFF), "check", "--fix", "--force-exclude", "--stdin-filename", rel, "-"]
     else:
-        cmd = [str(RUFF), "check", "--stdin-filename", rel, "-"]
+        cmd = [str(RUFF), "check", "--force-exclude", "--stdin-filename", rel, "-"]
     proc = subprocess.run(cmd, cwd=ROOT, input=data, capture_output=True)  # noqa: S603 —— 可执行文件为仓库内 .venv 的 ruff
     if mode == "fix":
         # --fix 模式下 ruff 把修复后的源码写到 stdout，诊断在 stderr

@@ -98,6 +98,10 @@ test("真实可信反馈：登记丢响应、重载、双标签竞争、发送�
     }
     await apply(peer, tokens.bob);
     assert.equal(await peer.getByRole("button", { name: "只读对账反馈来源（不重发）", exact: true }).count(), 0);
+    // The preceding action activated the peer tab. Restore the user's target
+    // before dispatching a real mouse click (do not force-click a hidden tab).
+    await page.bringToFront();
+    assert.equal(await page.evaluate(() => document.visibilityState), "visible");
     let observed;
     await page.route(`**${path}/reconcile`, async route => {
       const response = await route.fetch(); assert.equal(response.status(), 200); observed = await response.json(); await route.abort("failed");

@@ -19,6 +19,9 @@ test("整合演示：身份切换与跨页定位不解除未决写，显式执�
     await page.waitForFunction(() => ![...document.querySelectorAll("button")].find(button => button.textContent === "登记新 Run（尚未创建）")?.disabled);
   }
   try {
+    await page.goto(profile.url + "/demo");
+    await page.getByRole("heading", { name: "演示到期后怎么办？", exact: true }).waitFor();
+    assert.match(await page.getByRole("region", { name: "演示到期与重启" }).innerText(), /旧 Agent、Run 与回执不会迁移/);
     await page.goto(profile.url + "/chat");
     await page.getByLabel("演示测试主体", { exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector('aside[aria-label="独立演示导航"] select')?.disabled);

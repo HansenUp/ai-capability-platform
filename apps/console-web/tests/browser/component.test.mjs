@@ -162,3 +162,48 @@ test("凭据组件：执行响应未知，只读核对和换令牌恢复终结�
   assert.deepEqual(calls.filter(row => row.method === "POST").at(-1).body, { fingerprint: row.fingerprint, revision: 1 });
   assert.equal(calls.at(-1).headers.authorization, "Bearer synthetic-new-credential");
 }));
+
+
+async function narrow(page) {
+  await page.setViewportSize({width: 390, height: 844});
+}
+async function noOverflow(page) {
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+}
+async function keyboardActivate(page, name) {
+  const target = page.getByRole("button", {name, exact: true});
+  await target.focus(); await page.keyboard.press("Enter");
+}
+test("B1 narrow approval: long fingerprint, keyboard preview/cancel never writes", async () => fixture(async ({page, calls, state}) => {
+  await narrow(page);
+  state(run, approval.map(e => e.type === 'tool.decision' ? {...e, payload: {...e.payload, params_hash: 'a'.repeat(256)}} : e));
+  await apply(page, "component-token"); await inspect(page);
+  await keyboardActivate(page, "预览批准");
+  await page.getByRole('button', {name:'确认登记一次',exact:true}).waitFor();
+  await noOverflow(page);
+  await keyboardActivate(page, "取消");
+  assert.equal(await page.getByRole('button', {name:'确认登记一次',exact:true}).count(),0);
+  assert.equal(calls.filter(c=>c.method==='POST').length,0);
+}));
+test("B1 narrow input: invalid JSON via keyboard retains card without writing", async () => fixture(async ({page,calls,state}) => {
+  await narrow(page);
+  state({...run,state:'input-required'},[{run_id:run.run_id,seq:1,type:'input.requested',payload:{kind:'answer',call_id:'ask',prompt:'合成说明'.repeat(40),schema:{type:'object'}}}]);
+  await apply(page,"component-token");await inspect(page);
+  await page.locator('section.card textarea').fill('invalid JSON');
+  await keyboardActivate(page,'登记回答一次');
+  await page.getByRole('status').filter({hasText:'SyntaxError'}).waitFor();
+  await noOverflow(page);
+  assert.equal(await page.locator('section.card textarea').inputValue(),'invalid JSON');
+  assert.equal(calls.filter(c=>c.method==='POST').length,0);
+}));
+test("B1 narrow committed receipt: keyboard ACK preview/cancel preserves write lock", async () => fixture(async ({page,calls,ledger}) => {
+  await narrow(page);
+  ledger({scope_id:ledgerIdentity.scope_id,attempt_id:'11111111-1111-4111-8111-111111111111',action:'credential',run_id:run.run_id,request_seq:1,fingerprint:'b'.repeat(64),status:'COMMITTED',revision:2,acknowledged:false,evidence_seq:2,rejection:null});
+  await apply(page,'component-token');
+  await keyboardActivate(page,'预览本人确认收口');
+  await page.getByRole('button',{name:'确认收口此回执',exact:true}).waitFor();
+  await noOverflow(page);
+  await keyboardActivate(page,'取消收口');
+  assert.equal(await page.getByRole('button',{name:'登记新 Run（尚未创建）',exact:true}).isDisabled(),true);
+  assert.equal(calls.filter(c=>c.method==='POST').length,0);
+}));

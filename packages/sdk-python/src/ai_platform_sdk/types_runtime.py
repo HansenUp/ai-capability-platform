@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, confloat, conint, constr
 
@@ -17,9 +18,13 @@ class AgentVersionIn(BaseModel):
     agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
     config: dict[str, Any] | None = Field(None, title="Config")
     harness: constr(max_length=32) | None = Field(None, title="Harness")
-    model_alias: constr(min_length=1, max_length=64) | None = Field("default-chat", title="Model Alias")
+    model_alias: constr(min_length=1, max_length=64) | None = Field(
+        "default-chat", title="Model Alias"
+    )
     system_prompt: str | None = Field("", title="System Prompt")
-    tenant_id: constr(min_length=1, max_length=64) | None = Field("default", title="Tenant Id")
+    tenant_id: constr(min_length=1, max_length=64) | None = Field(
+        "default", title="Tenant Id"
+    )
     version: constr(min_length=1, max_length=32) = Field(..., title="Version")
 
 
@@ -41,6 +46,15 @@ class CardType(StrEnum):
     form = "form"
     choice = "choice"
     reconciliation_required = "reconciliation_required"
+
+
+class CreateBody(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
+    attempt_id: UUID = Field(..., title="Attempt Id")
+    text: constr(min_length=1) = Field(..., title="Text")
 
 
 class StopReason(StrEnum):
@@ -87,6 +101,15 @@ class ErrorEvent(BaseModel):
     message: str = Field(..., title="Message")
     retryable: bool | None = Field(False, title="Retryable")
     type: Literal["error"] = Field("error", title="Type")
+
+
+class EvidenceBody(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    fingerprint: constr(pattern=r"^[a-f0-9]{64}$") = Field(..., title="Fingerprint")
+    revision: conint(ge=1, le=9007199254740991) = Field(..., title="Revision")
+    value: Any | None = Field(None, title="Value")
 
 
 class FeedbackBody(BaseModel):
@@ -158,6 +181,39 @@ class MessagesRequest(BaseModel):
     stream: bool | None = Field(True, title="Stream")
 
 
+class Prepare(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    attempt_id: UUID = Field(..., title="Attempt Id")
+    expected_revision: conint(ge=0, le=2147483646) = Field(
+        ..., title="Expected Revision"
+    )
+    run_id: constr(min_length=1, max_length=40) = Field(..., title="Run Id")
+    score: conint(ge=-1, le=1) = Field(..., title="Score")
+
+
+class Action1(StrEnum):
+    credential = "credential"
+    approve = "approve"
+    reject = "reject"
+    answer = "answer"
+
+
+class PrepareBody(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    action: Action1 | None = Field("credential", title="Action")
+    attempt_id: UUID = Field(..., title="Attempt Id")
+    call_id: constr(min_length=1, max_length=128) | None = Field(None, title="Call Id")
+    params_hash: constr(min_length=1, max_length=64) | None = Field(
+        None, title="Params Hash"
+    )
+    run_id: constr(min_length=1, max_length=40) = Field(..., title="Run Id")
+    value: Any | None = Field(None, title="Value")
+
+
 class RolloutAllowlistItem(RootModel[constr(max_length=128)]):
     root: constr(max_length=128)
 
@@ -169,7 +225,9 @@ class PublishIn(BaseModel):
 
     eval_passed: bool | None = Field(None, title="Eval Passed")
     eval_run_ref: str | None = Field(None, title="Eval Run Ref")
-    rollout_allowlist: list[RolloutAllowlistItem] | None = Field(None, max_length=1000, title="Rollout Allowlist")
+    rollout_allowlist: list[RolloutAllowlistItem] | None = Field(
+        None, max_length=1000, title="Rollout Allowlist"
+    )
     rollout_percent: conint(ge=0, le=100) | None = Field(100, title="Rollout Percent")
 
 
@@ -192,7 +250,9 @@ class RolloutIn(BaseModel):
     调整已发布版本的灰度：放量比例与白名单。
     """
 
-    allowlist: list[AllowlistItem] | None = Field(None, max_length=1000, title="Allowlist")
+    allowlist: list[AllowlistItem] | None = Field(
+        None, max_length=1000, title="Allowlist"
+    )
     percent: conint(ge=0, le=100) = Field(..., title="Percent")
 
 
@@ -258,7 +318,11 @@ class RunEventsView(RootModel[list[RunEventView]]):
     GET /v1/runs/{run_id}/events：按 seq 升序的 Run 事件日志。
     """
 
-    root: list[RunEventView] = Field(..., description="GET /v1/runs/{run_id}/events：按 seq 升序的 Run 事件日志。", title="RunEventsView")
+    root: list[RunEventView] = Field(
+        ...,
+        description="GET /v1/runs/{run_id}/events：按 seq 升序的 Run 事件日志。",
+        title="RunEventsView",
+    )
 
 
 class RunState(StrEnum):
@@ -438,11 +502,27 @@ class CardEvent(BaseModel):
 
 class Event(
     RootModel[
-        TextEvent | ThinkingEvent | ToolUseEvent | ToolResultEvent | CardEvent | InputRequiredEvent | UsageEvent | ErrorEvent | DoneEvent
+        TextEvent
+        | ThinkingEvent
+        | ToolUseEvent
+        | ToolResultEvent
+        | CardEvent
+        | InputRequiredEvent
+        | UsageEvent
+        | ErrorEvent
+        | DoneEvent
     ]
 ):
     root: (
-        TextEvent | ThinkingEvent | ToolUseEvent | ToolResultEvent | CardEvent | InputRequiredEvent | UsageEvent | ErrorEvent | DoneEvent
+        TextEvent
+        | ThinkingEvent
+        | ToolUseEvent
+        | ToolResultEvent
+        | CardEvent
+        | InputRequiredEvent
+        | UsageEvent
+        | ErrorEvent
+        | DoneEvent
     ) = Field(..., discriminator="type", title="Event")
 
 

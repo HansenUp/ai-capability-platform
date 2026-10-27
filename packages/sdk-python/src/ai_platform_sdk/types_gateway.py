@@ -48,12 +48,18 @@ class Binding(BaseModel):
     """
 
     agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
-    capability_id: constr(min_length=1, max_length=128) = Field(..., title="Capability Id")
+    capability_id: constr(min_length=1, max_length=128) = Field(
+        ..., title="Capability Id"
+    )
     kind: Kind | None = Field("core", title="Kind")
 
 
 class BodySubmitSkillSkillsPost(BaseModel):
-    package: str = Field(..., json_schema_extra={"contentMediaType": "application/octet-stream"}, title="Package")
+    package: str = Field(
+        ...,
+        json_schema_extra={"contentMediaType": "application/octet-stream"},
+        title="Package",
+    )
 
 
 class DataClass(StrEnum):
@@ -88,7 +94,9 @@ class Capability(BaseModel):
     一条能力登记记录；`to_tool_spec()` 输出 Runtime 需要的 ToolSpec 字段。
     """
 
-    compensate_tool: constr(max_length=128) | None = Field(None, title="Compensate Tool")
+    compensate_tool: constr(max_length=128) | None = Field(
+        None, title="Compensate Tool"
+    )
     connector: constr(max_length=128) | None = Field(None, title="Connector")
     data_class: DataClass | None = Field("internal", title="Data Class")
     description: str = Field(..., title="Description")
@@ -96,7 +104,9 @@ class Capability(BaseModel):
     input_schema: dict[str, Any] | None = Field(None, title="Input Schema")
     name: constr(min_length=1, max_length=128) = Field(..., title="Name")
     owner: constr(max_length=128) | None = Field("", title="Owner")
-    requires_idempotency_key: bool | None = Field(False, title="Requires Idempotency Key")
+    requires_idempotency_key: bool | None = Field(
+        False, title="Requires Idempotency Key"
+    )
     risk_level: RiskLevel | None = Field("read", title="Risk Level")
     row_version: int | None = Field(0, title="Row Version")
     status: Status | None = Field("published", title="Status")
@@ -232,7 +242,9 @@ class InvokeIn(BaseModel):
     approved: bool | None = Field(False, title="Approved")
     call_id: constr(max_length=128) | None = Field(None, title="Call Id")
     dry_run: bool | None = Field(False, title="Dry Run")
-    idempotency_key: constr(max_length=128) | None = Field(None, title="Idempotency Key")
+    idempotency_key: constr(max_length=128) | None = Field(
+        None, title="Idempotency Key"
+    )
     input: dict[str, Any] | None = Field(None, title="Input")
     run_id: constr(max_length=40) | None = Field(None, title="Run Id")
     subject: constr(max_length=128) | None = Field("", title="Subject")
@@ -314,7 +326,9 @@ class SearchItem(BaseModel):
     id: str = Field(..., title="Id")
     input_schema: dict[str, Any] = Field(..., title="Input Schema")
     name: str = Field(..., title="Name")
-    requires_idempotency_key: bool | None = Field(False, title="Requires Idempotency Key")
+    requires_idempotency_key: bool | None = Field(
+        False, title="Requires Idempotency Key"
+    )
     risk_level: str = Field(..., title="Risk Level")
     score: float = Field(..., title="Score")
     supports_dry_run: bool | None = Field(False, title="Supports Dry Run")
@@ -389,7 +403,9 @@ class HTTPValidationError(BaseModel):
 
 class ResolveIn(BaseModel):
     agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
-    discovery_scope: list[str] | None = Field(None, max_length=500, title="Discovery Scope")
+    discovery_scope: list[str] | None = Field(
+        None, max_length=500, title="Discovery Scope"
+    )
     skills: list[SkillRef] | None = Field(None, max_length=50, title="Skills")
     tenant: constr(min_length=1, max_length=64) = Field(..., title="Tenant")
     tools: list[str] | None = Field(None, max_length=500, title="Tools")

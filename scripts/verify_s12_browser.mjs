@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, stat, access } from "node:fs/promises";
+import { mkdtemp, readFile, stat, access, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +67,8 @@ finally {
     try { await access(info.tokens); console.error("Ephemeral test tokens were not removed"); process.exitCode = 1; }
     catch { console.log("CLEANUP: temporary Console/Runtime/browser stopped; test token file removed"); }
   }
+  await rm(temporary, { recursive: true, force: true });
+  console.log("CLEANUP: owned browser fixture metadata/cache directory removed");
   process.off("SIGINT", interrupt);
   process.off("SIGTERM", interrupt);
 }

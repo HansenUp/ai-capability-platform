@@ -149,7 +149,11 @@ def parse_package(files: dict[str, bytes]) -> SkillPackage:
     name = front.get("name")
     if not isinstance(name, str) or len(name) > 64 or not NAME_RE.match(name):
         raise PackageError("structure.name", "name must be lowercase letters, digits and hyphens (≤64)")
-    meta = front.get("metadata") if isinstance(front.get("metadata"), dict) else {}
+    raw_meta = front.get("metadata")
+    if isinstance(raw_meta, dict):
+        meta = raw_meta
+    else:
+        meta = {}
     problems: list[Finding] = []
     version = meta.get("version", DEFAULT_VERSION)
     if not isinstance(version, str) or not VERSION_RE.match(version):

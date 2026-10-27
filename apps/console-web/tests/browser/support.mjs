@@ -1,3 +1,4 @@
+import { ownedBrowser } from "./owned-browser.mjs";
 import assert from "node:assert/strict";
 import { setTimeout } from "node:timers/promises";
 export const profile = {
@@ -8,8 +9,28 @@ export const profile = {
 if (!profile.url || !profile.runtime || !profile.tokens) throw new Error("Run through scripts/verify_s12_browser.mjs with isolated fixture metadata.");
 for (const value of [profile.url, profile.runtime]) if (new URL(value).hostname !== "127.0.0.1") throw new Error("Only isolated loopback test targets allowed.");
 const playwright = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
+let diagnosticId = 0;
+async function lifecycle(label, action) {
+  const id = ++diagnosticId, started = performance.now();
+  console.log(`BROWSER_PHASE ${id} ${label} start`);
+  try { return await action(); }
+  finally { console.log(`BROWSER_PHASE ${id} ${label} end ms=${Math.round(performance.now() - started)}`); }
+}
+function instrument(target, methods) {
+  for (const [method, wrap] of Object.entries(methods)) {
+    const original = target[method].bind(target);
+    target[method] = (...args) => lifecycle(method, async () => {
+      const result = await original(...args);
+      return wrap ? wrap(result) : result;
+    });
+  }
+  return target;
+}
+const instrumentPage = page => instrument(page, { close: null });
+const instrumentContext = context => instrument(context, { newPage: instrumentPage, close: null });
 export async function browser() {
-  return playwright.chromium.launch({ channel: process.env.S12_BROWSER_CHANNEL || "chrome", headless: true });
+  const engine = await lifecycle("launch", () => ownedBrowser(playwright.chromium, { channel: process.env.S12_BROWSER_CHANNEL || "chrome", headless: true }));
+  return instrument(engine, { newContext: instrumentContext, newPage: instrumentPage, close: null });
 }
 export async function apply(page, token) {
   await page.getByLabel("用户访问令牌", { exact: true }).fill(token);
