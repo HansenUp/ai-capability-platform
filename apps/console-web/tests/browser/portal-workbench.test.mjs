@@ -19,6 +19,13 @@ test('Portal adapter: explicit identity, fixed agent, fresh identity clears Run,
     const apply = page.getByRole('button', { name: '应用门户登录身份并核对账本', exact: true });
     await apply.waitFor();
     assert.equal(requests.length, 0);
+    const originalUrl = page.url();
+    await page.getByRole('button', {name: '结果与待办', exact: true}).click();
+    assert.equal(page.url(), originalUrl);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'workbench-results');
+    assert.equal(requests.length, 0);
+    await page.getByText('尚未读取 Run。', {exact: false}).waitFor();
+    await page.getByText('尚未应用身份。', {exact: false}).waitFor();
     assert.equal(await page.getByLabel('用户访问令牌', { exact: true }).count(), 0);
     assert.equal(await page.getByLabel('Agent ID', { exact: true }).inputValue(), 'synthetic-agent');
     assert.equal(await page.getByLabel('Agent ID', { exact: true }).getAttribute('readonly'), '');

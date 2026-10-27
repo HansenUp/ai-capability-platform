@@ -63,10 +63,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with: { version: 11 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile || pnpm install   # lockfile 不一致时退回普通安装
+      - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
   images:                                 # 镜像：5 个服务逐个构建（不推送）并用 Trivy 扫描 CRITICAL / HIGH 漏洞
     runs-on: ubuntu-latest
@@ -97,7 +96,6 @@ jobs:
       # → pytest evals/security（单元层：验签 / 篡改 / 吊销、出站白名单精确匹配与 net.py 之外不得构造 httpx 客户端、沙箱失败关闭、坏包规则）
       - run: make security
       - uses: pnpm/action-setup@v4
-        with: { version: 11 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile

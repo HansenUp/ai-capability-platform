@@ -3,6 +3,8 @@ import { computed, inject, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { demoContextKey } from "../demo-context";
 import { answerValue, RuntimeRequestError, RuntimeRunClient, workbenchCards, type ApprovalCard, type WorkbenchEvent, type WorkbenchRun, type WorkbenchIdentity, type WriteAttempt } from "@ai-platform/sdk-web/run-client";
 
+function navigateSection(id: string) { const section = document.getElementById(id); section?.scrollIntoView({ block: "start" }); section?.focus({ preventScroll: true }); }
+
 const props = defineProps<{ portalAgent?: string; portalTokenProvider?: () => Promise<string> }>();
 const development = import.meta.env.DEV && !props.portalTokenProvider;
 async function applyPortal() {
@@ -318,19 +320,27 @@ onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?
   <div class="workbench-head"><div class="page-kicker">AGENT WORKBENCH</div><h2>使用工作台 · 本机最小闭环</h2><p>发起任务、处理待办，并查看同一 Run 的执行进度。</p><div class="workflow-steps"><span>01 核对身份</span><span>02 登记与执行</span><span>03 审批 / 补充输入</span><span>04 本人确认回执</span></div></div>
   <button v-if="props.portalTokenProvider" :disabled="busy" @click="applyPortal">应用门户登录身份并核对账本</button>
   <button v-if="demo" :disabled="busy || !demo.role.value" @click="applyDemo">应用演示身份并定位同Run</button>
-  <p>复用 SDK 与 Runtime Run API，直接使用用户身份，不使用 Console 服务账号。每次发送创建独立 Run；可手动跟随同 Run 已持久化事件，断连后手动续读，不自动重试写请求。不提供多轮会话、附件或 Token 流。</p>
-  <p>创建、凭据刷新、单卡批准、拒绝和回答均先登记，再由本人显式执行及确认终结回执。创建登记只预留标识，不代表 Run 已创建；消息和回答原值不另存账本，重载后需重新输入。旧 API 的未登记请求不追溯纳入此协议。开发身份仅允许只读。</p>
+  <details class="protocol-notes"><summary>使用范围与安全规则</summary><p>复用 SDK 与 Runtime Run API，直接使用用户身份，不使用 Console 服务账号。每次发送创建独立 Run；可手动跟随同 Run 已持久化事件，断连后手动续读，不自动重试写请求。不提供多轮会话、附件或 Token 流。</p>
+  <p>创建、凭据刷新、单卡批准、拒绝和回答均先登记，再由本人显式执行及确认终结回执。创建登记只预留标识，不代表 Run 已创建；消息和回答原值不另存账本，重载后需重新输入。旧 API 的未登记请求不追溯纳入此协议。开发身份仅允许只读。</p></details>
+  <nav class="workbench-nav" aria-label="工作台分区">
+    <button type="button" @click="navigateSection('workbench-identity')">身份与状态</button><button type="button" @click="navigateSection('workbench-receipt')">写账本与回执</button><button type="button" @click="navigateSection('workbench-compose')">发起任务</button><button type="button" @click="navigateSection('workbench-locate')">定位 Run</button><button type="button" @click="navigateSection('workbench-results')">结果与待办</button>
+  </nav>
+  <h3 id="workbench-identity" tabindex="-1">身份与状态</h3>
+  <p v-if="!applied" class="empty-state">尚未应用身份。请先显式应用当前用户身份，核对账本后才能发起任务。</p>
   <fieldset v-if="!props.portalTokenProvider" :disabled="busy && !following"><legend>Runtime 身份（仅内存、不持久化）</legend>
     <label>鉴权方式 <select v-model="identity.mode"><option value="token">用户 Bearer 令牌</option><option v-if="development" value="dev">本机开发身份</option></select></label>
     <label v-if="identity.mode === 'token'">用户访问令牌 <input v-model="identity.token" type="password" autocomplete="off" /></label>
     <template v-else><label>主体 <input v-model="identity.subject" /></label><label>租户 <input v-model="identity.tenant" /></label></template>
     <button @click="apply">应用身份并清空旧数据</button>
   </fieldset>
-  <p role="status">{{ message }}</p>
+  <p role="status" aria-live="polite">{{ message }}</p>
+  <p v-if="busy || checking || reading" class="activity-hint" role="status">正在处理当前操作，请等待结果；请勿重复提交。</p>
+  <p v-if="applied && tokenMode && !ledgerReady" class="recovery-hint">下一步：使用“只读核对写账本”确认当前状态；身份已过期时请重新认证并显式应用。不要重新发送结果未知的写请求。</p>
   <button v-if="reading" @click="stopReading">停止本次只读刷新</button>
   <p v-if="applied">当前已应用：{{ activeIdentity }}。上方身份字段仅为草稿，修改后须点击应用；不持久化令牌或消息。</p>
   <p v-if="identity.mode === 'dev'">开发态 Runtime 不强制身份或自批隔离，不能代替权限验收；隔离验收请使用强制 JWT 验签的测试身份。</p>
   <p v-if="uncertain" role="alert">写请求结果未知，已锁定所有写操作。只读刷新或到 Run 调试列表定位；不以查无记录或页面刷新作为重发依据。</p>
+  <h3 id="workbench-receipt" tabindex="-1">写账本与回执</h3>
   <section v-if="applied && tokenMode" aria-label="权威写账本">
     <h3>当前主体写账本</h3><p v-if="verified">{{ verified.tenant_id }} / {{ verified.subject }} · {{ verified.scope_id }}</p>
     <p v-if="!ledgerReady" role="alert">账本尚未权威读取，禁止新写。</p>
@@ -359,6 +369,8 @@ onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?
       </section>
     </section>
   </section>
+  <h3 id="workbench-compose" tabindex="-1">发起新任务</h3>
+  <p>每次创建独立 Run；已有任务请使用下方定位入口继续读取。</p>
   <form @submit.prevent="send"><fieldset :disabled="busy || checking || !applied || writeBlocked"><legend>发送消息</legend>
     <label>Agent ID <input v-model="agent" :readonly="!!props.portalTokenProvider" required maxlength="64" /></label><label>消息 <textarea v-model="text" required /></label><button>登记新 Run（尚未创建）</button>
   </fieldset></form>
@@ -371,6 +383,7 @@ onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?
       <button :disabled="busy" @click="runId = item.run_id">定位此 Run（尚未读取）</button>
     </li></ul>
   </section>
+  <h3 id="workbench-locate" tabindex="-1">定位已有 Run</h3>
   <fieldset :disabled="busy || !applied"><legend>定位与手动刷新</legend>
     <label>Run ID <input v-model="runId" /></label><button @click="perform(refresh)">读取 Run 与待办卡片</button>
     <button @click="follow">跟随／续读已持久化事件</button>
@@ -381,6 +394,8 @@ onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?
     <p>仅当前身份与 Run 的内存游标；断连不自动重连，切换身份清空。done 只表示本次流结束，不替代 Run 状态或审批授权。</p>
     <ol><li v-for="event in followedEvents" :key="event.seq">{{ event.seq }} · {{ event.type }}<span v-if="event.type === 'model.response' && typeof event.payload.text === 'string'"> · {{ event.payload.text }}</span></li></ol>
   </section>
+  <h3 id="workbench-results" tabindex="-1">执行结果与待办</h3>
+  <p v-if="!run" class="empty-state">尚未读取 Run。请填写 Run ID 并点击“读取 Run 与待办卡片”；空白页面不表示任务不存在或写锁已解除。</p>
   <section v-if="run"><h3>{{ run.run_id }} · {{ run.state }} · 发起人 {{ run.subject }}</h3>
     <p v-for="event in responses" :key="event.seq">助手：{{ event.payload.text }}</p>
     <section v-for="card in cards.approvals" :key="card.call_id" class="card">
