@@ -117,3 +117,29 @@ test("SDK 事件契约：正序正整数与对象负载，保留受限视图序�
   const client = new sdk.RuntimeRunClient(async () => ({}), async () => Response.json(count++ ? [valid, { ...valid, seq: 5 }] : { run_id: "run1" }));
   assert.equal((await client.inspect("run1")).events.length, 2);
 });
+
+
+test("本人任务：所有查询显式绑定主体与筛选，保持只读", async () => {
+  const client = new sdk.RuntimeRunClient(async () => ({Authorization:"Bearer test"}), async (path, options) => {
+    const url = new URL(path,"http://test");
+    assert.equal(options.method,"GET"); assert.equal(options.redirect,"error");
+    assert.equal(url.searchParams.get("subject"),"human:alice");
+    assert.equal(url.searchParams.get("agent_id"),"demo"); assert.equal(url.searchParams.get("state"),"submitted");
+    assert.equal(url.searchParams.get("cursor"),"opaque");
+    return Response.json({items:[{run_id:"r1",agent_id:"demo",subject:"human:alice",state:"submitted",last_seq:1}],next_cursor:null});
+  });
+  assert.equal((await client.listMyRuns("human:alice","demo","submitted","opaque")).items.length,1);
+});
+test("本人任务：拒绝跨主体/Agent/状态、重复记录和循环游标", async () => {
+  const row = {run_id:"r1",agent_id:"demo",subject:"human:alice",state:"completed",last_seq:1};
+  for (const result of [
+    {items:[{...row,subject:"human:bob"}],next_cursor:null},
+    {items:[{...row,agent_id:"other"}],next_cursor:null},
+    {items:[{...row,state:"failed"}],next_cursor:null},
+    {items:[row,row],next_cursor:null},
+    {items:[row],next_cursor:"opaque"},
+  ]) {
+    const client = new sdk.RuntimeRunClient(async () => ({}),async () => Response.json(result));
+    await assert.rejects(client.listMyRuns("human:alice","demo","completed","opaque"),/范围或分页/);
+  }
+});

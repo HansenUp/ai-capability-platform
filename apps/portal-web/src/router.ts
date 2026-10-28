@@ -5,6 +5,7 @@ import { isLoggedIn, login } from "./auth";
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
+    { path: "/tasks", component: () => import("./views/Tasks.vue") },
     { path: "/", component: () => import("./views/AgentList.vue") },           // 可用 Agent 列表
     { path: "/chat/:agentId", component: () => import("./views/Chat.vue") },   // 与指定 Agent 对话
     { path: "/callback", component: () => import("./views/Callback.vue") },   // OIDC 登录回跳

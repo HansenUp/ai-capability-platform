@@ -11,6 +11,7 @@ const route = useRoute();
 const agentId = computed(() => String(route.params.agentId ?? ""));
 </script>
 <template>
+  <router-link to="/tasks">返回我的任务</router-link>
   <router-link to="/">返回可用 Agent</router-link>
   <h2>{{ agentId }}</h2>
   <Workbench :key="agentId" :portal-agent="agentId" :portal-token-provider="tokenProvider" />

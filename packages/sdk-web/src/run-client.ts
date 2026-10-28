@@ -183,6 +183,22 @@ export class RuntimeRunClient {
     if (!result || typeof result.run_id !== "string" || !result.run_id) throw new RuntimeRequestError("已受理但 Run ID 不可读；请从 Run 列表定位，不可盲目重发。", 202, true);
     return result.run_id;
   }
+  async listMyRuns(subject: string, agent = "", state = "", cursor: string | null = null, signal?: AbortSignal): Promise<{ items: WorkbenchRun[]; next_cursor: string | null }> {
+    const states = ["submitted", "working", "auth-required", "input-required", "completed", "failed", "canceled"];
+    if (!subject || (state && !states.includes(state)) || (cursor !== null && (!cursor || cursor.length > 512))) throw new Error("任务查询范围无效。");
+    const query = new URLSearchParams({ subject, limit: "20" });
+    if (agent) query.set("agent_id", agent);
+    if (state) query.set("state", state);
+    if (cursor) query.set("cursor", cursor);
+    const result = await this.request(`/v1/runs?${query}`, "GET", undefined, 200, signal) as { items: WorkbenchRun[]; next_cursor: string | null };
+    if (!result || !Array.isArray(result.items) || result.items.length > 20
+      || (result.next_cursor !== null && (typeof result.next_cursor !== "string" || !result.next_cursor || result.next_cursor.length > 512 || result.next_cursor === cursor))
+      || result.items.some(row => !row || typeof row.run_id !== "string" || !row.run_id || typeof row.agent_id !== "string" || !row.agent_id
+        || row.subject !== subject || (agent && row.agent_id !== agent) || (state && row.state !== state) || !states.includes(row.state)
+        || !Number.isSafeInteger(row.last_seq) || row.last_seq < 0)
+      || new Set(result.items.map(row => row.run_id)).size !== result.items.length) throw new Error("本人任务范围或分页响应不匹配。");
+    return result;
+  }
   async listOwnRuns(agent: string, subject: string, cursor: string | null = null, signal?: AbortSignal): Promise<{ items: WorkbenchRun[]; next_cursor: string | null }> {
     if (!agent || !subject || (cursor !== null && (!cursor || cursor.length > 512))) throw new Error("Run 列表范围或游标无效。");
     const query = new URLSearchParams({ agent_id: agent, subject, limit: "20" });

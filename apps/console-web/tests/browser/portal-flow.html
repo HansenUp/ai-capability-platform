@@ -4,10 +4,12 @@
 import { createApp, h } from "vue";
 import { createRouter, createMemoryHistory, RouterView } from "vue-router";
 import AgentList from "../../../portal-web/src/views/AgentList.vue";
+import Tasks from "../../../portal-web/src/views/Tasks.vue";
 import Chat from "../../../portal-web/src/views/Chat.vue";
 import { portalTokenKey } from "../../../portal-web/src/runtime-session.ts";
 const tokens = await (await fetch('/synthetic-tokens')).json();
 const router = createRouter({ history: createMemoryHistory(), routes: [
+  { path: "/tasks", component: Tasks },
   { path: '/', component: AgentList }, { path: '/chat/:agentId', component: Chat },
 ] });
 const app = createApp({ render: () => h(RouterView) });

@@ -29,7 +29,8 @@ test('Portal catalog DOM: scoped search, encoded link, errors and delayed old id
     await page.locator('#remount').click();
     await page.getByText('加载 Agent 列表失败：HTTP 403', { exact: true }).waitFor();
     assert.equal((await page.locator('body').innerText()).includes('PRIVATE-ERROR'), false);
-    assert.equal(await page.getByRole('link').count(), 0);
+    assert.equal(await page.locator('.agent-grid').getByRole('link').count(), 0);
+    assert.equal(await page.getByRole('link', {name:'我的任务',exact:true}).count(), 1);
     mode = 'late';
     const request = page.waitForRequest(req => new URL(req.url()).pathname === '/v1/agents');
     await page.locator('#remount').click(); await request;

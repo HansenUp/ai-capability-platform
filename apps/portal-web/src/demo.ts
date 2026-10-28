@@ -4,6 +4,7 @@ import { createApp, h, ref, onMounted } from "vue";
 import { createRouter, createWebHashHistory, RouterView } from "vue-router";
 import { portalTokenKey } from "./runtime-session";
 import AgentList from "./views/AgentList.vue";
+import Tasks from "./views/Tasks.vue";
 import Chat from "./views/Chat.vue";
 
 if (import.meta.env.VITE_ISOLATED_DEMO !== "1" || location.hostname !== "127.0.0.1") throw new Error("Isolated demo only");
@@ -14,6 +15,7 @@ const identity = ref<"alice" | "bob">("alice");
 const selection = ref<"alice" | "bob">("alice");
 const generation = ref(0);
 const router = createRouter({ history: createWebHashHistory(), routes: [
+  { path: "/tasks", component: Tasks },
   { path: "/", component: AgentList },
   { path: "/chat/:agentId", component: Chat },
 ] });

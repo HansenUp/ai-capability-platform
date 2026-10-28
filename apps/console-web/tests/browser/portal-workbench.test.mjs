@@ -126,3 +126,48 @@ test('Workbench narrow viewport and keyboard navigation preserve route and never
     console.log("B1_NARROW phase=closed");
   }
 });
+
+
+test('Portal tasks: subject-bound pagination, filter cancellation, identity changes and errors clear rows', async () => {
+  const engine = await browser(); const context = await engine.newContext(); const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  const calls = []; let mode = 'normal'; let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route('**/synthetic-tokens', route => route.fulfill({ json: { alice: 'alice', bob: 'bob' } }));
+  await page.route('**/v1/**', async route => {
+    const req = route.request(), url = new URL(req.url()); calls.push(req.method());
+    const actor = req.headers().authorization === 'Bearer bob' ? 'bob' : 'alice';
+    if (url.pathname === '/v1/workbench/identity') return route.fulfill({json:{ protocol:'workbench-v1', auth_method:'user', subject:`human:${actor}`, tenant_id:'default', scope_id:(actor === 'alice' ? 'a' : 'b').repeat(64) }});
+    if (url.pathname === '/v1/workbench/attempts') return route.fulfill({json:{scope_id:(actor === 'alice' ? 'a' : 'b').repeat(64), active:null}});
+    if (url.pathname === '/v1/agents') return route.fulfill({json:[]});
+    assert.equal(url.pathname, '/v1/runs'); assert.equal(url.searchParams.get('subject'), `human:${actor}`);
+    if (mode === 'error') return route.fulfill({status:403, body:'PRIVATE'});
+    if (mode === 'held') await held;
+    const id = url.searchParams.has('cursor') ? 'second' : 'first';
+    if (id === 'second') assert.equal(url.searchParams.get('cursor'), 'opaque');
+    await route.fulfill({json:{items:[{run_id:id, agent_id:url.searchParams.get('agent_id') || 'demo', subject:`human:${actor}`, state:'completed', last_seq:3}], next_cursor:id === 'first' ? 'opaque' : null}}).catch(() => {});
+  });
+  try {
+    await page.goto(`${profile.url}/tests/browser/portal-flow.html`);
+    await page.getByRole('link', { name:'我的任务', exact:true }).click();
+    const first = page.getByRole('button', {name:'应用身份并读取任务首页',exact:true});
+    await first.click(); await page.getByRole('link', {name:'查看任务 first',exact:true}).waitFor();
+    await page.getByRole('button', {name:'读取任务下一页',exact:true}).click();
+    await page.getByRole('link', {name:'查看任务 second',exact:true}).waitFor();
+    assert.equal(await page.getByRole('link', {name:'查看任务 first',exact:true}).count(),0);
+    assert.equal(await page.getByRole('button', {name:'读取任务下一页',exact:true}).isDisabled(),true);
+    await first.click(); await page.getByRole('link', {name:'查看任务 first',exact:true}).waitFor();
+    await page.getByLabel('合成身份',{exact:true}).selectOption('bob');
+    await page.getByRole('button', {name:'读取任务下一页',exact:true}).click();
+    await page.getByRole('status').filter({hasText:'身份已变化'}).waitFor();
+    assert.equal(await page.getByRole('list',{name:'本人任务列表'}).locator('li').count(),0);
+    mode='held'; const requested = page.waitForRequest(req => new URL(req.url()).pathname === '/v1/runs'); await first.click();
+    await requested;
+    await page.getByLabel('任务 Agent 筛选',{exact:true}).fill('new-agent'); release();
+    assert.equal(await page.getByRole('list',{name:'本人任务列表'}).locator('li').count(),0);
+    mode='error'; await first.click(); await page.getByRole('status').filter({hasText:'HTTP 403'}).waitFor();
+    assert.equal(await page.getByRole('list',{name:'本人任务列表'}).locator('li').count(),0);
+    assert.equal((await page.locator('body').innerText()).includes('PRIVATE'),false);
+    assert.equal(calls.every(method => method === 'GET'),true);
+  } finally { release(); await context.close(); await engine.close(); }
+});
