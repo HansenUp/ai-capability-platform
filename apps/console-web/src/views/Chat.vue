@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
+import TaskGuide from "../components/TaskGuide.vue";
+import RunOutcome from "../components/RunOutcome.vue";
+import { eventStage, runHint } from "../run-outcome";
 import { demoContextKey } from "../demo-context";
 import { answerValue, RuntimeRequestError, RuntimeRunClient, workbenchCards, type ApprovalCard, type WorkbenchEvent, type WorkbenchRun, type WorkbenchIdentity, type WriteAttempt } from "@ai-platform/sdk-web/run-client";
 
 function navigateSection(id: string) { const section = document.getElementById(id); section?.scrollIntoView({ block: "start" }); section?.focus({ preventScroll: true }); }
 
 const props = defineProps<{ portalAgent?: string; portalTokenProvider?: () => Promise<string> }>();
+const route = useRoute();
+const linkedRun = computed(() => runHint(route?.query.run));
 const development = import.meta.env.DEV && !props.portalTokenProvider;
 async function applyPortal() {
   if (!props.portalTokenProvider || busy.value) return;
@@ -318,6 +324,7 @@ onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?
 
 <template>
   <div class="workbench-head"><div class="page-kicker">AGENT WORKBENCH</div><h2>使用工作台 · 本机最小闭环</h2><p>发起任务、处理待办，并查看同一 Run 的执行进度。</p><div class="workflow-steps"><span>01 核对身份</span><span>02 登记与执行</span><span>03 审批 / 补充输入</span><span>04 本人确认回执</span></div></div>
+  <TaskGuide />
   <button v-if="props.portalTokenProvider" :disabled="busy" @click="applyPortal">应用门户登录身份并核对账本</button>
   <button v-if="demo" :disabled="busy || !demo.role.value" @click="applyDemo">应用演示身份并定位同Run</button>
   <details class="protocol-notes"><summary>使用范围与安全规则</summary><p>复用 SDK 与 Runtime Run API，直接使用用户身份，不使用 Console 服务账号。每次发送创建独立 Run；可手动跟随同 Run 已持久化事件，断连后手动续读，不自动重试写请求。不提供多轮会话、附件或 Token 流。</p>
@@ -387,7 +394,8 @@ onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?
   <fieldset :disabled="busy || !applied"><legend>定位与手动刷新</legend>
     <label>Run ID <input v-model="runId" /></label><button @click="perform(refresh)">读取 Run 与待办卡片</button>
     <button @click="follow">跟随／续读已持久化事件</button>
-    <router-link v-if="!props.portalTokenProvider" to="/manage/runs">到 Run 只读调试列表</router-link>
+    <button v-if="linkedRun" @click="runId = linkedRun">定位链接中的 Run（尚未读取）</button>
+    <router-link v-if="!props.portalTokenProvider" :to="{ path: '/manage/runs', query: runId ? { run: runId } : {} }">到 Run 只读调试列表</router-link>
   </fieldset>
   <section v-if="followRun" aria-label="已持久化事件跟随">
     <h3>只读跟随 {{ followRun }} · 已确认序号 {{ followCursor }}</h3>
@@ -397,6 +405,19 @@ onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?
   <h3 id="workbench-results" tabindex="-1">执行结果与待办</h3>
   <p v-if="!run" class="empty-state">尚未读取 Run。请填写 Run ID 并点击“读取 Run 与待办卡片”；空白页面不表示任务不存在或写锁已解除。</p>
   <section v-if="run"><h3>{{ run.run_id }} · {{ run.state }} · 发起人 {{ run.subject }}</h3>
+    <RunOutcome :state="run.state" :events="events" />
+    <template v-if="props.portalTokenProvider">
+      <button type="button" @click="navigateSection('workbench-trace')">查看此 Run 只读轨迹</button>
+      <section aria-label="同 Run 只读轨迹">
+        <h4 id="workbench-trace" tabindex="-1">执行轨迹 · {{ run.run_id }}</h4>
+        <p>仅展示本次读取的当前身份可见事件；不额外请求、不解除写锁。刷新请使用上方只读读取或手动跟随入口。</p>
+        <p v-if="!events.length">尚无可见事件，不能推断执行成功。</p>
+        <ol><li v-for="event in events" :key="event.seq">
+          <p>#{{ event.seq }} · {{ eventStage(event.type) }} · {{ event.type }}</p>
+          <details><summary>查看事件内容 #{{ event.seq }}</summary><pre>{{ JSON.stringify(event.payload, null, 2) }}</pre></details>
+        </li></ol>
+      </section>
+    </template>
     <p v-for="event in responses" :key="event.seq">助手：{{ event.payload.text }}</p>
     <section v-for="card in cards.approvals" :key="card.call_id" class="card">
       <h4>审批卡片：{{ card.tool }}</h4><p>调用 {{ card.call_id }} · 参数指纹 {{ card.params_hash }}</p>

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+from pydantic import StringConstraints
+
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -47,8 +50,8 @@ class Binding(BaseModel):
     agent_id 为 "*" 表示对所有 Agent 生效。
     """
 
-    agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
-    capability_id: constr(min_length=1, max_length=128) = Field(
+    agent_id: Annotated[str, StringConstraints(min_length=1, max_length=64)] = Field(..., title="Agent Id")
+    capability_id: Annotated[str, StringConstraints(min_length=1, max_length=128)] = Field(
         ..., title="Capability Id"
     )
     kind: Kind | None = Field("core", title="Kind")
@@ -94,16 +97,16 @@ class Capability(BaseModel):
     一条能力登记记录；`to_tool_spec()` 输出 Runtime 需要的 ToolSpec 字段。
     """
 
-    compensate_tool: constr(max_length=128) | None = Field(
+    compensate_tool: Annotated[str, StringConstraints(max_length=128)] | None = Field(
         None, title="Compensate Tool"
     )
-    connector: constr(max_length=128) | None = Field(None, title="Connector")
+    connector: Annotated[str, StringConstraints(max_length=128)] | None = Field(None, title="Connector")
     data_class: DataClass | None = Field("internal", title="Data Class")
     description: str = Field(..., title="Description")
-    id: constr(min_length=1, max_length=128) = Field(..., title="Id")
+    id: Annotated[str, StringConstraints(min_length=1, max_length=128)] = Field(..., title="Id")
     input_schema: dict[str, Any] | None = Field(None, title="Input Schema")
-    name: constr(min_length=1, max_length=128) = Field(..., title="Name")
-    owner: constr(max_length=128) | None = Field("", title="Owner")
+    name: Annotated[str, StringConstraints(min_length=1, max_length=128)] = Field(..., title="Name")
+    owner: Annotated[str, StringConstraints(max_length=128)] | None = Field("", title="Owner")
     requires_idempotency_key: bool | None = Field(
         False, title="Requires Idempotency Key"
     )
@@ -111,10 +114,10 @@ class Capability(BaseModel):
     row_version: int | None = Field(0, title="Row Version")
     status: Status | None = Field("published", title="Status")
     supports_dry_run: bool | None = Field(False, title="Supports Dry Run")
-    system: constr(max_length=64) | None = Field("", title="System")
-    tenant: constr(max_length=64) | None = Field("default", title="Tenant")
+    system: Annotated[str, StringConstraints(max_length=64)] | None = Field("", title="System")
+    tenant: Annotated[str, StringConstraints(max_length=64)] | None = Field("default", title="Tenant")
     type: Type | None = Field("mcp_tool", title="Type")
-    version: constr(max_length=32) | None = Field("1.0.0", title="Version")
+    version: Annotated[str, StringConstraints(max_length=32)] | None = Field("1.0.0", title="Version")
 
 
 class ConnectorTool(BaseModel):
@@ -159,33 +162,33 @@ class ConnectorVersion(BaseModel):
     activated_manifest_hash: str | None = Field(None, title="Activated Manifest Hash")
     auth_type: AuthType | None = Field("inherit", title="Auth Type")
     consecutive_failures: int | None = Field(0, title="Consecutive Failures")
-    endpoint: constr(max_length=512) = Field(..., title="Endpoint")
+    endpoint: Annotated[str, StringConstraints(max_length=512)] = Field(..., title="Endpoint")
     health: Health | None = Field("unknown", title="Health")
     last_error: str | None = Field(None, title="Last Error")
     last_probe_at: float | None = Field(None, title="Last Probe At")
     manifest_hash: str | None = Field(None, title="Manifest Hash")
-    name: constr(min_length=1, max_length=128) = Field(..., title="Name")
+    name: Annotated[str, StringConstraints(min_length=1, max_length=128)] = Field(..., title="Name")
     protocol: Protocol | None = Field("rest", title="Protocol")
     status: Status1 | None = Field("inactive", title="Status")
-    system: constr(max_length=64) | None = Field("", title="System")
-    version: constr(min_length=1, max_length=32) | None = Field("1", title="Version")
+    system: Annotated[str, StringConstraints(max_length=64)] | None = Field("", title="System")
+    version: Annotated[str, StringConstraints(min_length=1, max_length=32)] | None = Field("1", title="Version")
 
 
 class ConnectorView(BaseModel):
     activated_manifest_hash: str | None = Field(None, title="Activated Manifest Hash")
     auth_type: AuthType | None = Field("inherit", title="Auth Type")
     consecutive_failures: int | None = Field(0, title="Consecutive Failures")
-    endpoint: constr(max_length=512) = Field(..., title="Endpoint")
+    endpoint: Annotated[str, StringConstraints(max_length=512)] = Field(..., title="Endpoint")
     health: Health | None = Field("unknown", title="Health")
     last_error: str | None = Field(None, title="Last Error")
     last_probe_at: float | None = Field(None, title="Last Probe At")
     manifest_hash: str | None = Field(None, title="Manifest Hash")
-    name: constr(min_length=1, max_length=128) = Field(..., title="Name")
+    name: Annotated[str, StringConstraints(min_length=1, max_length=128)] = Field(..., title="Name")
     protocol: Protocol | None = Field("rest", title="Protocol")
     status: Status1 | None = Field("inactive", title="Status")
-    system: constr(max_length=64) | None = Field("", title="System")
+    system: Annotated[str, StringConstraints(max_length=64)] | None = Field("", title="System")
     tools: list[ConnectorTool] | None = Field(None, title="Tools")
-    version: constr(min_length=1, max_length=32) | None = Field("1", title="Version")
+    version: Annotated[str, StringConstraints(min_length=1, max_length=32)] | None = Field("1", title="Version")
 
 
 class ErrorDetail(BaseModel):
@@ -198,7 +201,7 @@ class ErrorDetail(BaseModel):
 
 
 class EvalItem(BaseModel):
-    id: constr(min_length=1, max_length=128) = Field(..., title="Id")
+    id: Annotated[str, StringConstraints(min_length=1, max_length=128)] = Field(..., title="Id")
     passed: bool = Field(..., title="Passed")
 
 
@@ -209,9 +212,9 @@ class EvalOut(BaseModel):
 
 class EvalResultIn(BaseModel):
     items: list[EvalItem] = Field(..., max_length=1000, title="Items")
-    pass_rate: confloat(ge=0.0, le=1.0) = Field(..., title="Pass Rate")
-    run_ref: constr(min_length=1, max_length=256) = Field(..., title="Run Ref")
-    tenant: constr(min_length=1, max_length=64) | None = Field(None, title="Tenant")
+    pass_rate: Annotated[float, Field(ge=0.0, le=1.0)] = Field(..., title="Pass Rate")
+    run_ref: Annotated[str, StringConstraints(min_length=1, max_length=256)] = Field(..., title="Run Ref")
+    tenant: Annotated[str, StringConstraints(min_length=1, max_length=64)] | None = Field(None, title="Tenant")
 
 
 class EvalSummary(BaseModel):
@@ -236,20 +239,20 @@ class InvokeIn(BaseModel):
     工具调用请求（由 Runtime 的工具代理在闸口放行后发出）。
     """
 
-    agent_id: constr(max_length=64) = Field(..., title="Agent Id")
-    agent_tenant: constr(max_length=64) | None = Field(None, title="Agent Tenant")
-    agent_version: constr(max_length=32) = Field(..., title="Agent Version")
+    agent_id: Annotated[str, StringConstraints(max_length=64)] = Field(..., title="Agent Id")
+    agent_tenant: Annotated[str, StringConstraints(max_length=64)] | None = Field(None, title="Agent Tenant")
+    agent_version: Annotated[str, StringConstraints(max_length=32)] = Field(..., title="Agent Version")
     approved: bool | None = Field(False, title="Approved")
-    call_id: constr(max_length=128) | None = Field(None, title="Call Id")
+    call_id: Annotated[str, StringConstraints(max_length=128)] | None = Field(None, title="Call Id")
     dry_run: bool | None = Field(False, title="Dry Run")
-    idempotency_key: constr(max_length=128) | None = Field(
+    idempotency_key: Annotated[str, StringConstraints(max_length=128)] | None = Field(
         None, title="Idempotency Key"
     )
     input: dict[str, Any] | None = Field(None, title="Input")
-    run_id: constr(max_length=40) | None = Field(None, title="Run Id")
-    subject: constr(max_length=128) | None = Field("", title="Subject")
+    run_id: Annotated[str, StringConstraints(max_length=40)] | None = Field(None, title="Run Id")
+    subject: Annotated[str, StringConstraints(max_length=128)] | None = Field("", title="Subject")
     taint: list[str] | None = Field(None, max_length=20, title="Taint")
-    tool: constr(max_length=128) = Field(..., title="Tool")
+    tool: Annotated[str, StringConstraints(max_length=128)] = Field(..., title="Tool")
 
 
 class LockEntry(BaseModel):
@@ -271,11 +274,11 @@ class McpServerIn(BaseModel):
     """
 
     auth_type: AuthType | None = Field("inherit", title="Auth Type")
-    endpoint: constr(min_length=1, max_length=512) = Field(..., title="Endpoint")
-    name: constr(min_length=1, max_length=128) = Field(..., title="Name")
+    endpoint: Annotated[str, StringConstraints(min_length=1, max_length=512)] = Field(..., title="Endpoint")
+    name: Annotated[str, StringConstraints(min_length=1, max_length=128)] = Field(..., title="Name")
     protocol: Protocol2 | None = Field("streamable-http", title="Protocol")
-    system: constr(max_length=64) | None = Field("", title="System")
-    version: constr(min_length=1, max_length=32) | None = Field("1", title="Version")
+    system: Annotated[str, StringConstraints(max_length=64)] | None = Field("", title="System")
+    version: Annotated[str, StringConstraints(min_length=1, max_length=32)] | None = Field("1", title="Version")
 
 
 class ResolveOut(BaseModel):
@@ -284,7 +287,7 @@ class ResolveOut(BaseModel):
 
 
 class RevokeIn(BaseModel):
-    reason: constr(max_length=512) | None = Field("", title="Reason")
+    reason: Annotated[str, StringConstraints(max_length=512)] | None = Field("", title="Reason")
 
 
 class Revoked(BaseModel):
@@ -305,11 +308,11 @@ class SearchIn(BaseModel):
     第二级发现请求（Runtime 的 search_capabilities 元工具发起）；用户由 X-AI-User-Token 确定。
     """
 
-    agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
-    agent_tenant: constr(max_length=64) | None = Field(None, title="Agent Tenant")
-    agent_version: constr(max_length=32) | None = Field("", title="Agent Version")
-    limit: conint(ge=1, le=20) | None = Field(5, title="Limit")
-    query: constr(min_length=1, max_length=1000) = Field(..., title="Query")
+    agent_id: Annotated[str, StringConstraints(min_length=1, max_length=64)] = Field(..., title="Agent Id")
+    agent_tenant: Annotated[str, StringConstraints(max_length=64)] | None = Field(None, title="Agent Tenant")
+    agent_version: Annotated[str, StringConstraints(max_length=32)] | None = Field("", title="Agent Version")
+    limit: Annotated[int, Field(ge=1, le=20)] | None = Field(5, title="Limit")
+    query: Annotated[str, StringConstraints(min_length=1, max_length=1000)] = Field(..., title="Query")
     scope: list[str] | None = Field(None, title="Scope")
     taint: list[str] | None = Field(None, max_length=20, title="Taint")
 
@@ -372,8 +375,8 @@ class SkillOut(BaseModel):
 
 
 class SkillRef(BaseModel):
-    name: constr(min_length=1, max_length=64) = Field(..., title="Name")
-    version: constr(min_length=1, max_length=32) = Field(..., title="Version")
+    name: Annotated[str, StringConstraints(min_length=1, max_length=64)] = Field(..., title="Name")
+    version: Annotated[str, StringConstraints(min_length=1, max_length=32)] = Field(..., title="Version")
 
 
 class SubmitOut(BaseModel):
@@ -392,9 +395,9 @@ class ValidationError(BaseModel):
 
 class VersionIn(BaseModel):
     auth_type: AuthType | None = Field("inherit", title="Auth Type")
-    endpoint: constr(min_length=1, max_length=512) = Field(..., title="Endpoint")
+    endpoint: Annotated[str, StringConstraints(min_length=1, max_length=512)] = Field(..., title="Endpoint")
     protocol: Protocol2 | None = Field("streamable-http", title="Protocol")
-    system: constr(max_length=64) | None = Field(None, title="System")
+    system: Annotated[str, StringConstraints(max_length=64)] | None = Field(None, title="System")
 
 
 class HTTPValidationError(BaseModel):
@@ -402,12 +405,12 @@ class HTTPValidationError(BaseModel):
 
 
 class ResolveIn(BaseModel):
-    agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
+    agent_id: Annotated[str, StringConstraints(min_length=1, max_length=64)] = Field(..., title="Agent Id")
     discovery_scope: list[str] | None = Field(
         None, max_length=500, title="Discovery Scope"
     )
     skills: list[SkillRef] | None = Field(None, max_length=50, title="Skills")
-    tenant: constr(min_length=1, max_length=64) = Field(..., title="Tenant")
+    tenant: Annotated[str, StringConstraints(min_length=1, max_length=64)] = Field(..., title="Tenant")
     tools: list[str] | None = Field(None, max_length=500, title="Tools")
 
 

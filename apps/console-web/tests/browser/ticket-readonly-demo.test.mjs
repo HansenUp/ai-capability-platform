@@ -20,6 +20,7 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
   try {
     await page.goto(`${profile.url}/demo`);
     await page.getByRole("heading", { name: "工单总结 · 只读隔离演示", exact: true }).waitFor();
+    if (process.env.B3_READ_DEMO === "1") await page.getByText("B3 隔离链路：实际 Runtime 执行事件 → Gateway 签发 → MCP 验签；模型和工单仍为替身。", { exact: true }).waitFor();
     assert.equal(await page.getByText("SYNTHETIC_TICKET_SUMMARY", { exact: true }).count(), 1);
     assert.equal(await page.getByText("ticket.close_batch", { exact: false }).count(), 0);
     await page.goto(`${profile.url}/manage/agents`);
@@ -52,10 +53,17 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
     await page.getByRole("button", { name: "确认收口此回执", exact: true }).click();
     await phase(page, runId, "completed", tokens.alice);
     await page.getByText("助手：模拟工单摘要：SYNTHETIC-1 / 设备无法连接 / open", { exact: true }).waitFor();
+    await page.getByRole("region", { name: "任务结果摘要" }).getByText("可见工具结果事件：成功 1 · 失败或拒绝 0 · 状态未知 0", { exact: true }).waitFor();
     const response = await page.request.get(`${profile.runtime}/v1/runs/${runId}/events`, { headers: { Authorization: `Bearer ${tokens.alice}` } });
     assert.equal(response.status(), 200);
     const events = await response.json();
     assert.equal(events.filter(event => event.type === "run.created").length, 1);
+    if (process.env.B3_READ_DEMO === "1") {
+      const stages = ["tool.requested", "tool.decision", "tool.executing", "tool.result"];
+      const sequences = stages.map(type => events.find(event => event.type === type)?.seq);
+      assert.equal(sequences.every(Number.isInteger), true);
+      assert.equal(sequences.every((seq, index) => index === 0 || seq > sequences[index - 1]), true);
+    }
     const requested = events.filter(event => event.type === "tool.requested");
     assert.equal(requested.length, 1); assert.equal(requested[0].payload.tool, "ticket.get");
     const toolResult = events.find(event => event.type === "tool.result");
@@ -79,6 +87,27 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
     assert.equal(failedEvents.some(event => event.type === "tool.result" && event.payload.status === "error"), true);
     assert.equal(failedEvents.some(event => event.type === "model.response" && event.payload.text === "模拟工单查询不可用，未生成摘要。"), true);
     assert.equal(failedEvents.some(event => event.type === "model.response" && event.payload.text.startsWith("模拟工单摘要：")), false);
+    // Result and navigation remain read-only, including reload and a fresh identity application.
+    await page.getByRole("region", { name: "任务结果摘要" }).getByRole("alert").waitFor();
+    const writesBeforeNavigation = apiWrites.length;
+    await page.getByRole("link", { name: "到 Run 只读调试列表", exact: true }).click();
+    await page.waitForURL(url => url.pathname === "/manage/runs" && url.searchParams.get("run") === failedPrepared.run_id);
+    assert.equal(new URL(page.url()).searchParams.get("run"), failedPrepared.run_id);
+    await page.reload();
+    assert.equal(await page.getByRole("region", { name: "任务结果摘要" }).count(), 0);
+    await page.getByLabel("访问令牌", { exact: true }).fill(tokens.alice);
+    await page.getByRole("button", { name: "应用读取身份并清空旧数据", exact: true }).click();
+    await page.getByRole("button", { name: "定位链接中的 Run（尚未读取）", exact: true }).click();
+    await page.getByRole("button", { name: "读取指定 Run", exact: true }).click();
+    await page.getByRole("region", { name: "任务结果摘要" }).getByRole("alert").waitFor();
+    await page.getByRole("link", { name: "返回此 Run 工作台（需重新应用身份）", exact: true }).click();
+    await apply(page, tokens.alice);
+    await page.getByRole("button", { name: "定位链接中的 Run（尚未读取）", exact: true }).click();
+    await page.getByRole("button", { name: "读取 Run 与待办卡片", exact: true }).click();
+    await page.getByRole("region", { name: "任务结果摘要" }).getByRole("alert").waitFor();
+    await apply(page, tokens.bob);
+    assert.equal(await page.getByRole("region", { name: "任务结果摘要" }).count(), 0);
+    assert.equal(apiWrites.length, writesBeforeNavigation);
     await page.goto(`${profile.url}/manage/runs`);
     await page.getByLabel("访问令牌", { exact: true }).fill(tokens.alice);
     await page.getByRole("button", { name: "应用读取身份并清空旧数据", exact: true }).click();
@@ -93,7 +122,7 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
     assert.deepEqual(external, []);
     assert.deepEqual(await page.evaluate(() => [localStorage.getItem("token"), sessionStorage.length]), [null, 0]);
     await page.screenshot({ path: `${process.env.S12_BROWSER_EVIDENCE}/ticket-readonly-trace.png`, fullPage: true });
-    await writeFile(`${process.env.S12_BROWSER_EVIDENCE}/result.json`, JSON.stringify({ agent, run_id: runId, scenario: "ticket-summary-readonly",
+    await writeFile(`${process.env.S12_BROWSER_EVIDENCE}/result.json`, JSON.stringify({ agent, run_id: runId, failed_run_id: failedPrepared.run_id, scenario: "ticket-summary-readonly",
       stages: ["draft", "published_dev_flag", "completed", "trace"], tool: "ticket.get", external_effect: false,
       real_model: false, real_identity: false, real_evaluation: false, trace_events: eventNames.length }, null, 2));
   } finally { await context.close(); await engine.close(); }

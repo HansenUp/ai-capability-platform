@@ -26,6 +26,7 @@ test("隔离Portal：已发布目录→创建登记/执行/ACK→审批→输入
     await page.goto(`${profile.url}/tests/browser/portal-flow.html`);
     await page.getByLabel("搜索 Agent", { exact: true }).fill(agent);
     await page.getByRole("link", { name: agent, exact: true }).click();
+    await page.getByRole("region", { name: "任务体验指南", exact: true }).getByText(/未知写结果先只读恢复/).waitFor();
     await apply(page, tokens.alice);
     assert.equal(await page.getByLabel("Agent ID", { exact: true }).inputValue(), agent);
     await page.getByLabel("消息", { exact: true }).fill("S12_E2E_APPROVAL_THEN_INPUT");
@@ -119,6 +120,18 @@ test("隔离Portal：已发布目录→创建登记/执行/ACK→审批→输入
     assert.equal(mutations.filter(row => row.path === "/v1/workbench/create-attempts").length, 1);
     assert.equal(mutations.some(row => row.path.endsWith("/resume")), false);
     assert.deepEqual(await page.evaluate(() => [localStorage.getItem("token"), sessionStorage.length]), [null, 0]);
+    // SSE deliberately clears the status snapshot; explicitly read state again.
+    await page.getByRole("button", { name: "读取 Run 与待办卡片", exact: true }).click();
+    await page.getByRole("region", { name: "任务结果摘要" }).getByText(/Run 状态：completed/).waitFor();
+    const writesBeforeTrace = mutations.length;
+    const traceEntry = page.getByRole("button", { name: "查看此 Run 只读轨迹", exact: true });
+    await traceEntry.focus(); await page.keyboard.press("Enter");
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "workbench-trace");
+    const trace = page.getByRole("region", { name: "同 Run 只读轨迹", exact: true });
+    assert.equal(await trace.getByRole("heading").innerText(), `执行轨迹 · ${runId}`);
+    assert.equal(await trace.locator("li").count(), events.length);
+    assert.equal(await trace.getByText(/工具结果 · tool.result/).count(), events.filter(row => row.type === "tool.result").length);
+    assert.equal(mutations.length, writesBeforeTrace);
     await page.getByRole("button", { name: "读取本人 Run 首页", exact: true }).click();
     await page.getByRole("status").filter({ hasText: "已读取本人当前 Agent 的 Run 记录" }).waitFor();
     const ownRow = page.getByRole("region", { name: "本人 Run 记录" }).getByRole("listitem").filter({ hasText: runId });
@@ -130,6 +143,8 @@ test("隔离Portal：已发布目录→创建登记/执行/ACK→审批→输入
     await page.getByRole("button", { name: "读取 Run 与待办卡片", exact: true }).click();
     await page.getByText(/Runtime HTTP 404/).waitFor();
     assert.equal(await page.getByRole("heading", { name: new RegExp(runId) }).count(), 0);
+    assert.equal(await page.getByRole("region", { name: "任务结果摘要" }).count(), 0);
+    assert.equal(await page.getByRole("region", { name: "同 Run 只读轨迹", exact: true }).count(), 0);
     const writesBeforeEmbed = mutations.length;
     await page.goto(`${profile.url}/tests/browser/sdk-host.html?run=${encodeURIComponent(runId)}`);
     await page.getByText(`Run ${runId} · completed`, { exact: true }).waitFor();

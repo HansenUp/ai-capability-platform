@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+from pydantic import StringConstraints
+
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -15,17 +18,17 @@ class AgentVersionIn(BaseModel):
     创建/更新一个 Agent 版本快照的请求体。
     """
 
-    agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
+    agent_id: Annotated[str, StringConstraints(min_length=1, max_length=64)] = Field(..., title="Agent Id")
     config: dict[str, Any] | None = Field(None, title="Config")
-    harness: constr(max_length=32) | None = Field(None, title="Harness")
-    model_alias: constr(min_length=1, max_length=64) | None = Field(
+    harness: Annotated[str, StringConstraints(max_length=32)] | None = Field(None, title="Harness")
+    model_alias: Annotated[str, StringConstraints(min_length=1, max_length=64)] | None = Field(
         "default-chat", title="Model Alias"
     )
     system_prompt: str | None = Field("", title="System Prompt")
-    tenant_id: constr(min_length=1, max_length=64) | None = Field(
+    tenant_id: Annotated[str, StringConstraints(min_length=1, max_length=64)] | None = Field(
         "default", title="Tenant Id"
     )
-    version: constr(min_length=1, max_length=32) = Field(..., title="Version")
+    version: Annotated[str, StringConstraints(min_length=1, max_length=32)] = Field(..., title="Version")
 
 
 class ApprovalCall(BaseModel):
@@ -33,8 +36,8 @@ class ApprovalCall(BaseModel):
     批量审批中的一个调用：调用标识与卡片上展示的参数指纹。
     """
 
-    call_id: constr(max_length=128) = Field(..., title="Call Id")
-    params_hash: constr(max_length=64) = Field(..., title="Params Hash")
+    call_id: Annotated[str, StringConstraints(max_length=128)] = Field(..., title="Call Id")
+    params_hash: Annotated[str, StringConstraints(max_length=64)] = Field(..., title="Params Hash")
 
 
 class CardType(StrEnum):
@@ -52,9 +55,9 @@ class CreateBody(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    agent_id: constr(min_length=1, max_length=64) = Field(..., title="Agent Id")
+    agent_id: Annotated[str, StringConstraints(min_length=1, max_length=64)] = Field(..., title="Agent Id")
     attempt_id: UUID = Field(..., title="Attempt Id")
-    text: constr(min_length=1) = Field(..., title="Text")
+    text: Annotated[str, StringConstraints(min_length=1)] = Field(..., title="Text")
 
 
 class StopReason(StrEnum):
@@ -107,8 +110,8 @@ class EvidenceBody(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    fingerprint: constr(pattern=r"^[a-f0-9]{64}$") = Field(..., title="Fingerprint")
-    revision: conint(ge=1, le=9007199254740991) = Field(..., title="Revision")
+    fingerprint: Annotated[str, StringConstraints(pattern='^[a-f0-9]{64}$')] = Field(..., title="Fingerprint")
+    revision: Annotated[int, Field(ge=1, le=9007199254740991)] = Field(..., title="Revision")
     value: Any | None = Field(None, title="Value")
 
 
@@ -117,9 +120,9 @@ class FeedbackBody(BaseModel):
     对一次 Run 的用户反馈：点赞 +1 / 点踩 -1，可附说明或修正后的正确答案（可沉淀为评测样本）。
     """
 
-    comment: constr(max_length=2000) | None = Field("", title="Comment")
-    correction: constr(max_length=8000) | None = Field(None, title="Correction")
-    score: confloat(ge=-1.0, le=1.0) = Field(..., title="Score")
+    comment: Annotated[str, StringConstraints(max_length=2000)] | None = Field("", title="Comment")
+    correction: Annotated[str, StringConstraints(max_length=8000)] | None = Field(None, title="Correction")
+    score: Annotated[float, Field(ge=-1.0, le=1.0)] = Field(..., title="Score")
 
 
 class Action(StrEnum):
@@ -145,7 +148,7 @@ class InputBody(BaseModel):
     """
 
     action: Action | None = Field(None, title="Action")
-    call_id: constr(max_length=128) | None = Field(None, title="Call Id")
+    call_id: Annotated[str, StringConstraints(max_length=128)] | None = Field(None, title="Call Id")
     kind: Kind = Field(..., title="Kind")
     value: Any | None = Field(None, title="Value")
 
@@ -177,7 +180,7 @@ class MessagesRequest(BaseModel):
     attachments: list[str] | None = Field(None, max_length=10, title="Attachments")
     messages: list[dict[str, Any]] = Field(..., title="Messages")
     metadata: dict[str, Any] | None = Field(None, title="Metadata")
-    session_id: constr(max_length=40) | None = Field(None, title="Session Id")
+    session_id: Annotated[str, StringConstraints(max_length=40)] | None = Field(None, title="Session Id")
     stream: bool | None = Field(True, title="Stream")
 
 
@@ -186,11 +189,11 @@ class Prepare(BaseModel):
         extra="forbid",
     )
     attempt_id: UUID = Field(..., title="Attempt Id")
-    expected_revision: conint(ge=0, le=2147483646) = Field(
+    expected_revision: Annotated[int, Field(ge=0, le=2147483646)] = Field(
         ..., title="Expected Revision"
     )
-    run_id: constr(min_length=1, max_length=40) = Field(..., title="Run Id")
-    score: conint(ge=-1, le=1) = Field(..., title="Score")
+    run_id: Annotated[str, StringConstraints(min_length=1, max_length=40)] = Field(..., title="Run Id")
+    score: Annotated[int, Field(ge=-1, le=1)] = Field(..., title="Score")
 
 
 class Action1(StrEnum):
@@ -206,16 +209,16 @@ class PrepareBody(BaseModel):
     )
     action: Action1 | None = Field("credential", title="Action")
     attempt_id: UUID = Field(..., title="Attempt Id")
-    call_id: constr(min_length=1, max_length=128) | None = Field(None, title="Call Id")
-    params_hash: constr(min_length=1, max_length=64) | None = Field(
+    call_id: Annotated[str, StringConstraints(min_length=1, max_length=128)] | None = Field(None, title="Call Id")
+    params_hash: Annotated[str, StringConstraints(min_length=1, max_length=64)] | None = Field(
         None, title="Params Hash"
     )
-    run_id: constr(min_length=1, max_length=40) = Field(..., title="Run Id")
+    run_id: Annotated[str, StringConstraints(min_length=1, max_length=40)] = Field(..., title="Run Id")
     value: Any | None = Field(None, title="Value")
 
 
-class RolloutAllowlistItem(RootModel[constr(max_length=128)]):
-    root: constr(max_length=128)
+class RolloutAllowlistItem(RootModel[Annotated[str, StringConstraints(max_length=128)]]):
+    root: Annotated[str, StringConstraints(max_length=128)]
 
 
 class PublishIn(BaseModel):
@@ -228,7 +231,7 @@ class PublishIn(BaseModel):
     rollout_allowlist: list[RolloutAllowlistItem] | None = Field(
         None, max_length=1000, title="Rollout Allowlist"
     )
-    rollout_percent: conint(ge=0, le=100) | None = Field(100, title="Rollout Percent")
+    rollout_percent: Annotated[int, Field(ge=0, le=100)] | None = Field(100, title="Rollout Percent")
 
 
 class ResumeBody(BaseModel):
@@ -241,8 +244,8 @@ class ResumeBody(BaseModel):
     messages: list[dict[str, Any]] | None = Field(None, title="Messages")
 
 
-class AllowlistItem(RootModel[constr(max_length=128)]):
-    root: constr(max_length=128)
+class AllowlistItem(RootModel[Annotated[str, StringConstraints(max_length=128)]]):
+    root: Annotated[str, StringConstraints(max_length=128)]
 
 
 class RolloutIn(BaseModel):
@@ -253,7 +256,7 @@ class RolloutIn(BaseModel):
     allowlist: list[AllowlistItem] | None = Field(
         None, max_length=1000, title="Allowlist"
     )
-    percent: conint(ge=0, le=100) = Field(..., title="Percent")
+    percent: Annotated[int, Field(ge=0, le=100)] = Field(..., title="Percent")
 
 
 class RunCreate(BaseModel):
@@ -266,7 +269,7 @@ class RunCreate(BaseModel):
     attachments: list[str] | None = Field(None, max_length=10, title="Attachments")
     input: list[dict[str, Any]] = Field(..., title="Input")
     mode: str | None = Field("async", title="Mode")
-    session_id: constr(max_length=40) | None = Field(None, title="Session Id")
+    session_id: Annotated[str, StringConstraints(max_length=40)] | None = Field(None, title="Session Id")
 
 
 class RunEventType(StrEnum):

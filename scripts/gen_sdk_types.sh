@@ -25,6 +25,7 @@ for svc in runtime gateway; do
     --output-datetime-class datetime \
     --disable-timestamp \
     --custom-file-header "# 由 scripts/gen_sdk_types.sh 根据 docs/api/${svc}-openapi.json 自动生成，请勿手改。"
+  "$VENV/bin/python" "$ROOT/scripts/normalize_sdk_types.py" "$PY_OUT/types_${svc}.py"
 done
 
 # Web SDK 的生成命令定义在 packages/sdk-web/package.json 的 gen:types 脚本中

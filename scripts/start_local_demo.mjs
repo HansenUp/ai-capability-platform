@@ -11,7 +11,8 @@ const requireConsole = createRequire(join(root, "apps/console-web/package.json")
 const { createServer } = await import(requireConsole.resolve("vite"));
 const { default: vue } = await import(requireConsole.resolve("@vitejs/plugin-vue"));
 const temporary = await mkdtemp(join(tmpdir(), "ai-platform-demo-")), metadata = join(temporary, "fixture.json");
-const ticketReadonly = process.argv.includes("--ticket-readonly");
+const b3Read = process.argv.includes("--b3-read");
+const ticketReadonly = b3Read || process.argv.includes("--ticket-readonly");
 const evidence = process.env.S12_DEMO_EVIDENCE || join(root, ticketReadonly ? "docs/evidence/s4/2026-10-27-readonly-demo" : "docs/evidence/s12/2026-10-26-local-demo");
 const verifyOnly = process.argv.includes("--verify-only");
 const safeEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: temporary, LANG: "en_US.UTF-8", PYTHONUNBUFFERED: "1" };
@@ -20,7 +21,7 @@ const stop = () => { interrupted = true; tests?.kill("SIGTERM"); };
 process.on("SIGINT", stop); process.on("SIGTERM", stop);
 try {
   await mkdir(evidence, { recursive: true });
-  fixture = spawn(join(root, ".venv/bin/python"), ["scripts/verify_s12_workbench.py", "--serve", "--browser-info", metadata, "--demo-no-migrations", ...(ticketReadonly ? ["--ticket-readonly-demo"] : [])],
+  fixture = spawn(join(root, ".venv/bin/python"), ["scripts/verify_s12_workbench.py", "--serve", "--browser-info", metadata, "--demo-no-migrations", ...(ticketReadonly ? ["--ticket-readonly-demo"] : []), ...(b3Read ? ["--b3-read-demo"] : [])],
     { cwd: root, env: safeEnv, stdio: ["ignore", "pipe", "pipe"] });
   fixture.stdout.on("data", value => { fixtureLog += value.toString(); }); fixture.stderr.on("data", value => { fixtureLog += value.toString(); });
   const deadline = Date.now() + 40000;
@@ -42,7 +43,7 @@ try {
         response.setHeader("Cache-Control", "no-store"); response.setHeader("Referrer-Policy", "no-referrer");
         response.setHeader("Content-Type", path === "/demo" ? "text/html; charset=utf-8" : "application/json");
         response.end(path === "/demo" ? await readFile(join(root, ticketReadonly ? "scripts/local_demo_ticket_readonly.html" : "scripts/local_demo.html"), "utf8")
-          : JSON.stringify({ tokens: { alice: tokens.alice, bob: tokens.bob }, expires_at: new Date(expiresAt).toISOString(), verified, portal: info.portal }));
+          : JSON.stringify({ tokens: { alice: tokens.alice, bob: tokens.bob }, expires_at: new Date(expiresAt).toISOString(), verified, portal: info.portal, b3_read: b3Read }));
       });
     },
   }], define: { "import.meta.env.VITE_ISOLATED_DEMO": JSON.stringify("1"), "import.meta.env.VITE_LANGFUSE_HOST": JSON.stringify("http://127.0.0.1:1"), "import.meta.env.VITE_LANGFUSE_PROJECT_ID": JSON.stringify("") },
@@ -68,9 +69,17 @@ try {
   info.portal = portalUrl;
   tests = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-timeout=30000", ...(ticketReadonly ? ["apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ["apps/console-web/tests/browser/a-demo-navigation.test.mjs", "apps/console-web/tests/browser/e2e.test.mjs", "apps/console-web/tests/browser/local-demo-trace.test.mjs"])],
     { cwd: root, env: { ...safeEnv, S12_BROWSER_URL: base, S12_RUNTIME_URL: info.runtime, S12_TEST_TOKEN_FILE: info.tokens,
-      S12_BROWSER_EVIDENCE: evidence, PLAYWRIGHT_MODULE: process.env.PLAYWRIGHT_MODULE }, stdio: "inherit" });
+      S12_BROWSER_EVIDENCE: evidence, B3_READ_DEMO: b3Read ? "1" : "", PLAYWRIGHT_MODULE: process.env.PLAYWRIGHT_MODULE }, stdio: "inherit" });
   const [code] = await once(tests, "exit"); if (code !== 0) throw new Error("Demo main-chain browser validation failed");
   verified = JSON.parse(await readFile(join(evidence, "result.json"), "utf8"));
+  if (b3Read) {
+    const contexts = fixtureLog.split("\n").filter(line => line.startsWith("B3_VERIFIED ")).map(line => JSON.parse(line.slice(12)));
+    for (const runId of [verified.run_id, verified.failed_run_id]) {
+      if (contexts.filter(row => row.run_id === runId && row.call_id === "ticket-read" && row.verified).length !== 1)
+        throw new Error("B3 browser run lacks exactly one verified Gateway/MCP context");
+    }
+    await writeFile(join(evidence, "b3-contexts.json"), JSON.stringify(contexts, null, 2));
+  }
   await writeFile(join(temporary, "access.json"), JSON.stringify({ url: base + "/demo", expires_at: new Date(expiresAt).toISOString(), pid: process.pid }), { mode: 0o600 });
   console.log(`DEMO_READY ${base}/demo expires=${new Date(expiresAt).toISOString()} pid=${process.pid} portal=${portalUrl}`);
   while (!verifyOnly && !interrupted && Date.now() < expiresAt && fixture.exitCode === null) await sleep(500);

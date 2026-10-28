@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, reactive, ref } from "vue";
+import { useRoute } from "vue-router";
+import RunOutcome from "../components/RunOutcome.vue";
+import { eventStage, runHint } from "../run-outcome";
 import { demoContextKey } from "../demo-context";
 import { doneTrace, mergeEvents, traceLink, type RunEvent } from "../run-debug";
 interface Run { run_id: string; agent_id: string; agent_version: string; subject: string; state: string; last_seq: number; created_at: string }
+const route = useRoute();
+const linkedRun = computed(() => runHint(route?.query.run));
 const mode = ref("token");
 const token = ref("");
 const subject = ref("human:ops");
@@ -37,7 +42,7 @@ function clear() { rows.value = []; cursor.value = null; selected.value = null; 
 function apply() {
   if (busy.value) return;
   generation += 1;
-  clear();
+  clear(); runId.value = "";
   for (const key of Object.keys(credentials)) delete credentials[key];
   applied.value = false;
   if (mode.value === "token" && token.value.trim()) credentials.Authorization = `Bearer ${token.value.trim()}`;
@@ -131,10 +136,13 @@ onBeforeUnmount(() => { generation += 1; controller?.abort(); for (const key of 
   <fieldset :disabled="busy || !applied"><legend>Run 列表与定位</legend>
     <label>Agent 筛选 <input v-model="agent" maxlength="64" /></label><button @click="list()">刷新 Run 列表</button>
     <button :disabled="!cursor" @click="list(true)">加载下一页</button>
+    <button v-if="linkedRun" @click="runId = linkedRun">定位链接中的 Run（尚未读取）</button>
     <label>Run ID <input v-model="runId" /></label><button @click="inspect(runId.trim())">读取指定 Run</button>
     <table border="1"><thead><tr><th>Run</th><th>Agent / 版本</th><th>状态</th><th>主体</th></tr></thead><tbody><tr v-for="row in rows" :key="row.run_id"><td><button @click="inspect(row.run_id)">{{ row.run_id }}</button></td><td>{{ row.agent_id }}@{{ row.agent_version }}</td><td>{{ row.state }}</td><td>{{ row.subject }}</td></tr></tbody></table>
   </fieldset>
   <section v-if="selected"><h3>{{ selected.run_id }} · {{ selected.state }}</h3>
+    <RunOutcome :state="selected.state" :events="events" />
+    <router-link :to="{ path: '/chat', query: { run: selected.run_id } }">返回此 Run 工作台（需重新应用身份）</router-link>
     <button :disabled="busy" @click="inspect(selected.run_id, true)">增量刷新轨迹</button>
     <button :disabled="busy" @click="inspect(selected.run_id)">重新完整读取</button>
     <p>序号 {{ events.at(-1)?.seq ?? 0 }} / 快照 last_seq {{ selected.last_seq }}。手动刷新；受限审批视图允许序号缺口，不推断为日志丢失。读取权限变化后请重新完整读取，补齐此前不可见的事件。</p>
@@ -143,6 +151,7 @@ onBeforeUnmount(() => { generation += 1; controller?.abort(); for (const key of 
     <p>轨迹可能含敏感数据，仅当前页面展示，不写浏览器存储；展开查看原始负载。</p>
     <ol><li v-for="event in events" :key="event.seq"><b>#{{ event.seq }} {{ event.type }}</b> · {{ event.ts }}
       <p v-if="event.type.startsWith('tool.')">调用 {{ event.payload.call_id }} · {{ event.payload.tool ?? toolNames.get(event.payload.call_id) }} · 判定 {{ event.payload.decision }} · 原因 {{ event.payload.reason }} · 状态 {{ event.payload.status }}</p>
+      <p>阶段：{{ eventStage(event.type) }}</p>
       <details><summary>事件负载</summary><pre>{{ JSON.stringify(event.payload, null, 2) }}</pre></details>
     </li></ol>
   </section>

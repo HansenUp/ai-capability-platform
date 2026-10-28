@@ -22,7 +22,10 @@ def main() -> None:
     parser.add_argument("--browser-info", type=Path)
     parser.add_argument("--demo-no-migrations", action="store_true")
     parser.add_argument("--ticket-readonly-demo", action="store_true")
+    parser.add_argument("--b3-read-demo", action="store_true")
     args = parser.parse_args()
+    if args.b3_read_demo and not args.ticket_readonly_demo:
+        parser.error("--b3-read-demo requires --ticket-readonly-demo")
     if args.browser_info and (not args.serve or args.browser_info.exists()):
         parser.error("--browser-info requires --serve and a new output path")
     if args.ticket_readonly_demo and not args.demo_no_migrations:
@@ -228,6 +231,10 @@ def main() -> None:
         return {"simulation": True, "external_effect": False}
 
     toolbroker._dev_execute = synthetic
+    if args.b3_read_demo:
+        import b3_read_fixture
+
+        b3_read_fixture.install(provider, synthetic)
     selected_port = port()
     allowed_ports.add(selected_port)
     tokens = {name: provider.token({"sub": name, "exp": int(time.time()) + 1800}) for name in ["alice", "bob"]}

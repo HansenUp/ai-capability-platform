@@ -1,6 +1,7 @@
 <!-- 可用 Agent 列表：读取 Runtime /v1/agents（调用方租户内已发布的 Agent，以及按灰度规则该用户会用到的版本） -->
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref } from "vue";
+import TaskGuide from "../../../console-web/src/components/TaskGuide.vue";
 import { getToken } from "../auth";
 import { portalTokenKey } from "../runtime-session";
 import { inject } from "vue";
@@ -32,6 +33,7 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-kicker">YOUR AGENT WORKSPACE</div><h2>可用 Agent</h2><p>选择已发布的 Agent，开始一项新任务或继续查看已有 Run。</p>
+  <TaskGuide />
   <label>搜索 Agent <input v-model="query" /></label>
   <p v-if="loading">正在读取已发布 Agent…</p>
   <p v-else-if="!error && !visible.length">没有匹配的可用 Agent。</p>
