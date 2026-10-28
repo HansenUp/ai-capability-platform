@@ -89,6 +89,10 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
     assert.equal(failedEvents.some(event => event.type === "model.response" && event.payload.text.startsWith("模拟工单摘要：")), false);
     // Result and navigation remain read-only, including reload and a fresh identity application.
     await page.getByRole("region", { name: "任务结果摘要" }).getByRole("alert").waitFor();
+    const recovery = page.getByRole("region", {name:"失败原因与只读恢复", exact:true});
+    await recovery.getByText(/工具返回错误/).waitFor();
+    assert.equal(await recovery.getByRole("button").count(), 0);
+    await recovery.getByText(/404或空列表都不是解锁证据/).waitFor();
     const writesBeforeNavigation = apiWrites.length;
     await page.getByRole("link", { name: "到 Run 只读调试列表", exact: true }).click();
     await page.waitForURL(url => url.pathname === "/manage/runs" && url.searchParams.get("run") === failedPrepared.run_id);

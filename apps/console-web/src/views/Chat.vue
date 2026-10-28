@@ -405,7 +405,7 @@ onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?
   <h3 id="workbench-results" tabindex="-1">执行结果与待办</h3>
   <p v-if="!run" class="empty-state">尚未读取 Run。请填写 Run ID 并点击“读取 Run 与待办卡片”；空白页面不表示任务不存在或写锁已解除。</p>
   <section v-if="run"><h3>{{ run.run_id }} · {{ run.state }} · 发起人 {{ run.subject }}</h3>
-    <RunOutcome :state="run.state" :events="events" />
+    <RunOutcome :state="run.state" :events="events" :receipt="activeAttempt ? { status: activeAttempt.status, runId: activeAttempt.run_id } : null" />
     <template v-if="props.portalTokenProvider">
       <button type="button" @click="navigateSection('workbench-trace')">查看此 Run 只读轨迹</button>
       <section aria-label="同 Run 只读轨迹">

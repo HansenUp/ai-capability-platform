@@ -97,6 +97,9 @@ test("隔离Portal：已发布目录→创建登记/执行/ACK→审批→输入
     await page.getByRole("button", { name: "确认执行已登记回答一次", exact: true }).click();
     await page.getByRole("button", { name: "预览本人确认收口", exact: true }).waitFor();
     await phase(page, runId, "completed", tokens.alice);
+    const recovery = page.getByRole("region", {name:"失败原因与只读恢复",exact:true});
+    await recovery.getByText(/已取得终结状态仍不自动解锁/).waitFor();
+    assert.equal(await recovery.getByRole("button").count(),0);
     assert.equal(await page.getByRole("button", { name: "登记新 Run（尚未创建）", exact: true }).isDisabled(), true);
     await page.getByRole("button", { name: "预览本人确认收口", exact: true }).click();
     await page.getByRole("button", { name: "确认收口此回执", exact: true }).click();
