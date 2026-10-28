@@ -15,11 +15,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from capability_gateway import act, config, main
 from mcp_template import jwks
 from mcp_template.act import ActConfig, replay_cache, verify_act_assertion
-from runtime.api import auth
-from runtime.config import settings
-from runtime.guard.gate import params_hash
-from runtime.isolated_read import invoke_read
-from runtime.state.db import AgentVersion, Base, Run, RunEventRow
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +28,12 @@ def no_network(monkeypatch):
 
 @pytest.fixture
 async def ledger(tmp_path, monkeypatch, keycloak, ticket_connector):
+    # Runtime test conftest must establish its environment before Settings/DB
+    # are imported. Cross-service collection must not freeze default settings.
+    from runtime.api import auth
+    from runtime.config import settings
+    from runtime.guard.gate import params_hash
+    from runtime.state.db import AgentVersion, Base, Run, RunEventRow
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'read.db'}")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -95,6 +96,8 @@ async def ledger(tmp_path, monkeypatch, keycloak, ticket_connector):
 
 
 async def execute(ledger, keycloak, **changes):
+    from runtime.isolated_read import invoke_read
+
     return await invoke_read(
         ledger,
         **(
@@ -155,6 +158,8 @@ async def test_persisted_context_to_signed_assertion(ledger, keycloak):
     ],
 )
 async def test_fail_closed(ledger, keycloak, failure):
+    from runtime.state.db import AgentVersion, Run, RunEventRow
+
     changes = {}
     if failure in {"subject", "tenant"}:
         changes["user_token"] = keycloak.idp.user_token(**({"sub": "other"} if failure == "subject" else {"tenant": "other"}))
