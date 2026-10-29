@@ -23,3 +23,7 @@ docs/evidence/
 **/playwright-report/
 **/test-results/
 *.pid
+
+# Local-only process docs (not tracked)
+docs/*
+!docs/architecture/
