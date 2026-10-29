@@ -11,7 +11,7 @@
       "dsh": "0.2.0-rc.2"
     },
     "goose_bin": "/opt/homebrew/bin/goose",
-    "dsh_bin": "/Users/mahansen/.local/share/ai-platform/dsh/node_modules/.bin/dsh",
+    "dsh_bin": "~/.local/share/ai-platform/dsh/node_modules/.bin/dsh",
     "litellm_version": "1.107.0",
     "litellm_langfuse_keys": true
   },
