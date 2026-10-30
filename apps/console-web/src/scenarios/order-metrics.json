@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "scenario_id": "order-metrics-readonly",
+  "mode": "isolated-synthetic",
+  "agent": {
+    "system_prompt": "仅解释权威订单聚合。当前状态、创建窗口、分币种，不是财务收入；未知不补零，截断/失败不得显示正式总量。",
+    "model_alias": "synthetic-analytics",
+    "harness": "mock",
+    "config": {
+      "tools": [
+        "analytics.orders"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "success",
+      "message": "SYNTHETIC_ORDER_SUMMARY",
+      "expected_text": "3",
+      "tool_status": "ok"
+    },
+    {
+      "id": "incomplete",
+      "message": "SYNTHETIC_ORDER_INCOMPLETE",
+      "expected_text": "1",
+      "tool_status": "ok"
+    },
+    {
+      "id": "empty",
+      "message": "SYNTHETIC_ORDER_EMPTY",
+      "expected_text": "0",
+      "tool_status": "ok"
+    }
+  ]
+}

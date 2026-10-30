@@ -19,7 +19,7 @@ import fnmatch
 import logging
 import re
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from ai_contract import HOOK_OVERRIDABLE, HookPoint, HookSet
@@ -146,7 +146,21 @@ async def _thinking_summary(params: dict[str, Any], payload: dict[str, Any]) -> 
         extra=None if dc.fallbacks_allowed(alias, level, settings) else {"disable_fallbacks": True},
     )
     text = resp.text.strip()[:max_chars]
-    return {"thinking_summary": text} if text else None
+    return (
+        {
+            "thinking_summary": text,
+            "_model_usage_record": {
+                "source": "thinking_summary",
+                "requested_alias": alias,
+                "response_model": resp.model,
+                "usage": asdict(resp.usage),
+                "coverage": "response_record_only",
+                "billing_verified": False,
+            },
+        }
+        if text
+        else None
+    )
 
 
 def _validate_deny_tool_pattern(params: dict[str, Any]) -> list[str]:
@@ -352,6 +366,9 @@ class HookChain:
                     record |= {"verdict": "deny", "reason": str(result["deny"])}
                     out.denied_by, out.reason = spec.name, record["reason"]
                     return out
+                # Diagnostic metadata from the fixed builtin, never a new override permission.
+                if spec.name == "thinking_summary" and point == HookPoint.POST_MODEL and "_model_usage_record" in result:
+                    record["model_usage_record"] = result.pop("_model_usage_record")
                 ignored = sorted(k for k in result if k not in allowed)
                 if ignored:
                     log.warning("hook %s at %s returned non-overridable keys %s; ignored", spec.name, point.value, ignored)

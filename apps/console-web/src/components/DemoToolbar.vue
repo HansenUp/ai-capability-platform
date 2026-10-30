@@ -16,7 +16,8 @@ const demo = inject(demoContextKey)!;
     <p><a href="/demo" target="_blank" rel="noopener">完整体验说明</a> ·
       <router-link to="/manage/agents">① 配置与发布</router-link> →
       <router-link to="/chat">② 对话／审批／补充输入</router-link> →
-      <router-link to="/manage/runs">③ 同Run只读轨迹</router-link>
+      <router-link to="/manage/runs">③ 同Run只读轨迹</router-link> ·
+      <router-link v-if="demo.alertsReady.value" to="/manage/alerts">④ 合成告警体验</router-link>
     </p>
     <small>切换主体会清空并卸载当前数据；新页面须显式应用身份。这里只保留内存定位，不授予管理角色，不解锁服务端未决写，不自动执行或确认回执。审批与本人ACK步骤保持不变。</small>
   </aside>

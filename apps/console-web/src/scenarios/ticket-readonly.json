@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "scenario_id": "ticket-summary-readonly",
+  "mode": "isolated-synthetic",
+  "agent": {
+    "system_prompt": "仅依据本次获准读取的工单字段总结；查询失败应明确不可用，不编造摘要。",
+    "model_alias": "default-chat",
+    "harness": "mock",
+    "config": {
+      "tools": [
+        "ticket.get"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "success",
+      "message": "SYNTHETIC_TICKET_SUMMARY",
+      "expected_text": "模拟工单摘要：SYNTHETIC-1 / 设备无法连接 / open",
+      "tool_status": "ok"
+    },
+    {
+      "id": "failure",
+      "message": "SYNTHETIC_TICKET_FAILURE",
+      "expected_text": "模拟工单查询不可用，未生成摘要。",
+      "tool_status": "error"
+    }
+  ]
+}

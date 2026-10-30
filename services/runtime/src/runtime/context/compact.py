@@ -21,7 +21,7 @@ import hashlib
 import hmac
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from ai_contract.data_class import Level
@@ -143,6 +143,8 @@ class Compaction:
     data_class: str
     fallback: str | None = None  # llm 模式退回截断的原因（data_class / llm_error），有才写
 
+    model_usage_record: dict[str, Any] | None = None  # diagnostic only, not execution-budget input
+
     def payload(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "upto_index": self.upto_index,
@@ -154,6 +156,8 @@ class Compaction:
         }
         if self.fallback:
             out["fallback"] = self.fallback
+        if self.model_usage_record is not None:
+            out["model_usage_record"] = self.model_usage_record
         return out
 
     def apply(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -161,7 +165,9 @@ class Compaction:
         return [{"role": "system", "content": f"{SUMMARY_PREFIX}{self.summary}"}, *history[self.upto_index :]]
 
 
-async def _llm_summary(alias: str, messages: list[dict[str, Any]], max_chars: int, request_extra: dict[str, Any]) -> str:
+async def _llm_summary(
+    alias: str, messages: list[dict[str, Any]], max_chars: int, request_extra: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
     from runtime import llm  # 延迟导入：llm 客户端依赖 config，避免包初始化时的循环导入
 
     resp = await llm.get_client().chat(
@@ -174,7 +180,14 @@ async def _llm_summary(alias: str, messages: list[dict[str, Any]], max_chars: in
     text = (resp.text or "").strip()
     if not text:
         raise ValueError("summary model returned empty text")
-    return text[:max_chars]
+    return text[:max_chars], {
+        "source": "context_compaction",
+        "requested_alias": alias,
+        "response_model": resp.model,
+        "usage": asdict(resp.usage),
+        "coverage": "response_record_only",
+        "billing_verified": False,
+    }
 
 
 async def plan_compaction(
@@ -203,11 +216,12 @@ async def plan_compaction(
     max_chars = max(200, min(c.context_summary_max_chars, conf.history_budget_tokens * 3 // 4))
     method, fallback = conf.method, None
     summary = ""
+    usage_record = None
     if method == "llm" and not model_allowed(conf.summary_model_alias, level):
         method, fallback = "truncate", "data_class"  # 数据分级矩阵不准许把该等级的上下文发给摘要模型：不出网
     if method == "llm":
         try:
-            summary = await _llm_summary(conf.summary_model_alias, dropped, max_chars, request_extra or {})
+            summary, usage_record = await _llm_summary(conf.summary_model_alias, dropped, max_chars, request_extra or {})
         except Exception as exc:  # 摘要失败不阻断 Run：退回截断模式（确定性）
             logger.warning("compaction summary via %s failed: %s", conf.summary_model_alias, exc)
             method, fallback = "truncate", "llm_error"
@@ -215,4 +229,4 @@ async def plan_compaction(
         summary = truncate_summary(dropped, max_chars)
     result = Compaction(k, summary, method, {"before": before, "after": 0}, dropped_hmac(dropped, c), level.value, fallback)
     after = history_tokens(result.apply(history))
-    return Compaction(k, summary, method, {"before": before, "after": after}, result.dropped_hmac, level.value, fallback)
+    return Compaction(k, summary, method, {"before": before, "after": after}, result.dropped_hmac, level.value, fallback, usage_record)

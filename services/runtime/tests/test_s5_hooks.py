@@ -580,7 +580,16 @@ def test_summary_visibility_llm_mode_streams_one_summary(client, monkeypatch):
     assert seen and seen[0]["model"] == "summary-fast-2026-10" and seen[0]["messages"][1]["content"] == "第一段思考。第二段思考。"
     resp = _one(log, "model.response")
     assert resp["thinking"] == "第一段思考。第二段思考。" and resp["thinking_summary"] == "先查工单再总结"
-    assert resp["hooks"] == [{"point": "post_model", "name": "thinking_summary", "verdict": "override"}]
+    records = resp["hooks"]
+    assert len(records) == 1
+    record = records[0]["model_usage_record"]
+    assert record["source"] == "thinking_summary" and record["billing_verified"] is False
+    assert record["coverage"] == "response_record_only"
+    assert {k: v for k, v in records[0].items() if k != "model_usage_record"} == {
+        "point": "post_model",
+        "name": "thinking_summary",
+        "verdict": "override",
+    }
 
 
 def test_summary_llm_failure_streams_nothing(client, monkeypatch):

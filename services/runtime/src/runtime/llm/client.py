@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import time
 import uuid
@@ -99,6 +100,10 @@ class LLMUsage:
     # 用于把 reasoning_content 纳入上下文预算统计。
     reasoning_tokens: int = 0
     cost: float = 0.0  # 网关计算的本次调用成本（usage.cost），缺失为 0
+    # Diagnostic provenance only; legacy values and execution-budget arithmetic are unchanged.
+    input_reported: bool = False
+    output_reported: bool = False
+    cost_reported: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,6 +171,9 @@ def _usage_from(raw: Mapping[str, Any] | None, reasoning_text: str) -> LLMUsage:
         cache_read_tokens=_int(prompt_details.get("cached_tokens")),
         reasoning_tokens=_int(reported) if isinstance(reported, int | float) else len(reasoning_text) // 3,
         cost=float(cost) if isinstance(cost, int | float) else 0.0,
+        input_reported=type(raw.get("prompt_tokens")) is int and raw["prompt_tokens"] >= 0,
+        output_reported=type(raw.get("completion_tokens")) is int and raw["completion_tokens"] >= 0,
+        cost_reported=type(cost) in (int, float) and math.isfinite(cost) and cost >= 0,
     )
 
 

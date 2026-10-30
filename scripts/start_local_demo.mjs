@@ -12,8 +12,11 @@ const { createServer } = await import(requireConsole.resolve("vite"));
 const { default: vue } = await import(requireConsole.resolve("@vitejs/plugin-vue"));
 const temporary = await mkdtemp(join(tmpdir(), "ai-platform-demo-")), metadata = join(temporary, "fixture.json");
 const b3Read = process.argv.includes("--b3-read");
-const ticketReadonly = b3Read || process.argv.includes("--ticket-readonly");
-const evidence = process.env.S12_DEMO_EVIDENCE || join(root, ticketReadonly ? "docs/evidence/s4/2026-10-27-readonly-demo" : "docs/evidence/s12/2026-10-26-local-demo");
+const f6Readonly = process.argv.includes("--f6-readonly");
+const analyticsReadonly = f6Readonly || process.argv.includes("--analytics-readonly");
+const salesReadonly = process.argv.includes("--sales-readonly");
+const ticketReadonly = analyticsReadonly || salesReadonly || b3Read || process.argv.includes("--ticket-readonly");
+const evidence = process.env.S12_DEMO_EVIDENCE || join(root, f6Readonly ? `docs/evidence/f6/local-demo-${Date.now()}` : ticketReadonly ? "docs/evidence/s4/2026-10-27-readonly-demo" : "docs/evidence/s12/2026-10-26-local-demo");
 const verifyOnly = process.argv.includes("--verify-only");
 const safeEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: temporary, LANG: "en_US.UTF-8", PYTHONUNBUFFERED: "1" };
 let server, portal, fixture, tests, info, interrupted = false, fixtureLog = "", base;
@@ -21,7 +24,7 @@ const stop = () => { interrupted = true; tests?.kill("SIGTERM"); };
 process.on("SIGINT", stop); process.on("SIGTERM", stop);
 try {
   await mkdir(evidence, { recursive: true });
-  fixture = spawn(join(root, ".venv/bin/python"), ["scripts/verify_s12_workbench.py", "--serve", "--browser-info", metadata, "--demo-no-migrations", ...(ticketReadonly ? ["--ticket-readonly-demo"] : []), ...(b3Read ? ["--b3-read-demo"] : [])],
+  fixture = spawn(join(root, ".venv/bin/python"), ["scripts/verify_s12_workbench.py", "--serve", "--browser-info", metadata, "--demo-no-migrations", ...(ticketReadonly ? ["--ticket-readonly-demo"] : []), ...(b3Read ? ["--b3-read-demo"] : []), ...(analyticsReadonly ? ["--analytics-readonly-demo"] : [])],
     { cwd: root, env: safeEnv, stdio: ["ignore", "pipe", "pipe"] });
   fixture.stdout.on("data", value => { fixtureLog += value.toString(); }); fixture.stderr.on("data", value => { fixtureLog += value.toString(); });
   const deadline = Date.now() + 40000;
@@ -43,7 +46,7 @@ try {
         response.setHeader("Cache-Control", "no-store"); response.setHeader("Referrer-Policy", "no-referrer");
         response.setHeader("Content-Type", path === "/demo" ? "text/html; charset=utf-8" : "application/json");
         response.end(path === "/demo" ? await readFile(join(root, ticketReadonly ? "scripts/local_demo_ticket_readonly.html" : "scripts/local_demo.html"), "utf8")
-          : JSON.stringify({ tokens: { alice: tokens.alice, bob: tokens.bob }, expires_at: new Date(expiresAt).toISOString(), verified, portal: info.portal, b3_read: b3Read }));
+          : JSON.stringify({ tokens: { alice: tokens.alice, bob: tokens.bob }, alert_tokens: { alice: tokens.alert_alice, bob: tokens.alert_bob }, policy_tokens: { policy_maintainer: tokens.policy_maintainer, policy_reviewer_a: tokens.policy_reviewer_a, policy_reviewer_b: tokens.policy_reviewer_b }, view_tokens: { view_maintainer: tokens.view_maintainer, view_reviewer_a: tokens.view_reviewer_a, view_reviewer_b: tokens.view_reviewer_b }, expires_at: new Date(expiresAt).toISOString(), verified, portal: info.portal, b3_read: b3Read, f6: f6Readonly, scenarios: ticketReadonly ? ["ticket", "sales", ...(analyticsReadonly ? ["orders"] : [])] : [] }));
       });
     },
   }], define: { "import.meta.env.VITE_ISOLATED_DEMO": JSON.stringify("1"), "import.meta.env.VITE_LANGFUSE_HOST": JSON.stringify("http://127.0.0.1:1"), "import.meta.env.VITE_LANGFUSE_PROJECT_ID": JSON.stringify("") },
@@ -67,11 +70,15 @@ try {
   await new Promise((ready, reject) => { portal.httpServer.once("error", reject); portal.httpServer.listen(0, "127.0.0.1", ready); });
   const portalUrl = `http://127.0.0.1:${portal.httpServer.address().port}/demo.html`;
   info.portal = portalUrl;
-  tests = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-timeout=30000", ...(ticketReadonly ? ["apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ["apps/console-web/tests/browser/a-demo-navigation.test.mjs", "apps/console-web/tests/browser/e2e.test.mjs", "apps/console-web/tests/browser/local-demo-trace.test.mjs"])],
+  tests = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-timeout=30000", ...(f6Readonly ? ["apps/console-web/tests/browser/order-metrics-demo.test.mjs", "apps/console-web/tests/browser/sales-readonly-demo.test.mjs", "apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ticketReadonly ? [analyticsReadonly ? "apps/console-web/tests/browser/order-metrics-demo.test.mjs" : salesReadonly ? "apps/console-web/tests/browser/sales-readonly-demo.test.mjs" : "apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ["apps/console-web/tests/browser/demo-alerts.test.mjs", "apps/console-web/tests/browser/a-demo-navigation.test.mjs", "apps/console-web/tests/browser/e2e.test.mjs", "apps/console-web/tests/browser/local-demo-trace.test.mjs"])],
     { cwd: root, env: { ...safeEnv, S12_BROWSER_URL: base, S12_RUNTIME_URL: info.runtime, S12_TEST_TOKEN_FILE: info.tokens,
-      S12_BROWSER_EVIDENCE: evidence, B3_READ_DEMO: b3Read ? "1" : "", PLAYWRIGHT_MODULE: process.env.PLAYWRIGHT_MODULE }, stdio: "inherit" });
+      S12_BROWSER_EVIDENCE: evidence, B3_READ_DEMO: b3Read ? "1" : "", F6_READONLY: f6Readonly ? "1" : "", PLAYWRIGHT_MODULE: process.env.PLAYWRIGHT_MODULE }, stdio: "inherit" });
   const [code] = await once(tests, "exit"); if (code !== 0) throw new Error("Demo main-chain browser validation failed");
   verified = JSON.parse(await readFile(join(evidence, "result.json"), "utf8"));
+  if (f6Readonly) {
+    verified = { scenarios: await Promise.all(["ticket", "sales", "orders"].map(async name => JSON.parse(await readFile(join(evidence, `${name}-result.json`), "utf8")))) };
+    await writeFile(join(evidence, "f6-result.json"), JSON.stringify(verified, null, 2));
+  }
   if (b3Read) {
     const contexts = fixtureLog.split("\n").filter(line => line.startsWith("B3_VERIFIED ")).map(line => JSON.parse(line.slice(12)));
     for (const runId of [verified.run_id, verified.failed_run_id]) {

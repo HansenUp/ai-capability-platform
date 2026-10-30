@@ -21,6 +21,7 @@ def _env(name: str, default: str) -> str:
 class Settings:
     """Runtime 节点的运行时配置集合，冻结（frozen）以避免运行期被意外修改。"""
 
+    isolated_conversations: bool = field(default_factory=lambda: _env("ISOLATED_CONVERSATIONS", "0") == "1")
     node_id: str = field(default_factory=lambda: _env("NODE_ID", "node-local"))  # 节点标识
     topology: str = field(default_factory=lambda: _env("TOPOLOGY", "central"))  # central | hybrid | standalone（部署拓扑）
     runtime_env: str = field(default_factory=lambda: _env("RUNTIME_ENV", "dev"))  # dev | prod；prod 启动时做安全基线校验

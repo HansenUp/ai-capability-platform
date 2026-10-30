@@ -21,9 +21,13 @@ def main() -> None:
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--browser-info", type=Path)
     parser.add_argument("--demo-no-migrations", action="store_true")
+    parser.add_argument("--node-control-demo", action="store_true")
     parser.add_argument("--ticket-readonly-demo", action="store_true")
     parser.add_argument("--b3-read-demo", action="store_true")
+    parser.add_argument("--analytics-readonly-demo", action="store_true")
     args = parser.parse_args()
+    if args.analytics_readonly_demo and not args.ticket_readonly_demo:
+        parser.error("analytics requires isolated readonly demo")
     if args.b3_read_demo and not args.ticket_readonly_demo:
         parser.error("--b3-read-demo requires --ticket-readonly-demo")
     if args.browser_info and (not args.serve or args.browser_info.exists()):
@@ -63,6 +67,8 @@ def main() -> None:
         RUNTIME_ENV="dev",
         RUNTIME_ROLE="all",
         HARNESS="mock",
+        CONFIDENTIAL_MODEL_ALIASES="f4-synthetic-only" if "--demo-no-migrations" in sys.argv else "",
+        ISOLATED_CONVERSATIONS="1" if "--demo-no-migrations" in sys.argv else "0",
         AUTH_REQUIRED="true",
         RUNTIME_ADMIN_ENABLED="true",
         CONSOLE_URL="",
@@ -76,6 +82,8 @@ def main() -> None:
         JWT_AUDIENCE="ai-runtime",
         EGRESS_ALLOWLIST="http://idp.test",
     )
+    if args.demo_no_migrations:
+        os.environ["CONFIDENTIAL_MODEL_ALIASES"] = "synthetic-sales,synthetic-analytics,f4-synthetic-only"
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/runtime/tests"))
     import runtime_policy_stub
     import uvicorn
@@ -98,6 +106,73 @@ def main() -> None:
                 raise RuntimeError("Demo schema initialization requires a new private temporary SQLite file")
             async with module.engine.begin() as connection:
                 await connection.run_sync(module.Base.metadata.create_all)
+                if module is db and args.demo_no_migrations:
+                    from runtime.api import isolated_policies, isolated_views
+
+                    await connection.run_sync(isolated_views.Base.metadata.create_all)
+                    await connection.run_sync(isolated_policies.Base.metadata.create_all)
+                    from runtime.api import isolated_a2a
+
+                    await connection.run_sync(isolated_a2a.Metadata.metadata.create_all)
+                    from runtime.api import isolated_observe
+
+                    await connection.run_sync(isolated_observe.Metadata.metadata.create_all)
+            if module is db and args.browser_info:
+                import hashlib
+                from datetime import UTC, datetime
+
+                from runtime.api.auth import Principal
+                from runtime.api.workbench import binding
+
+                principal = Principal(subject="human:pagination", tenant_id="default", auth_method="user")
+                scope = binding(principal)["scope_id"]
+                async with db.SessionLocal() as session:
+                    for index in range(25):
+                        cid = str(uuid.UUID(int=1000 + index))
+                        session.add(
+                            db.Conversation(
+                                conversation_id=cid,
+                                scope_id=scope,
+                                tenant_id="default",
+                                subject=principal.subject,
+                                agent_id="s12-workbench",
+                            )
+                        )
+                        session.add(
+                            db.Run(
+                                run_id=f"run_pagination_{index:04d}",
+                                tenant_id="default",
+                                subject=principal.subject,
+                                agent_id="s12-workbench",
+                                agent_version="1",
+                                model_alias="default-chat",
+                                session_id=str(uuid.UUID(int=1000)),
+                                state="completed",
+                                last_seq=0,
+                                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                            )
+                        )
+                        content = json.dumps(
+                            {
+                                "protocol": "isolated-continuation-v1",
+                                "question": "SYNTHETIC HISTORY ONLY",
+                                "selected_history": [],
+                                "synthetic_attachments": [],
+                            },
+                            sort_keys=True,
+                        )
+                        session.add(
+                            db.ContinuationInput(
+                                attempt_id=str(uuid.uuid4()),
+                                conversation_id=str(uuid.UUID(int=1000)),
+                                run_id=f"run_pagination_{index:04d}",
+                                question="SYNTHETIC HISTORY ONLY",
+                                selected_run_ids=[],
+                                composed=content,
+                                digest=hashlib.sha256(content.encode()).hexdigest(),
+                            )
+                        )
+                    await session.commit()
 
         return initialize
 
@@ -124,6 +199,50 @@ def main() -> None:
         async def run_turn(self, session, turn, tools, skills, hooks):
             user_index = max((index for index, row in enumerate(turn.messages) if row.get("role") == "user"), default=-1)
             content = turn.messages[user_index].get("content") if user_index >= 0 else ""
+            if args.analytics_readonly_demo and content in {
+                "SYNTHETIC_ORDER_SUMMARY",
+                "SYNTHETIC_ORDER_INCOMPLETE",
+                "SYNTHETIC_ORDER_EMPTY",
+            }:
+                results = [
+                    row for row in turn.messages[user_index + 1 :] if row.get("role") == "tool" and row.get("call_id") == "orders-read"
+                ]
+                if not results:
+                    day = {"SYNTHETIC_ORDER_SUMMARY": 1, "SYNTHETIC_ORDER_INCOMPLETE": 2, "SYNTHETIC_ORDER_EMPTY": 3}[content]
+                    yield ToolUseEvent(
+                        call_id="orders-read",
+                        tool_name="analytics.orders",
+                        input={"since": f"2026-10-{day:02}T00:00:00Z", "until": f"2026-10-{day + 1:02}T00:00:00Z"},
+                    )
+                else:
+                    out = results[-1].get("content")
+                    text = "模拟经营查询不可用，未生成成功指标。"
+                    if isinstance(out, dict) and out.get("profile") == "synthetic-order-metrics-v1" and out.get("complete") is True:
+                        text = (
+                            f"模拟经营摘要：当前创建窗口订单数 {out['order_count']}；按读取时状态统计，金额按币种查看工具指标，不代表收入。"
+                        )
+                    yield TextEvent(delta=text)
+                yield UsageEvent(input_tokens=0, output_tokens=0)
+                yield DoneEvent(run_id=self.runs[session.session_id], stop_reason="end_turn" if results else "tool_use")
+                return
+            if args.demo_no_migrations and content in {"SYNTHETIC_SALES_SUMMARY", "SYNTHETIC_SALES_EMPTY", "SYNTHETIC_SALES_FAILURE"}:
+                from sales_readonly_fixture import summary
+
+                results = [
+                    row for row in turn.messages[user_index + 1 :] if row.get("role") == "tool" and row.get("call_id") == "sales-read"
+                ]
+                if not results:
+                    query = (
+                        {}
+                        if content == "SYNTHETIC_SALES_SUMMARY"
+                        else {"q": "SYNTHETIC-FAIL" if content == "SYNTHETIC_SALES_FAILURE" else "NO-MATCH"}
+                    )
+                    yield ToolUseEvent(call_id="sales-read", tool_name="crm.opportunity.search", input=query)
+                else:
+                    yield TextEvent(delta=summary(results[-1].get("content")))
+                yield UsageEvent(input_tokens=0, output_tokens=0)
+                yield DoneEvent(run_id=self.runs[session.session_id], stop_reason="end_turn" if results else "tool_use")
+                return
             if args.ticket_readonly_demo and content in {"SYNTHETIC_TICKET_SUMMARY", "SYNTHETIC_TICKET_FAILURE"}:
                 results = [
                     row for row in turn.messages[user_index + 1 :] if row.get("role") == "tool" and row.get("call_id") == "ticket-read"
@@ -235,19 +354,92 @@ def main() -> None:
         import b3_read_fixture
 
         b3_read_fixture.install(provider, synthetic)
+    if args.demo_no_migrations and not args.ticket_readonly_demo:
+        import f4_query_fixture
+
+        f4_query_fixture.install(provider, temporary)
+    if args.demo_no_migrations:
+        import sales_readonly_fixture
+
+        sales_readonly_fixture.install()
+    if args.analytics_readonly_demo:
+        import order_metrics_fixture
+
+        order_metrics_fixture.install(provider, temporary)
     selected_port = port()
     allowed_ports.add(selected_port)
-    tokens = {name: provider.token({"sub": name, "exp": int(time.time()) + 1800}) for name in ["alice", "bob"]}
+    if args.demo_no_migrations:
+        from runtime.api import isolated_policies, isolated_views
+
+        app.state.isolated_views = isolated_views.ENABLED
+        app.include_router(isolated_views.router)
+        app.state.isolated_policies = isolated_policies.ENABLED
+        app.include_router(isolated_policies.router)
+        from runtime.api import isolated_discovery
+
+        async def synthetic_visibility(tenant):
+            return {
+                "tenant": tenant,
+                "revision": 1,
+                "rules": [{"agent_id": "s12-workbench", "groups": [], "roles": [], "allowlist": ["human:alice"]}]
+                if tenant == "default"
+                else [],
+            }
+
+        app.state.isolated_discovery = isolated_discovery.ENABLED
+        app.state.isolated_visibility_reader = synthetic_visibility
+        app.include_router(isolated_discovery.router)
+        from runtime.api import isolated_a2a
+
+        app.state.isolated_a2a = isolated_a2a.ENABLED
+        app.include_router(isolated_a2a.router)
+        from runtime.api import isolated_mcp
+
+        app.state.isolated_mcp = isolated_mcp.ENABLED
+        app.include_router(isolated_mcp.router)
+        from runtime.api import isolated_observe
+        from runtime.api.auth import settings as auth_settings
+
+        app.state.isolated_observe = isolated_observe.ENABLED
+        app.state.isolated_observe_bindings = {(auth_settings.jwt_issuer, "observe-test", "reporter"): ("default", "s12-workbench")}
+        app.include_router(isolated_observe.router)
+
+    tokens = {name: provider.token({"sub": name, "exp": int(time.time()) + 1800}) for name in ["alice", "bob", "pagination"]}
+    for name, roles in [
+        ("policy_maintainer", ["data-policy-maintainer"]),
+        ("policy_reviewer_a", ["data-policy-reviewer"]),
+        ("policy_reviewer_b", ["data-policy-reviewer"]),
+        ("view_maintainer", ["data-view-maintainer"]),
+        ("view_reviewer_a", ["data-view-reviewer"]),
+        ("view_reviewer_b", ["data-view-reviewer"]),
+    ]:
+        tokens[name] = provider.token({"sub": name, "realm_access": {"roles": roles}, "exp": int(time.time()) + 1800})
     tokens["alice_fresh"] = provider.token({"sub": "alice", "exp": int(time.time()) + 1800, "jti": uuid.uuid4().hex})
     tokens["foreign"] = provider.token({"sub": "foreign", "tenant": "s12-foreign", "exp": int(time.time()) + 1800})
     tokens["expired_alice"] = provider.token({"sub": "alice", "exp": int(time.time()) - 120})
     tokens["feedback_admin"] = provider.token(
         {"sub": "feedback-reader", "realm_access": {"roles": ["platform-admin"]}, "exp": int(time.time()) + 1800}
     )
+    tokens["observe_reporter"] = provider.token({"sub": "reporter", "client_id": "observe-test", "exp": int(time.time()) + 1800})
+    tokens["observe_foreign_admin"] = provider.token(
+        {"sub": "reader", "tenant": "observe-foreign", "realm_access": {"roles": ["platform-admin"]}, "exp": int(time.time()) + 1800}
+    )
     if args.browser_info:
         import owner_browser_fixture
 
         tokens.update(owner_browser_fixture.tokens(provider))
+        for name in ("alice", "bob"):
+            tokens["alert_" + name] = provider.token(
+                {
+                    "sub": name,
+                    "aud": "console-owner-test",
+                    "azp": "console-test",
+                    "identity_type": "user",
+                    "nbf": int(time.time()) - 1,
+                    "exp": int(time.time()) + 1800,
+                    "realm_access": {"roles": ["alert-admin"]},
+                }
+            )
     token_file = temporary / "tokens.json"
     token_file.write_text(json.dumps(tokens))
     token_file.chmod(0o600)
@@ -284,6 +476,16 @@ def main() -> None:
                 console_main.init_db = fresh_schema(console_db, "console.db")
 
             owner_browser_fixture.configure(provider)
+            if args.demo_no_migrations:
+                import f7_node_fixture
+
+                from console_api.isolated_alerts import Store
+
+                if args.node_control_demo:
+                    f7_node_fixture.configure(console_app)
+
+                console_app.state.isolated_alert_store = Store()
+                console_app.state.isolated_alert_store.observe("default", "synthetic-alert", "synthetic-heartbeat-1", 1, "abnormal")
 
             service_token = provider.token(
                 {
@@ -305,6 +507,16 @@ def main() -> None:
             console_thread = threading.Thread(target=console_server.run, daemon=True)
             console_thread.start()
             wait_until(lambda: httpx.get(f"{console_base}/healthz", trust_env=False).status_code == 200)
+            if args.node_control_demo:
+                import asyncio
+
+                async def admit_f7():
+                    from console_api.db import SessionLocal
+
+                    async with SessionLocal() as session:
+                        await console_app.state.isolated_node_control.admit_fresh_nodes(session)
+
+                asyncio.run(admit_f7())
             if not args.ticket_readonly_demo:
                 owner_browser_fixture.seed(console_base)
         if args.ticket_readonly_demo:
@@ -333,6 +545,27 @@ def main() -> None:
                 client.post("/admin/agents/s12-workbench/versions/1/publish", headers=admin_headers, json={"eval_passed": True}).status_code
                 == 200
             )
+            if args.demo_no_migrations:
+                assert (
+                    client.post(
+                        "/admin/agents",
+                        headers=admin_headers,
+                        json={
+                            "agent_id": "f4-data-query",
+                            "version": "1",
+                            "harness": "mock",
+                            "model_alias": "f4-synthetic-only",
+                            "config": {"tools": ["data.query"]},
+                        },
+                    ).status_code
+                    == 201
+                )
+                assert (
+                    client.post(
+                        "/admin/agents/f4-data-query/versions/1/publish", headers=admin_headers, json={"eval_passed": True}
+                    ).status_code
+                    == 200
+                )
             alice, bob = ({"Authorization": f"Bearer {tokens[name]}"} for name in ["alice", "bob"])
 
             def create(content):
@@ -597,6 +830,15 @@ def main() -> None:
             feedback_thread.join(timeout=10)
         server.should_exit = True
         thread.join(timeout=10)
+        if console_server is not None:
+            close_f7 = getattr(console_app.state, "close_f7_fixture", None)
+            if close_f7 is not None:
+                close_f7()
+            alert_store = getattr(console_app.state, "isolated_alert_store", None)
+            if alert_store is not None:
+                alert_store.close()
+                print("CLEANUP isolated alert SQLite removed", flush=True)
+        (temporary / "f4-synthetic.sqlite").unlink(missing_ok=True)
         token_file.unlink(missing_ok=True)
         if args.browser_info:
             args.browser_info.unlink(missing_ok=True)

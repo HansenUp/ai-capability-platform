@@ -23,8 +23,17 @@ test('Portal catalog DOM: scoped search, encoded link, errors and delayed old id
     const link = page.getByRole('link', { name: 'sales/a', exact: true });
     await link.waitFor();
     assert.equal(await link.getAttribute('href'), '/chat/sales%2Fa');
+    await page.getByText('查看 sales/a 的详情', {exact:true}).click();
+    await page.getByText(/实际执行版本以新任务的运行记录为准/).waitFor();
+    assert.equal(await page.getByRole('link', {name:'查看本人已有任务',exact:true}).getAttribute('href'), '/tasks');
+    await page.getByLabel('筛选已发布版本',{exact:true}).selectOption('1');
+    await link.waitFor();
     await page.getByLabel('搜索 Agent', { exact: true }).fill('absent');
     await page.getByText('没有匹配的可用 Agent。', { exact: true }).waitFor();
+    await page.getByRole('button',{name:'清除目录筛选',exact:true}).click();
+    await link.waitFor();
+    assert.equal(await page.getByLabel('搜索 Agent',{exact:true}).inputValue(), '');
+    assert.equal(await page.getByLabel('筛选已发布版本',{exact:true}).inputValue(), '');
     mode = 'error';
     await page.locator('#remount').click();
     await page.getByText('加载 Agent 列表失败：HTTP 403', { exact: true }).waitFor();

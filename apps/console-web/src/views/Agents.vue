@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import {parseScenarioPack} from "../scenario-pack";
+import orderPackText from "../scenarios/order-metrics.json?raw";
+import salesPackText from "../scenarios/sales-readonly.json?raw";
+import ticketPackText from "../scenarios/ticket-readonly.json?raw";
 import AgentConfig from "../components/AgentConfig.vue";
 import { configObject, differences } from "../agent-config";
 
@@ -22,6 +26,19 @@ const rows = ref<AgentVersion[]>([]);
 const selected = ref<AgentVersion | null>(null);
 const gate = ref<Gate | null>(null);
 const evaluation = ref<Evaluation | null>(null);
+const evaluationGuide = computed(() => {
+  const r = evaluation.value;
+  if (!r) return [];
+  if (r.policy.mode === "flag") return ["开发标记不提供真实评测证明，不等同正式验收。"];
+  if (r.status === "passed") return ["本次只读重算满足当前策略，尚未发布。确认版本、引用和灰度后显式提交，服务端仍会重新验证。"];
+  if (r.status === "unavailable") return ["评测证据暂不可核验，不代表评分不合格或已经通过。核对引用、来源可用性和读取权限，再手动只读重算，不重复提交发布。"];
+  const steps: string[] = [];
+  if (r.total_items !== null && r.total_items < r.policy.min_items) steps.push(`样本不足：当前 ${r.total_items} 条，策略至少 ${r.policy.min_items} 条。补齐符合归属要求的评测样本，不降低门槛。`);
+  if (r.pass_rate !== null && r.pass_rate < r.policy.min_pass_rate) steps.push("通过率未达当前策略：检查失败样本，修正配置并在新草稿版本评测，再核验对应引用。");
+  if (!steps.length) steps.push("按服务端原因核对引用、数据集许可及 Agent/版本归属；无法确认时保持未通过，不推断缺失数据。");
+  steps.push("发布或从 0% 放量仍由现有服务端闸门最终裁决；此处不改变发布规则。");
+  return steps;
+});
 const busy = ref(false);
 const message = ref("");
 const pending = ref<Action | null>(null);
@@ -35,6 +52,10 @@ const comparison = computed(() => {
   const snapshot = (row: AgentVersion) => ({ system_prompt: row.system_prompt, model_alias: row.model_alias, harness: row.harness, config: row.config });
   return before && after ? differences(snapshot(before), snapshot(after)) : null;
 });
+const scenarioText=ref("");
+const scenarioPreview=ref<ReturnType<typeof parseScenarioPack>|null>(null);
+function validateScenario(){scenarioPreview.value=null;try{scenarioPreview.value=parseScenarioPack(scenarioText.value);message.value="场景包校验通过；请预览后显式填入草稿，尚未保存。";}catch(error){message.value=String(error);}}
+function importScenario(){if(locked.value||!scenarioPreview.value)return;const pack=parseScenarioPack(scenarioText.value);Object.assign(draft,{...pack.agent,config:JSON.stringify(pack.agent.config,null,2)});scenarioPreview.value=null;message.value="已填入隔离场景配置；请填写独立Agent ID和版本，再显式保存。未发布或创建任务。";}
 const draft = reactive({ agent_id: "", version: "1", system_prompt: "", model_alias: "default-chat", harness: "mock", config: "{}" });
 const release = reactive({ reference: "", percent: 100, allowlist: "", developmentPass: false });
 const canManage = computed(() => ["ADMIN", "TENANT_ADMIN", "PLATFORM_ADMIN"].includes(op.role));
@@ -73,6 +94,7 @@ async function load() { await perform(refresh); }
 
 function applyIdentity() {
   if (busy.value || pending.value) return;
+  scenarioPreview.value=null;scenarioText.value="";
   generation += 1;
   Object.assign(op, identity);
   rows.value = [];
@@ -189,7 +211,19 @@ onMounted(load);
     </form>
   </fieldset>
   <p role="status">{{ message }}</p>
+  <p v-if="!canManage">当前角色仅可查看；保存、发布与灰度操作需要已有管理权限。切换开发身份不代表生产授权。</p>
+  <p v-if="message" class="scope-note">保存或发布未得到明确成功结果时，先使用“刷新版本”只读核对服务端状态，再决定下一步；刷新不会重发变更。评测不足时补齐评测证据，不降低门槛。</p>
   <button :disabled="busy || pending !== null" @click="load">刷新版本</button>
+  <fieldset :disabled="locked" aria-label="只读场景包导入">
+    <legend>只读隔离场景包 · 工单 / 销售 / 经营</legend>
+    <p>只导入本地草稿配置，不保存、不发布、不创建Run。仅适用于临时库、mock模型与工具替身；合成评测不是正式发布证据。</p>
+    <button @click="scenarioText=ticketPackText;scenarioPreview=null">载入内置工单场景包</button>
+    <button @click="scenarioText=salesPackText;scenarioPreview=null">载入内置销售场景包</button>
+    <button @click="scenarioText=orderPackText;scenarioPreview=null">载入内置经营场景包</button>
+    <label class="block">场景包 JSON <textarea v-model="scenarioText" @input="scenarioPreview=null" maxlength="16384" /></label>
+    <button @click="validateScenario">校验场景包</button>
+    <section v-if="scenarioPreview" aria-label="场景包预览"><p>{{scenarioPreview.scenario_id}} · mock · {{scenarioPreview.agent.config.tools.join(" / ")}} · {{scenarioPreview.cases.length}}条合成样例</p><p>将替换当前草稿的提示词、模型别名、Harness和config；Agent ID与版本保留。现有保存权限和发布闸门仍生效。</p><button @click="importScenario">确认填入草稿配置</button></section>
+  </fieldset>
   <fieldset :disabled="locked">
     <legend>保存草稿（不发布）</legend>
     <form @submit.prevent="saveDraft">
@@ -207,7 +241,8 @@ onMounted(load);
     <tbody><tr v-for="row in rows" :key="JSON.stringify([row.agent_id,row.version])">
       <td>{{ row.agent_id }}</td><td>{{ row.version }}</td><td>{{ row.status }}</td><td>{{ row.canary.percent }}%</td>
       <td><button :disabled="locked" @click="editDraft(row)">{{ row.status === 'draft' ? '编辑草稿' : '复制为新草稿' }}</button>
-        <button :disabled="locked" @click="inspect(row)">评测与发布</button></td>
+        <button :disabled="locked" @click="inspect(row)">评测与发布</button>
+        <router-link v-if="row.status === 'published'" :to="{ path: '/chat', query: { agent: row.agent_id } }">在工作台使用</router-link></td>
     </tr></tbody>
   </table>
   <section>
@@ -236,6 +271,11 @@ onMounted(load);
     </fieldset>
     <section v-if="evaluation" aria-label="评测结果只读视图">
       <h4>当前策略重算 · {{ evaluation.status }}</h4>
+      <section aria-label="评测处理指引">
+        <h4>{{ evaluation.status === 'passed' ? '核验通过后的下一步' : '发布前需要处理' }}</h4>
+        <ol><li v-for="step in evaluationGuide" :key="step">{{ step }}</li></ol>
+        <p>证据对应 {{ selected?.agent_id }}@{{ selected?.version }} 与下方引用；修改引用或切换身份清空结果。指引不会启动评测、调用模型或自动重发发布。</p>
+      </section>
       <p>引用 {{ evaluation.eval_run_ref ?? '未设置' }} · 已保存引用 {{ evaluation.stored_eval_run_ref ?? '未设置' }}</p>
       <p>通过条目 {{ evaluation.passed_items ?? '未知' }} / 总条目 {{ evaluation.total_items ?? '未知' }} · 通过率 {{ evaluation.pass_rate === null ? '未知' : `${(evaluation.pass_rate * 100).toFixed(1)}%` }}</p>
       <p>重算策略：{{ evaluation.policy.mode }} · 最少 {{ evaluation.policy.min_items }} 条 · 通过率至少 {{ (evaluation.policy.min_pass_rate * 100).toFixed(1) }}% · 来源 {{ evaluation.source }}</p>

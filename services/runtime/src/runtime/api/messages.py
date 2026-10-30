@@ -178,6 +178,8 @@ async def run_reader(run_id: str, request: Request, principal: Principal = Depen
         if run is None or run.tenant_id != principal.tenant_id:
             raise HTTPException(404, f"run '{run_id}' not found")
         request.state.audit_object = f"run:{run_id}"
+        if (run.agent_id == "f4-data-query" or run.model_alias in {"synthetic-sales", "synthetic-analytics"}) and principal.subject != run.subject:
+            raise _forbid(request, "only the query initiator can read this run")
         if principal.subject == run.subject or is_admin(principal):
             return "full"
         if principal.subject in await _approvers(s, run_id, (RunEventType.TOOL_APPROVED, RunEventType.TOOL_REJECTED)):

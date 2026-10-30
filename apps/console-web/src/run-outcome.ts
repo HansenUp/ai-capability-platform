@@ -42,3 +42,61 @@ export function receiptGuidance(status?: string): string {
   if (status) return "回执尚需核对；保持未决写锁，仅使用现有只读恢复入口，不重新发送业务写。";
   return "当前结果区不能证明主体没有未决写锁；请在工作台只读核对写账本。";
 }
+
+// These are persisted runtime records, not provider billing receipts.
+export function usageDetails(events: Event[]) {
+  const number = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  return events.filter(e => e.type === "model.response").map(e => {
+    const raw = e.payload.usage;
+    const usage = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    return { seq: e.seq, model: typeof usage.model === "string" && usage.model.trim() ? usage.model : "未知",
+      input: number(usage.input_tokens), output: number(usage.output_tokens),
+      recordedCost: typeof usage.cost === "number" && Number.isFinite(usage.cost) && usage.cost >= 0 ? usage.cost : null };
+  });
+}
+export function budgetDetails(events: Event[]) {
+  return events.filter(e => e.type === "run.error" && e.payload.code === "BUDGET_EXCEEDED").map(e => ({
+    seq: e.seq, kind: e.payload.budget === "tokens" ? "Token" : e.payload.budget === "wall" ? "运行时长（秒）" : "未知类型",
+    used: typeof e.payload.used === "number" && Number.isFinite(e.payload.used) && e.payload.used >= 0 ? e.payload.used : null,
+    limit: typeof e.payload.limit === "number" && Number.isFinite(e.payload.limit) && e.payload.limit >= 0 ? e.payload.limit : null,
+  }));
+}
+
+export function usageCoverage(events: Event[]) {
+  return {
+    summaryRecords: events.filter(e => e.type === "model.response").flatMap(e => {
+      const hooks = Array.isArray(e.payload.hooks) ? e.payload.hooks : [];
+      return hooks.flatMap((hook, index) => {
+        if (!hook || typeof hook !== "object" || hook.name !== "thinking_summary" || hook.point !== "post_model") return [];
+        const raw = hook.model_usage_record;
+        if (!raw || raw.source !== "thinking_summary") return [];
+        const record = compactionUsage({...e,payload:{model_usage_record:{...raw,source:"context_compaction"}}});
+        return record ? [{seq:e.seq,index,record}] : [];
+      });
+    }),
+    summaries: events.filter(e => e.type === "model.response" && typeof e.payload.thinking_summary === "string" && e.payload.thinking_summary.length > 0).map(e => e.seq),
+    compactions: events.filter(e => e.type === "context.compacted").map(e => ({seq: e.seq,
+      record: compactionUsage(e),
+      method: e.payload.method === "llm" ? "模型压缩" : e.payload.method === "truncate" ? "截断结果（不能排除此前模型尝试）" : "方式未知"})),
+  };
+}
+
+function compactionUsage(event: Event) {
+  const raw = event.payload.model_usage_record;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (record.source !== "context_compaction" || record.coverage !== "response_record_only" || record.billing_verified !== false) return null;
+  const usage = record.usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+  const values = usage as Record<string, unknown>;
+  return usageDetails([{seq:event.seq,type:"model.response",payload:{usage:{
+    model:record.response_model,
+    input_tokens:values.input_reported === true ? values.input_tokens : null,
+    output_tokens:values.output_reported === true ? values.output_tokens : null,
+    cost:values.cost_reported === true ? values.cost : null,
+  }}}])[0];
+}
+
+export function agentHint(value: unknown): string {
+  return typeof value === "string" && value.length > 0 && value.length <= 64 && !/[\x00-\x1f\x7f]/.test(value) ? value : "";
+}

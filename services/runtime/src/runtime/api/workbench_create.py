@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from runtime.api.auth import Principal
+from runtime.api.synthetic_attachments import AttachmentBody
 from runtime.loop.toolbroker import hmac_json
 from runtime.state.db import AgentVersion, SessionLocal, WorkbenchAttempt
 
@@ -23,6 +24,9 @@ class CreateBody(BaseModel):
     attempt_id: UUID
     agent_id: str = Field(min_length=1, max_length=64)
     text: str = Field(min_length=1, repr=False, exclude=True)
+    conversation_id: UUID | None = None
+    selected_run_ids: list[str] = Field(default_factory=list, max_length=20)
+    synthetic_attachments: list[AttachmentBody] = Field(default_factory=list, max_length=3, repr=False, exclude=True)
 
 
 def snapshot(agent: AgentVersion, reason: str) -> str:
@@ -83,8 +87,12 @@ def content_binding(row: WorkbenchAttempt, value: Any) -> str:
 
 
 async def prepare(body: CreateBody, request: Request, principal: Principal) -> dict[str, Any]:
-    from runtime.api import workbench
+    from runtime.api import conversations, workbench
 
+    if (body.selected_run_ids or body.synthetic_attachments) and body.conversation_id is None:
+        raise HTTPException(422, "history requires a conversation")
+    if body.conversation_id is not None:
+        conversations.enabled()
     scope_id, attempt_id = workbench.user_scope(principal), str(body.attempt_id)
     async with SessionLocal() as session:
         scope = await workbench.lock_scope(session, scope_id)
@@ -93,6 +101,7 @@ async def prepare(body: CreateBody, request: Request, principal: Principal) -> d
             row = await workbench.owned(session, attempt_id, scope_id)
             if row.action != "create" or row.create_agent != body.agent_id or row.value_hmac != content_binding(row, body.text):
                 raise HTTPException(409, "create attempt binding mismatch")
+            await conversations.check_repeat(session, row, body)
             return workbench.view(row)
         if scope.active_attempt is not None:
             raise HTTPException(409, "WORKBENCH_LOCKED")
@@ -112,6 +121,7 @@ async def prepare(body: CreateBody, request: Request, principal: Principal) -> d
             revision=1,
             acknowledged=False,
         )
+        continuation_digest = await conversations.register(session, row, body, principal) if body.conversation_id else None
         row.value_hmac = content_binding(row, body.text)
         descriptor = {
             "scope_id": scope_id,
@@ -121,6 +131,8 @@ async def prepare(body: CreateBody, request: Request, principal: Principal) -> d
             "value_hmac": row.value_hmac,
             "snapshot": row.create_snapshot,
         }
+        if continuation_digest is not None:
+            descriptor["continuation_digest"] = continuation_digest
         row.fingerprint = hashlib.sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         session.add(row)
         scope.active_attempt = attempt_id
@@ -129,7 +141,9 @@ async def prepare(body: CreateBody, request: Request, principal: Principal) -> d
         return workbench.view(row)
 
 
-async def apply(session: AsyncSession, row: WorkbenchAttempt, value: str, request: Request, principal: Principal) -> None:
+async def apply(
+    session: AsyncSession, row: WorkbenchAttempt, value: str, request: Request, principal: Principal, *, independent_a2a: bool = False
+) -> None:
     from runtime.api import messages
     from runtime.loop import runner
 
@@ -138,6 +152,14 @@ async def apply(session: AsyncSession, row: WorkbenchAttempt, value: str, reques
     agent, reason = await selected_agent(session, row.create_agent, principal)
     if agent.version != row.create_version or not hmac.compare_digest(snapshot(agent, reason), row.create_snapshot):
         raise HTTPException(409, "prepared agent selection or snapshot changed")
+    from runtime.api import conversations
+
+    if independent_a2a:
+        if row.action != "a2a_create":
+            raise HTTPException(409, "independent A2A action required")
+        conversation_id = None
+    else:
+        value, conversation_id = await conversations.execution(session, row, value, principal)
     initial, sources, images, attachments = await messages._prepare_input(agent, [{"role": "user", "content": value}], [], principal)
     if sources or images or attachments:
         raise HTTPException(409, "workbench create supports plain text only")
@@ -145,7 +167,7 @@ async def apply(session: AsyncSession, row: WorkbenchAttempt, value: str, reques
         session,
         agent,
         principal.subject,
-        None,
+        conversation_id,
         actor=principal.actor,
         rollout=reason,
         initial_messages=initial,

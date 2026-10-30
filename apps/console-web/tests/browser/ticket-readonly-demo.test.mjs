@@ -1,6 +1,9 @@
+import {copyFile} from "node:fs/promises";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
+import { parseTicketPack, evaluateTicketEvents } from "../../src/ticket-scenario.ts";
+const pack=parseTicketPack(await readFile(new URL("../../src/scenarios/ticket-readonly.json",import.meta.url),"utf8"));
 import { apply, browser, phase, profile } from "./support.mjs";
 
 test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹", async () => {
@@ -19,14 +22,32 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
   const agent = `ticket-readonly-${Date.now()}`;
   try {
     await page.goto(`${profile.url}/demo`);
-    await page.getByRole("heading", { name: "工单总结 · 只读隔离演示", exact: true }).waitFor();
+    await page.getByRole("heading", { name: process.env.F6_READONLY === "1" ? "F6 场景体验中心" : "工单总结 · 只读隔离演示", exact: true }).waitFor();
+    if(process.env.F6_READONLY === "1") {
+      await page.getByText("已启用：工单、销售、经营分析",{exact:true}).waitFor();
+      for(const name of ["配置与发布","使用工作台","只读轨迹"])
+        assert.equal(await page.getByRole("link",{name,exact:true}).count(),1);
+    }
     if (process.env.B3_READ_DEMO === "1") await page.getByText("B3 隔离链路：实际 Runtime 执行事件 → Gateway 签发 → MCP 验签；模型和工单仍为替身。", { exact: true }).waitFor();
     assert.equal(await page.getByText("SYNTHETIC_TICKET_SUMMARY", { exact: true }).count(), 1);
     assert.equal(await page.getByText("ticket.close_batch", { exact: false }).count(), 0);
     await page.goto(`${profile.url}/manage/agents`);
     await page.getByLabel("Agent ID", { exact: true }).fill(agent);
     await page.getByLabel("版本", { exact: true }).fill("1");
-    await page.getByLabel("完整 config JSON（高级编辑，保留扩展字段）", { exact: true }).fill(JSON.stringify({ tools: ["ticket.get"] }));
+    const beforeImport=apiWrites.length;
+    await page.getByRole("button",{name:"载入内置工单场景包",exact:true}).click();
+    const invalid=structuredClone(pack);invalid.agent.config.tools.push("ticket.close_batch");
+    await page.getByLabel("场景包 JSON",{exact:true}).fill(JSON.stringify(invalid));
+    await page.getByRole("button",{name:"校验场景包",exact:true}).click();
+    await page.getByRole("status").filter({hasText:"只允许ticket.get"}).waitFor();
+    assert.equal(await page.getByRole("button",{name:"确认填入草稿配置",exact:true}).count(),0);
+    await page.getByRole("button",{name:"载入内置工单场景包",exact:true}).click();
+    await page.getByRole("button",{name:"校验场景包",exact:true}).click();
+    await page.getByRole("region",{name:"场景包预览",exact:true}).waitFor();
+    await page.getByRole("button",{name:"确认填入草稿配置",exact:true}).click();
+    assert.equal(await page.getByLabel("Harness",{exact:true}).inputValue(),"mock");
+    assert.deepEqual(JSON.parse(await page.getByLabel("完整 config JSON（高级编辑，保留扩展字段）",{exact:true}).inputValue()),{tools:["ticket.get"]});
+    assert.equal(apiWrites.length,beforeImport);
     await page.getByRole("button", { name: "仅保存草稿", exact: true }).click();
     await page.getByRole("status").filter({ hasText: "草稿已保存" }).waitFor();
     const row = page.getByRole("row").filter({ hasText: agent });
@@ -38,8 +59,12 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
     await page.getByRole("heading", { name: "确认变更", exact: true }).waitFor();
     await page.getByRole("button", { name: "确认执行上述变更", exact: true }).click();
     await row.filter({ hasText: "published" }).waitFor();
-    await page.goto(`${profile.url}/chat`);
+    await row.getByRole("link", {name:"在工作台使用",exact:true}).click();
+    await page.getByRole("button", {name:"使用发布页 Agent（不创建任务）",exact:true}).waitFor();
+    assert.equal(await page.getByRole("button", {name:"使用发布页 Agent（不创建任务）",exact:true}).isDisabled(), true);
     await apply(page, tokens.alice);
+    await page.getByRole("button", {name:"使用发布页 Agent（不创建任务）",exact:true}).click();
+    assert.equal(await page.getByLabel("Agent ID", {exact:true}).inputValue(), agent);
     await page.getByLabel("Agent ID", { exact: true }).fill(agent);
     await page.getByLabel("消息", { exact: true }).fill("SYNTHETIC_TICKET_SUMMARY");
     const registered = page.waitForResponse(response => new URL(response.url()).pathname === "/v1/workbench/create-attempts" && response.request().method() === "POST");
@@ -54,6 +79,10 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
     await phase(page, runId, "completed", tokens.alice);
     await page.getByText("助手：模拟工单摘要：SYNTHETIC-1 / 设备无法连接 / open", { exact: true }).waitFor();
     await page.getByRole("region", { name: "任务结果摘要" }).getByText("可见工具结果事件：成功 1 · 失败或拒绝 0 · 状态未知 0", { exact: true }).waitFor();
+    const usage = page.getByRole("region", {name:"模型用量与预算",exact:true});
+    await usage.getByText(/实际费用：未知/).waitFor();
+    await usage.getByRole("region", {name:"用量统计覆盖范围",exact:true}).getByText(/不提供全 Run 或账户总消费/).waitFor();
+    assert.equal(await usage.getByRole("button").count(), 0);
     const response = await page.request.get(`${profile.runtime}/v1/runs/${runId}/events`, { headers: { Authorization: `Bearer ${tokens.alice}` } });
     assert.equal(response.status(), 200);
     const events = await response.json();
@@ -64,6 +93,7 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
       assert.equal(sequences.every(Number.isInteger), true);
       assert.equal(sequences.every((seq, index) => index === 0 || seq > sequences[index - 1]), true);
     }
+    assert.deepEqual(evaluateTicketEvents(pack,"success",events),{passed:true,reasons:[]});
     const requested = events.filter(event => event.type === "tool.requested");
     assert.equal(requested.length, 1); assert.equal(requested[0].payload.tool, "ticket.get");
     const toolResult = events.find(event => event.type === "tool.result");
@@ -87,6 +117,7 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
     assert.equal(failedEvents.some(event => event.type === "tool.result" && event.payload.status === "error"), true);
     assert.equal(failedEvents.some(event => event.type === "model.response" && event.payload.text === "模拟工单查询不可用，未生成摘要。"), true);
     assert.equal(failedEvents.some(event => event.type === "model.response" && event.payload.text.startsWith("模拟工单摘要：")), false);
+    assert.deepEqual(evaluateTicketEvents(pack,"failure",failedEvents),{passed:true,reasons:[]});
     // Result and navigation remain read-only, including reload and a fresh identity application.
     await page.getByRole("region", { name: "任务结果摘要" }).getByRole("alert").waitFor();
     const recovery = page.getByRole("region", {name:"失败原因与只读恢复", exact:true});
@@ -128,6 +159,8 @@ test("工单总结只读隔离演示：配置→发布→同 Run 对话→轨迹
     await page.screenshot({ path: `${process.env.S12_BROWSER_EVIDENCE}/ticket-readonly-trace.png`, fullPage: true });
     await writeFile(`${process.env.S12_BROWSER_EVIDENCE}/result.json`, JSON.stringify({ agent, run_id: runId, failed_run_id: failedPrepared.run_id, scenario: "ticket-summary-readonly",
       stages: ["draft", "published_dev_flag", "completed", "trace"], tool: "ticket.get", external_effect: false,
+      synthetic_evaluation: {success:evaluateTicketEvents(pack,"success",events),failure:evaluateTicketEvents(pack,"failure",failedEvents)},
       real_model: false, real_identity: false, real_evaluation: false, trace_events: eventNames.length }, null, 2));
+  await copyFile(`${process.env.S12_BROWSER_EVIDENCE}/result.json`, `${process.env.S12_BROWSER_EVIDENCE}/ticket-result.json`);
   } finally { await context.close(); await engine.close(); }
 });

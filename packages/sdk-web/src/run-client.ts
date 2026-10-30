@@ -1,3 +1,21 @@
+function validateConversationRequest(limit: number, cursor: string | null) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || (cursor !== null && (!cursor || cursor.length > 2048))) throw new Error("会话分页参数无效。");
+}
+export interface ConversationHistoryItem { run_id: string; state: string; selectable: boolean }
+export interface ConversationPage<T> { items: T[]; next_cursor: string | null }
+function conversationPage(value: { items: unknown[]; next_cursor: unknown; page_size: unknown; snapshot_guaranteed: unknown }, limit: number, cursor: string | null) {
+  if ((value.next_cursor !== null && value.items.length !== limit) || value.page_size !== limit || value.snapshot_guaranteed !== false || (value.next_cursor !== null &&
+    (typeof value.next_cursor !== "string" || !value.next_cursor || value.next_cursor.length > 2048 || value.next_cursor === cursor))) throw new Error("会话分页响应无效。");
+}
+export interface SyntheticAttachment { name: string; text: string }
+export interface AttachmentStatus { name: string; bytes: number; sha256: string; status: "passed" | "rejected"; reason: string | null }
+function attachmentStatuses(value: unknown): AttachmentStatus[] {
+  if (!Array.isArray(value) || value.length > 3 || value.some(row => !row || typeof row.name !== "string"
+    || !Number.isSafeInteger(row.bytes) || row.bytes < 0 || !/^[a-f0-9]{64}$/.test(row.sha256)
+    || !["passed", "rejected"].includes(row.status) || (row.status === "passed" ? row.reason !== null
+      : !["INVALID_UTF8", "TXT_FILENAME_REQUIRED", "TOO_LARGE", "SYNTHETIC_REJECTED", "SCANNER_UNAVAILABLE"].includes(row.reason)))) throw new Error("附件扫描响应无效，不能登记。");
+  return value as AttachmentStatus[];
+}
 export interface WorkbenchRun { run_id: string; state: string; subject: string; agent_id: string; last_seq: number }
 export interface WorkbenchEvent { run_id: string; seq: number; type: string; payload: Record<string, unknown> }
 export interface ApprovalCard { call_id: string; params_hash: string; tool: string; input: unknown }
@@ -124,13 +142,63 @@ export class RuntimeRunClient {
     }
     return result;
   }
-  async prepareCreate(agent: string, text: string, scope: string, attemptId: string = crypto.randomUUID()): Promise<WriteAttempt> {
+  async prepareCreate(agent: string, text: string, scope: string, attemptId: string = crypto.randomUUID(), conversation?: { id: string; selected: string[]; attachments?: SyntheticAttachment[] }): Promise<WriteAttempt> {
     if (!agent.trim() || !text.trim()) throw new Error("Agent 和消息必填。");
-    const result = attempt(await this.request("/v1/workbench/create-attempts", "POST", { agent_id: agent.trim(), text, attempt_id: attemptId }), scope, true);
+    const result = attempt(await this.request("/v1/workbench/create-attempts", "POST", { agent_id: agent.trim(), text, attempt_id: attemptId, ...(conversation ? { conversation_id: conversation.id, selected_run_ids: conversation.selected, synthetic_attachments: conversation.attachments ?? [] } : {}) }), scope, true);
     if (result.attempt_id !== attemptId || result.action !== "create" || result.create_agent !== agent.trim() || result.status !== "PREPARED" || result.acknowledged) {
       throw new RuntimeRequestError("创建登记绑定不匹配；只读核对，不重发。", 200, true);
     }
     return result;
+  }
+  async previewAttachments(attachments: SyntheticAttachment[], scope: string): Promise<AttachmentStatus[]> {
+    const result = await this.request("/v1/workbench/attachment-preview", "POST", { attachments }) as { scope_id: string; scanner: string; items: unknown };
+    if (result?.scope_id !== scope || result.scanner !== "synthetic-only-v1") throw new Error("附件扫描身份或替身版本不匹配。");
+    const rows = attachmentStatuses(result.items);
+    if (rows.length !== attachments.length) throw new Error("附件扫描数量不匹配。");
+    for (let index = 0; index < rows.length; index++) {
+      const bytes = new TextEncoder().encode(attachments[index].text);
+      const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(b => b.toString(16).padStart(2, "0")).join("");
+      if (rows[index].name !== attachments[index].name || rows[index].bytes !== bytes.length || rows[index].sha256 !== digest) throw new Error("附件扫描内容不匹配，不能登记。");
+    }
+    return rows;
+  }
+  async registeredAttachments(row: WriteAttempt): Promise<AttachmentStatus[]> {
+    const result = await this.request(`/v1/workbench/attempts/${encodeURIComponent(row.attempt_id)}/attachments`) as { scope_id: string; attempt_id: string; fingerprint: string; scanner: string; items: unknown };
+    if (result?.scope_id !== row.scope_id || result.attempt_id !== row.attempt_id || result.fingerprint !== row.fingerprint || result.scanner !== "synthetic-only-v1") throw new Error("附件回执范围不匹配。");
+    const rows = attachmentStatuses(result.items);
+    if (rows.some(item => item.status !== "passed")) throw new Error("登记附件状态无效。");
+    return rows;
+  }
+  async conversations(agent: string, scope: string, signal?: AbortSignal): Promise<string[]> {
+    const page = await this.conversationsPage(agent, scope, null, signal, 200);
+    if (page.next_cursor !== null) throw new Error("会话超过单页范围，请使用分页查询。");
+    return page.items;
+  }
+  async conversation(id: string, agent: string, scope: string, signal?: AbortSignal): Promise<ConversationHistoryItem[]> {
+    const page = await this.conversationPage(id, agent, scope, null, signal, 200);
+    if (page.next_cursor !== null) throw new Error("历史超过单页范围，请使用分页查询。");
+    return page.items;
+  }
+  async conversationsPage(agent: string, scope: string, cursor: string | null = null, signal?: AbortSignal, limit = 20): Promise<ConversationPage<string>> {
+    validateConversationRequest(limit, cursor);
+    const query = new URLSearchParams({ agent_id: agent, limit: String(limit) });
+    if (cursor !== null) query.set("cursor", cursor);
+    const value = await this.request(`/v1/workbench/conversations?${query}`, "GET", undefined, 200, signal) as { scope_id: string; agent_id: string; items: string[]; next_cursor: string | null; page_size: number; snapshot_guaranteed: boolean };
+    if (value?.scope_id !== scope || value.agent_id !== agent || !Array.isArray(value.items) || value.items.length > limit
+      || value.items.some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id)) || new Set(value.items).size !== value.items.length) throw new Error("会话身份或列表无效。");
+    conversationPage(value, limit, cursor);
+    return { items: value.items, next_cursor: value.next_cursor };
+  }
+  async conversationPage(id: string, agent: string, scope: string, cursor: string | null = null, signal?: AbortSignal, limit = 20): Promise<ConversationPage<ConversationHistoryItem>> {
+    validateConversationRequest(limit, cursor);
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (cursor !== null) query.set("cursor", cursor);
+    const value = await this.request(`/v1/workbench/conversations/${encodeURIComponent(id)}?${query}`, "GET", undefined, 200, signal) as { scope_id: string; agent_id: string; conversation_id: string; items: ConversationHistoryItem[]; next_cursor: string | null; page_size: number; snapshot_guaranteed: boolean };
+    if (value?.scope_id !== scope || value.agent_id !== agent || value.conversation_id !== id || !Array.isArray(value.items) || value.items.length > limit
+      || value.items.some(row => typeof row.run_id !== "string" || !row.run_id || typeof row.state !== "string" || row.selectable !== ["completed", "failed", "canceled"].includes(row.state))
+      || new Set(value.items.map(row => row.run_id)).size !== value.items.length) throw new Error("会话历史范围无效。");
+    conversationPage(value, limit, cursor);
+    return { items: value.items, next_cursor: value.next_cursor };
   }
   async settleAttempt(row: WriteAttempt, acknowledge = false, value?: unknown): Promise<WriteAttempt> {
     if (row.action === "feedback") return this.feedbackAction(row, acknowledge ? "acknowledge" : "execute");

@@ -1,0 +1,10 @@
+type Event={seq:number;type:string;payload:Record<string,unknown>};
+type Metric={profile:string;since:string;until:string;view_version:string;policy_version:string;read_started:string;read_finished:string;complete:boolean;reason:string|null;order_count:number|null;statuses:Record<string,number>;unknown_updated:number;currencies:{currency:string;completed:number;valid:number;total_minor:string|null;known_minor:string|null;coverage:number}[]};
+export function orderMetrics(events:Event[]):{seq:number;value:Metric}[]{
+ const calls=new Set(events.filter(e=>e.type==="tool.requested"&&e.payload.tool==="analytics.orders").map(e=>e.payload.call_id));
+ return events.flatMap(e=>{const v=e.payload.output as Metric|undefined;
+ if(e.type!=="tool.result"||e.payload.status!=="ok"||!calls.has(e.payload.call_id)||!v||v.profile!=="synthetic-order-metrics-v1"||typeof v.complete!=="boolean")return [];
+ if(![v.since,v.until,v.view_version,v.policy_version,v.read_started,v.read_finished].every(x=>typeof x==="string")||!(v.reason===null||typeof v.reason==="string"))return [];
+ if(v.complete&&(!Number.isInteger(v.order_count)||v.order_count!<0||v.order_count!>100||!Number.isInteger(v.unknown_updated)||v.unknown_updated<0||v.unknown_updated>v.order_count!||!v.statuses||!["completed","pending","cancelled"].every(k=>Number.isInteger(v.statuses[k])&&v.statuses[k]>=0)||Object.values(v.statuses).reduce((a,b)=>a+b,0)!==v.order_count||!Array.isArray(v.currencies)||new Set(v.currencies.map(g=>g.currency)).size!==v.currencies.length||!v.currencies.every(g=>["CNY","USD"].includes(g.currency)&&Number.isInteger(g.completed)&&g.completed>0&&Number.isInteger(g.valid)&&g.valid>=0&&g.valid<=g.completed&&(g.valid===0?g.known_minor===null:typeof g.known_minor==="string"&&/^\d+$/.test(g.known_minor))&&(g.total_minor===null||(typeof g.total_minor==="string"&&/^\d+$/.test(g.total_minor)))&&(g.valid===g.completed?g.total_minor===g.known_minor:g.total_minor===null)&&Number.isFinite(g.coverage)&&g.coverage===g.valid/g.completed)))return [];
+ return [{seq:e.seq,value:v}];});
+}

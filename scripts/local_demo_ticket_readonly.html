@@ -3,13 +3,13 @@
 <style>body{font:16px/1.7 system-ui;max-width:960px;margin:36px auto;padding:0 20px}aside{padding:16px;background:#fff1cf}textarea{width:95%;height:60px}button,a{margin:6px}code{background:#eee;padding:3px}li{margin:10px 0}</style></head>
 <body><h1>工单总结 · 只读隔离演示</h1>
 <aside>仅使用临时 SQLite、签名测试身份、模拟模型与只读工单替身；不连接真实业务、真实模型或 Langfuse。开发态评测标志不代表真实评测通过。</aside>
-<p id="b3-profile"></p>
+<section aria-label="场景功能清单"><h2>场景与可用范围</h2><p id="enabled-scenes">正在核对已启用场景…</p><table><thead><tr><th>场景</th><th>已实现（合成）</th><th>待接入</th></tr></thead><tbody><tr><td>工单</td><td>只读摘要、失败提示、结果与轨迹</td><td>真实工单接口/模型评测</td></tr><tr><td>销售</td><td>本人商机、最小字段、事实与建议依据</td><td>真实CRM/正式身份与权限</td></tr><tr><td>经营</td><td>精确授权、创建窗口订单、分币种金额/覆盖率、缺失提示</td><td>真实数据/财务口径/北极星</td></tr></tbody></table><p>共同流程：场景包预览→显式保存发布→应用测试身份→登记→执行一次→本人ACK→只读轨迹。未知结果只读恢复，不自动重发或解锁。完整统一体验使用 --f6-readonly；单场景模式不代表全部能力已启用。</p></section><p id="b3-profile"></p>
 <p id="status">正在读取本机演示信息…</p>
-<p><a href="/manage/agents" target="_blank">① 配置与发布</a><a href="/chat" target="_blank">② 使用工作台</a><a href="/manage/runs" target="_blank">③ 只读轨迹</a></p>
+<p><a href="/manage/agents" target="_blank">配置与发布</a><a href="/chat" target="_blank">使用工作台</a><a href="/manage/runs" target="_blank">只读轨迹</a></p>
 <h2>测试身份</h2><p>Alice 是本机测试身份，不是正式账号。令牌仅用于本次演示页面。</p>
 <label>Alice 测试令牌<textarea id="alice" readonly autocomplete="off"></textarea></label><button id="copy">复制 Alice 测试令牌</button>
-<h2>体验步骤</h2><ol>
-<li>配置页新建 Agent，版本填 <code>1</code>、Harness 使用 <code>mock</code>，完整 config 填 <code>{"tools":["ticket.get"]}</code>，保存草稿。</li>
+<h2>场景包与合成评测</h2><p>内置包固定 mock Harness 与 ticket.get；导入拒绝写工具、外部地址及未知字段。成功与接口失败两条样例由实际临时Run事件检查；结果仅代表合成链路，不替代真实模型质量或发布评测。</p><h2>体验步骤</h2><ol>
+<li>配置页先“载入内置工单场景包”→“校验场景包”→预览并“确认填入草稿配置”（均不保存）。再填写独立 Agent ID，版本填 <code>1</code>、Harness 使用 <code>mock</code>，完整 config 填 <code>{"tools":["ticket.get"]}</code>，保存草稿。</li>
 <li>选择“评测与发布”，显式确认开发态评测，再确认发布；只写入本次临时库。</li>
 <li>工作台应用 Alice 测试令牌，填写 Agent ID；消息输入 <code>SYNTHETIC_TICKET_SUMMARY</code>，登记并确认执行一次，随后由本人确认收口。记录 Run ID。</li>
 <li>读取同一 Run，应看到“模拟工单摘要：SYNTHETIC-1 / 设备无法连接 / open”。结果卡分开显示 Run 状态、工具结果与助手文本；使用工作台链接进入同 Run 轨迹页，重新应用 Alice 后显式读取。Portal 则使用工作台中的“查看此 Run 只读轨迹”。</li>
@@ -19,9 +19,11 @@
 const response = await fetch('/__demo/info', { cache:'no-store' });
 if (!response.ok) throw new Error('演示信息不可用');
 const info = await response.json();
+if(info.f6){document.querySelector('h1').textContent='F6 场景体验中心';document.title='F6 场景体验中心';}
+document.getElementById('enabled-scenes').textContent=info.scenarios?.includes('orders')?'已启用：工单、销售、经营分析':'已启用：工单、销售；经营分析需重新使用 --f6-readonly 或 --analytics-readonly 启动。';
 document.getElementById('b3-profile').textContent = info.b3_read ? 'B3 隔离链路：实际 Runtime 执行事件 → Gateway 签发 → MCP 验签；模型和工单仍为替身。' : '';
 document.getElementById('alice').value = info.tokens.alice;
 document.getElementById('status').textContent = `演示有效至 ${new Date(info.expires_at).toLocaleString()}，所有操作仅作用本次临时数据。`;
-document.getElementById('verified').textContent = info.verified ? `已验证只读链路，示例 Run：${info.verified.run_id}。` : '只读链路自动验证中。';
+document.getElementById('verified').textContent = info.verified ? (info.verified.scenarios ? `已验证 ${info.verified.scenarios.length} 个合成场景；非真实接入验收。` : `已验证只读链路，示例 Run：${info.verified.run_id}。`) : '只读链路自动验证中。';
 document.getElementById('copy').onclick = async () => { await navigator.clipboard.writeText(document.getElementById('alice').value); };
-</script></body></html>
+</script><section><h2>销售助理只读 · 合成场景包</h2><p>在管理 Agent 页面选择“载入内置销售场景包”，校验后显式填入草稿，使用独立 Agent ID。保存、开发态评测确认与发布沿用现有闸门。</p><p>工作台应用 Alice 测试身份，输入 SYNTHETIC_SALES_SUMMARY，依次登记、执行一次与本人确认收口。仅返回本人商机；事实与建议附商机 ID 和更新时间，缺失金额／日期显示未知，不跨币种合计。</p><p>SYNTHETIC_SALES_EMPTY 验证空筛选；SYNTHETIC_SALES_FAILURE 验证工具故障不生成成功摘要。均使用 synthetic-sales 模拟模型与合成工具，非真实CRM、模型质量或投产验收。</p></section><section><h2>经营分析 · 合成订单</h2><p>使用 --analytics-readonly 隔离启动模式。在管理Agent载入内置经营场景包，校验后显式保存并开发评测发布。工作台应用Alice测试身份，发送 SYNTHETIC_ORDER_SUMMARY，完成登记、执行一次和本人ACK。</p><p>指标卡只展示工具聚合：创建窗口、读取时状态、分币种金额（分）及覆盖率，不代表财务收入。SYNTHETIC_ORDER_INCOMPLETE 展示缺失金额；SYNTHETIC_ORDER_EMPTY 展示空窗口。Bob无数据权限；管理员也不得读他人分析Run。不会调用真实模型或数据，北极星未定义。</p></section></body></html>

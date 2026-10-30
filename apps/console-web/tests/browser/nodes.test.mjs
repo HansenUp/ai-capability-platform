@@ -208,3 +208,27 @@ test("节点组件：模型 CAS、签名 Skill 引用与优雅重启表单只提
     assert.deepEqual(writes().at(-1).body, { type: kind, args: scenario.args });
   }
 }));
+
+
+test("F7 回执诊断不把重启 ok 当作完成，错误与身份切换清空且只读", async () => mount(engine, "nodes", async ({ page, writes, handle }) => {
+  let status = "ok";
+  handle(async (route, row) => {
+    if (!row.path.endsWith("/commands/synthetic-command")) return false;
+    await route.fulfill({ json: { ...receipt(status), type: "graceful_restart" } }); return true;
+  });
+  await page.getByLabel("节点 ID", { exact: true }).fill(node.node_id);
+  await page.getByLabel("指令 ID", { exact: true }).fill("synthetic-command");
+  await page.getByRole("button", { name: "查询回执", exact: true }).click();
+  const guidance = page.getByRole("complementary", { name: "回执诊断与下一步" });
+  await guidance.waitFor();
+  assert.match(await guidance.innerText(), /尚不能证明重启完成/);
+  assert.match(await guidance.innerText(), /PID、boot_id/);
+  status = "error";
+  await page.getByRole("button", { name: "查询回执", exact: true }).click();
+  await guidance.getByText(/执行错误/).waitFor();
+  assert.doesNotMatch(await guidance.innerText(), /尚不能证明重启完成/);
+  await page.getByLabel("租户", { exact: true }).fill("other");
+  await page.getByLabel("租户", { exact: true }).blur();
+  assert.equal(await guidance.count(), 0);
+  assert.equal(writes().length, 0);
+}));

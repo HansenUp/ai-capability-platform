@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "scenario_id": "sales-summary-readonly",
+  "mode": "isolated-synthetic",
+  "agent": {
+    "system_prompt": "仅查询本人商机。事实和建议必须附商机ID与更新时间；缺失值未知，不跨币种合计。建议不是执行授权，失败不生成成功摘要。禁止业务写。",
+    "model_alias": "synthetic-sales",
+    "harness": "mock",
+    "config": {
+      "tools": [
+        "crm.opportunity.search"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "success",
+      "message": "SYNTHETIC_SALES_SUMMARY",
+      "expected_text": "模拟销售摘要：",
+      "tool_status": "ok"
+    },
+    {
+      "id": "empty",
+      "message": "SYNTHETIC_SALES_EMPTY",
+      "expected_text": "当前本人授权筛选无结果，不代表零业绩。",
+      "tool_status": "ok"
+    },
+    {
+      "id": "failure",
+      "message": "SYNTHETIC_SALES_FAILURE",
+      "expected_text": "模拟商机查询不可用，未生成摘要。",
+      "tool_status": "error"
+    }
+  ]
+}

@@ -556,3 +556,19 @@ def test_publish_rejects_invalid_budget_or_user_input(client: Any, config: dict[
 
 def test_publish_accepts_valid_budget_and_user_input(client: Any) -> None:
     assert _publish(client, {"budget": {"max_total_tokens": 1000, "max_wall_s": 30}, "user_input": True})
+
+
+def test_isolated_query_run_owner_only_even_for_admin(client: Any, idp: IdP) -> None:
+    alice, bob, admin = _user(idp, "query-alice"), _user(idp, "query-bob"), _admin(idp)
+    body = {"agent_id": "f4-data-query", "version": "1", "config": {"tools": ["echo"]}}
+    assert client.post("/admin/agents", json=body, headers=admin).status_code == 201
+    assert client.post("/admin/agents/f4-data-query/versions/1/publish", json={"eval_passed": True}, headers=admin).status_code == 200
+    rid = _create(client, "f4-data-query", "synthetic", alice)
+    _wait(client, rid, alice, "completed")
+    for headers in (bob, admin):
+        for suffix in ("", "/events", "/stream"):
+            assert client.get(f"/v1/runs/{rid}{suffix}", headers=headers).status_code == 403
+        result = client.get("/v1/runs", params={"agent_id": "f4-data-query"}, headers=headers)
+        assert result.status_code == 200
+        assert result.json() == {"items": [], "next_cursor": None}
+    assert client.get(f"/v1/runs/{rid}/events", headers=alice).status_code == 200

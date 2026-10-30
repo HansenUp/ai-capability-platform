@@ -116,11 +116,16 @@ async def test_llm_summary_uses_summary_alias_and_falls_back(monkeypatch: pytest
         extra = {"disable_fallbacks": True}
         plan = await compact.plan_compaction(history, agent, Level.INTERNAL, model_allowed=lambda a, lv: True, request_extra=extra)
         assert plan is not None and plan.method == "llm" and plan.summary == "用户要背景材料的要点" and plan.fallback is None
+        record = plan.payload()["model_usage_record"]
+        assert record["source"] == "context_compaction"
+        assert record["coverage"] == "response_record_only" and record["billing_verified"] is False
+        assert record["usage"]["input_tokens"] == 0  # legacy parser default, not verified free usage
         assert seen[0]["model"] == "summary-fast-2026-10" and seen[0]["disable_fallbacks"] is True and not seen[0].get("stream")
         # 机密：矩阵不准许把上下文发给摘要模型 → 不出网，退回截断
         seen.clear()
         plan = await compact.plan_compaction(history, agent, Level.CONFIDENTIAL, model_allowed=lambda a, lv: lv < Level.CONFIDENTIAL)
         assert plan is not None and plan.method == "truncate" and plan.fallback == "data_class" and seen == []
+        assert "model_usage_record" not in plan.payload()
         assert plan.payload()["data_class"] == "confidential" and plan.payload()["fallback"] == "data_class"
     finally:
         set_transport_for_tests(None)
@@ -128,6 +133,7 @@ async def test_llm_summary_uses_summary_alias_and_falls_back(monkeypatch: pytest
     try:
         plan = await compact.plan_compaction(history, agent, Level.PUBLIC, model_allowed=lambda a, lv: True)
         assert plan is not None and plan.method == "truncate" and plan.fallback == "llm_error"
+        assert "model_usage_record" not in plan.payload()
     finally:
         set_transport_for_tests(None)
 

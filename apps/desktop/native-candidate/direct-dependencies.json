@@ -1,0 +1,32 @@
+{
+  "status": "G0-resolved-not-downloaded",
+  "downloaded": false,
+  "transitive_lock_complete": true,
+  "dependencies": [
+    {
+      "name": "tauri",
+      "version": "2.12.5",
+      "registry": "crates.io",
+      "metadata": "https://docs.rs/tauri/2.12.5/tauri/",
+      "source": "https://crates.io/api/v1/crates/tauri/2.12.5/download",
+      "checksum": "5fb0244332cfb9cee7e2a568bf5da29a36ed8fdbd717f6f47a66b6b7b358c072"
+    },
+    {
+      "name": "tauri-build",
+      "version": "2.7.4",
+      "registry": "crates.io",
+      "metadata": "https://docs.rs/tauri-build/2.7.4/tauri_build/",
+      "source": "https://crates.io/api/v1/crates/tauri-build/2.7.4/download",
+      "checksum": "adddb0e648752aaac5da9c3c3c6a68e1e87cab55e3b757b18a9441ef8c3ac614"
+    },
+    {
+      "name": "serde",
+      "version": "1.0.229",
+      "registry": "crates.io",
+      "metadata": "https://docs.rs/serde/1.0.229/serde/",
+      "source": "https://crates.io/api/v1/crates/serde/1.0.229/download",
+      "checksum": "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
+    }
+  ],
+  "scope": "Cargo.lock full registry resolution; no build verification"
+}

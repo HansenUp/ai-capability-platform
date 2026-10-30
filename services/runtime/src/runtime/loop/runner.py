@@ -878,6 +878,7 @@ async def _drive(
                 return
 
             tool_calls: list[ToolUseEvent] = []  # 本轮模型请求的工具调用（未开启并行时至多一个）
+            final_response_seqs: list[int] = []
             text_parts: list[str] = []
             thinking_parts: list[str] = []
             harness_stop: str = "end_turn"  # harness 本轮的停止原因（DoneEvent.stop_reason），决定 Run 终态
@@ -994,6 +995,7 @@ async def _drive(
                                 async with SessionLocal() as s:
                                     model_response = await EventLog(s).append(run_id, RunEventType.MODEL_RESPONSE, payload)
                                     await s.commit()
+                                final_response_seqs.append(model_response.seq)
                                 tracing.record_usage(mspan, ev, model_response.seq, plan.stable_prefix_hash)
                                 if text_parts and post_denied is None:
                                     rc.history.append({"role": "assistant", "content": "".join(text_parts)})
@@ -1088,7 +1090,14 @@ async def _drive(
                 stop: Literal["end_turn", "max_tokens"] = "max_tokens" if harness_stop == "max_tokens" else "end_turn"
                 async with SessionLocal() as s:
                     log = EventLog(s)
-                    await log.append(run_id, RunEventType.RUN_DONE, {"stop_reason": stop})
+                    await log.append(
+                        run_id,
+                        RunEventType.RUN_DONE,
+                        {
+                            "stop_reason": stop,
+                            **({"final_response_seq": final_response_seqs[0]} if len(final_response_seqs) == 1 else {}),
+                        },
+                    )
                     await log.transition(run_id, RunState.COMPLETED, stop)
                     await s.commit()
                 yield DoneEvent(run_id=run_id, stop_reason=stop)

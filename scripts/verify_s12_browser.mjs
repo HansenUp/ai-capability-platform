@@ -14,7 +14,7 @@ const temporary = await mkdtemp(join(tmpdir(), "s12-browser-"));
 const metadata = join(temporary, "fixture.json");
 const noMigrations = process.argv.includes("--no-migrations");
 const safeEnv = noMigrations ? { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, LANG: "en_US.UTF-8" } : process.env;
-const fixture = spawn(join(root, ".venv/bin/python"), ["scripts/verify_s12_workbench.py", "--serve", "--browser-info", metadata, ...(noMigrations ? ["--demo-no-migrations"] : [])],
+const fixture = spawn(join(root, ".venv/bin/python"), ["scripts/verify_s12_workbench.py", "--serve", "--browser-info", metadata, ...(noMigrations ? ["--demo-no-migrations"] : []), ...(process.argv.includes("--nodes") ? ["--node-control-demo"] : [])],
   { cwd: root, env: safeEnv, stdio: ["ignore", "pipe", "pipe"] });
 let fixtureLog = "", server, tests, info, interrupted = false;
 function interrupt() { interrupted = true; tests?.kill("SIGTERM"); }
@@ -38,19 +38,20 @@ try {
   server = await createServer({ configFile: false, envDir: temporary, cacheDir: join(temporary, "vite-cache"), root: join(root, "apps/console-web"), plugins: [vue()],
     define: { "import.meta.env.VITE_LANGFUSE_HOST": JSON.stringify("http://127.0.0.1:3000"),
       "import.meta.env.VITE_LANGFUSE_PROJECT_ID": JSON.stringify("synthetic-project") },
-    server: { host: "127.0.0.1", port: 0, proxy: { "/v1": info.runtime,
+    server: { host: "127.0.0.1", port: 0, proxy: { "/v1/isolated-mcp": { target: info.runtime, changeOrigin: false }, "/v1": info.runtime,
       "/console": { target: info.console, rewrite: path => path.replace(/^\/console/, "") } } } });
   await new Promise((ready, reject) => { server.httpServer.once("error", reject); server.httpServer.listen(0, "127.0.0.1", ready); });
   if (interrupted) throw new Error("Browser acceptance interrupted");
   const port = server.httpServer.address().port;
   console.log("PROFILE: isolated headless browser; loopback Console/Runtime; signed test JWT; synthetic tools; no trace/video/token recording");
-  const testFiles = process.argv.includes("--portal-all") ? ["apps/console-web/tests/browser/component.test.mjs", "apps/console-web/tests/browser/portal-workbench.test.mjs", "apps/console-web/tests/browser/portal-catalog.test.mjs", "apps/console-web/tests/browser/portal-flow.test.mjs"] : process.argv.includes("--portal-flow") ? ["apps/console-web/tests/browser/portal-catalog.test.mjs", "apps/console-web/tests/browser/portal-flow.test.mjs"] : process.argv.includes("--portal-adapter") ? ["apps/console-web/tests/browser/portal-workbench.test.mjs", "apps/console-web/tests/browser/component.test.mjs"] : [
-    "apps/console-web/tests/browser/component.test.mjs", "apps/console-web/tests/browser/owner-operations.test.mjs", "apps/console-web/tests/browser/publishing.test.mjs",
+  const testFiles = process.argv.includes("--nodes") ? ["apps/console-web/tests/browser/nodes.test.mjs", "apps/console-web/tests/browser/node-control.test.mjs", "apps/console-web/tests/browser/node-control-flow.test.mjs"] : process.argv.includes("--a2a") ? ["apps/console-web/tests/browser/a2a.test.mjs"] : process.argv.includes("--discovery") ? ["apps/console-web/tests/browser/discovery.test.mjs"] : process.argv.includes("--data-views") ? ["apps/console-web/tests/browser/data-views.test.mjs"] : process.argv.includes("--alerts") ? ["apps/console-web/tests/browser/alerts.test.mjs"] : process.argv.includes("--f2") ? ["apps/console-web/tests/browser/f2-conversations.test.mjs"] : process.argv.includes("--portal-all") ? ["apps/console-web/tests/browser/component.test.mjs", "apps/console-web/tests/browser/portal-workbench.test.mjs", "apps/console-web/tests/browser/portal-catalog.test.mjs", "apps/console-web/tests/browser/portal-flow.test.mjs"] : process.argv.includes("--portal-flow") ? ["apps/console-web/tests/browser/portal-catalog.test.mjs", "apps/console-web/tests/browser/portal-flow.test.mjs"] : process.argv.includes("--portal-adapter") ? ["apps/console-web/tests/browser/portal-workbench.test.mjs", "apps/console-web/tests/browser/component.test.mjs"] : [
+    "apps/console-web/tests/browser/data-views.test.mjs", "apps/console-web/tests/browser/alerts.test.mjs", "apps/console-web/tests/browser/component.test.mjs", "apps/console-web/tests/browser/owner-operations.test.mjs", "apps/console-web/tests/browser/publishing.test.mjs",
     "apps/console-web/tests/browser/nodes.test.mjs", "apps/console-web/tests/browser/readonly.test.mjs",
     "apps/console-web/tests/browser/directory-skills.test.mjs", "apps/console-web/tests/browser/agent-config.test.mjs",
     "apps/console-web/tests/browser/s12-closure.test.mjs", "apps/console-web/tests/browser/sse.test.mjs",
     "apps/console-web/tests/browser/credential.test.mjs", "apps/console-web/tests/browser/ledger.test.mjs", "apps/console-web/tests/browser/approval.test.mjs", "apps/console-web/tests/browser/answer.test.mjs", "apps/console-web/tests/browser/create.test.mjs", "apps/console-web/tests/browser/feedback.test.mjs", "apps/console-web/tests/browser/feedback-v2.test.mjs", "apps/console-web/tests/browser/trusted-feedback.test.mjs", "apps/console-web/tests/browser/e2e.test.mjs"];
   if (process.argv.includes("--with-portal")) testFiles.push("apps/console-web/tests/browser/portal-workbench.test.mjs", "apps/console-web/tests/browser/portal-catalog.test.mjs", "apps/console-web/tests/browser/portal-flow.test.mjs");
+  if (noMigrations && !process.argv.includes("--nodes") && !process.argv.includes("--a2a") && !process.argv.includes("--discovery") && !process.argv.includes("--f2") && !process.argv.includes("--alerts") && !process.argv.includes("--data-views")) testFiles.push("apps/console-web/tests/browser/f2-conversations.test.mjs", "apps/console-web/tests/browser/discovery.test.mjs", "apps/console-web/tests/browser/a2a.test.mjs");
   tests = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-timeout=30000", ...testFiles], {
     cwd: root, stdio: "inherit", env: { ...process.env, S12_BROWSER_URL: `http://127.0.0.1:${port}`,
       S12_RUNTIME_URL: info.runtime, S12_TEST_TOKEN_FILE: info.tokens, S12_CREDENTIAL_RUNS: JSON.stringify(info.credential_runs), S12_FEEDBACK_FIXTURE: JSON.stringify(info.feedback) },

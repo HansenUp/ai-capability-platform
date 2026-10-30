@@ -23,6 +23,19 @@ def tokens(provider: Any) -> dict[str, str]:
             }
         )
         for name in ("alice", "bob")
+    } | {
+        "node_" + name: provider.token(
+            {
+                "sub": name,
+                "aud": "console-owner-test",
+                "azp": "console-test",
+                "identity_type": "user",
+                "nbf": int(time.time()) - 1,
+                "exp": int(time.time()) + 1800,
+                "realm_access": {"roles": ["node-admin"]},
+            }
+        )
+        for name in ("alice", "bob")
     }
 
 
@@ -39,7 +52,7 @@ def configure(provider: Any) -> None:
         "console-test",
         json.dumps(public),
         tuple(owner_auth.Binding(issuer, "default", name, "owner-" + name) for name in ("alice", "bob")),
-        (("owner-admin", Role.ADMIN),),
+        (("owner-admin", Role.ADMIN), ("alert-admin", Role.TENANT_ADMIN), ("node-admin", Role.PLATFORM_ADMIN)),
     )
 
     def source(request: httpx.Request) -> httpx.Response:

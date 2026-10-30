@@ -143,3 +143,30 @@ test("本人任务：拒绝跨主体/Agent/状态、重复记录和循环游标"
     await assert.rejects(client.listMyRuns("human:alice","demo","completed","opaque"),/范围或分页/);
   }
 });
+
+
+test("F2分页SDK：GET绑定页游标，旧数组接口拒绝静默截断", async () => {
+  const scope = "a".repeat(64), ids = Array.from({ length: 200 }, (_, i) => `00000000-0000-0000-0000-${String(i).padStart(12, "0")}`);
+  const calls = [];
+  const client = new sdk.RuntimeRunClient(async () => ({}), async (path, options) => {
+    calls.push([path, options]); const limit = Number(new URL(path, "http://synthetic").searchParams.get("limit"));
+    return Response.json({ scope_id: scope, agent_id: "demo", items: ids.slice(0, limit), page_size: limit, next_cursor: "synthetic-next", snapshot_guaranteed: false });
+  });
+  const page = await client.conversationsPage("demo", scope, "synthetic-before");
+  assert.equal(page.items.length, 20); assert.equal(page.next_cursor, "synthetic-next");
+  assert.equal(calls[0][1].method, "GET"); assert.equal(new URL(calls[0][0], "http://synthetic").searchParams.get("cursor"), "synthetic-before");
+  await assert.rejects(() => client.conversations("demo", scope), /分页查询/);
+  const before = calls.length;
+  await assert.rejects(() => client.conversationsPage("demo", scope, null, undefined, 201), /参数无效/);
+  assert.equal(calls.length, before);
+});
+
+test("F2分页SDK：拒绝串身份、重复游标及伪造快照", async () => {
+  const scope = "a".repeat(64), cid = "00000000-0000-0000-0000-000000000001";
+  const base = { scope_id: scope, agent_id: "demo", conversation_id: cid,
+    items: [{ run_id: "run_one", state: "completed", selectable: true }], next_cursor: null, page_size: 20, snapshot_guaranteed: false };
+  for (const patch of [{ scope_id: "b".repeat(64) }, { conversation_id: "other" }, { next_cursor: "same" }, { snapshot_guaranteed: true }, { items: [...base.items, ...base.items] }]) {
+    const client = new sdk.RuntimeRunClient(async () => ({}), async () => Response.json({ ...base, ...patch }));
+    await assert.rejects(() => client.conversationPage(cid, "demo", scope, "same"));
+  }
+});

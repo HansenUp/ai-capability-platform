@@ -476,3 +476,14 @@ async def acknowledge(attempt_id: UUID, body: EvidenceBody, principal: Principal
         )
         await session.commit()
         return view(row)
+
+
+from runtime.api import conversations  # noqa: E402
+
+router.add_api_route("/conversations", conversations.list_conversations, methods=["GET"])
+router.add_api_route("/conversations/{conversation_id}", conversations.read_conversation, methods=["GET"])
+
+from runtime.api import synthetic_attachments  # noqa: E402
+
+router.add_api_route("/attachment-preview", synthetic_attachments.preview, methods=["POST"])
+router.add_api_route("/attempts/{attempt_id}/attachments", synthetic_attachments.receipt, methods=["GET"])

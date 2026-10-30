@@ -1,0 +1,11 @@
+{
+  "identifier": "main-candidate",
+  "description": "Local candidate; no shell/fs/network permissions",
+  "local": true,
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-host-command"
+  ]
+}

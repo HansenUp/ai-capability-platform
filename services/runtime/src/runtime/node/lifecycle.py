@@ -14,9 +14,28 @@ class NodeLifecycle:
         self.durable = durable
         self.accepting = True
         self.active_requests = 0
+        self.http_concurrency_limit: int | None = None
         self.http_idle = asyncio.Event()
         self.http_idle.set()
         self.prepared = False
+
+    def set_http_concurrency_limit(self, limit: int) -> None:
+        """Injected isolated control only; does not cancel requests or alter workers."""
+        if type(limit) is not int or limit <= 0:
+            raise ValueError("HTTP concurrency limit must be a positive integer")
+        self.http_concurrency_limit = limit
+
+    def close_admission(self) -> None:
+        """Shared admission primitive; no cancellation, exit or lease mutation."""
+        self.accepting = False
+        self.prepared = False
+        if self.background.worker is not None:
+            self.background.worker.paused = True
+
+    async def wait_idle(self) -> None:
+        await self.http_idle.wait()
+        if self.background.worker is not None:
+            await self.background.worker.idle.wait()
 
     def resume(self) -> None:
         self.accepting = True
@@ -32,15 +51,11 @@ class NodeLifecycle:
             raise ValueError("restart requires a persistent Runtime database")
         if self.request_exit is None or not self.durable:
             raise ValueError("restart requires the managed launcher and a durable Redis queue")
-        self.accepting = False
-        if self.background.worker is not None:
-            self.background.worker.paused = True
+        self.close_admission()
         try:
             async with asyncio.timeout(timeout_s):
                 await notify()
-                await self.http_idle.wait()
-                if self.background.worker is not None:
-                    await self.background.worker.idle.wait()
+                await self.wait_idle()
             self.prepared = True
         except BaseException:
             self.resume()
@@ -66,6 +81,12 @@ class AdmissionMiddleware:
             response = JSONResponse({"detail": "node is draining", "code": "NODE_DRAINING"}, status_code=503, headers={"Retry-After": "1"})
             await response(scope, receive, send)
             return
+        limit = lifecycle.http_concurrency_limit
+        if limit is not None and lifecycle.active_requests >= limit:
+            response = JSONResponse({"detail": "node request concurrency limit reached", "code": "NODE_CONCURRENCY_LIMIT"}, status_code=429)
+            await response(scope, receive, send)
+            return
+        # No await between checking and claiming: atomic within this ASGI event loop.
         lifecycle.active_requests += 1
         lifecycle.http_idle.clear()
         try:

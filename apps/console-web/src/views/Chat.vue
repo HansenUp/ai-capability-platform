@@ -3,14 +3,15 @@ import { computed, inject, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import TaskGuide from "../components/TaskGuide.vue";
 import RunOutcome from "../components/RunOutcome.vue";
-import { eventStage, runHint } from "../run-outcome";
+import { eventStage, runHint, agentHint } from "../run-outcome";
 import { demoContextKey } from "../demo-context";
-import { answerValue, RuntimeRequestError, RuntimeRunClient, workbenchCards, type ApprovalCard, type WorkbenchEvent, type WorkbenchRun, type WorkbenchIdentity, type WriteAttempt } from "@ai-platform/sdk-web/run-client";
+import { answerValue, RuntimeRequestError, RuntimeRunClient, workbenchCards, type SyntheticAttachment, type AttachmentStatus, type ApprovalCard, type WorkbenchEvent, type WorkbenchRun, type WorkbenchIdentity, type WriteAttempt } from "@ai-platform/sdk-web/run-client";
 
 function navigateSection(id: string) { const section = document.getElementById(id); section?.scrollIntoView({ block: "start" }); section?.focus({ preventScroll: true }); }
 
-const props = defineProps<{ portalAgent?: string; portalTokenProvider?: () => Promise<string> }>();
+const props = defineProps<{ isolatedQueryText?: string; portalAgent?: string; portalTokenProvider?: () => Promise<string> }>();
 const route = useRoute();
+const linkedAgent = computed(() => agentHint(route?.query.agent));
 const linkedRun = computed(() => runHint(route?.query.run));
 const development = import.meta.env.DEV && !props.portalTokenProvider;
 async function applyPortal() {
@@ -48,6 +49,79 @@ const following = ref(false), followedEvents = ref<WorkbenchEvent[]>([]), follow
 let readController: AbortController | null = null;
 const agent = ref(props.portalAgent ?? "demo"), text = ref(""), runId = ref(""), answer = ref("");
 const history = ref<WorkbenchRun[]>([]), nextHistory = ref<string | null>(null);
+const conversationId = ref(""), conversationIds = ref<string[]>([]), selectedHistory = ref<string[]>([]);
+const conversationHistory = ref<{ run_id: string; state: string; selectable: boolean }[]>([]);
+const attachments = ref<SyntheticAttachment[]>([]), attachmentStatuses = ref<AttachmentStatus[]>([]), registeredAttachments = ref<AttachmentStatus[]>([]);
+const attachmentMessage = ref(""), attachmentLoading = ref(false), attachmentInvalid = ref(false);
+let attachmentGeneration = 0;
+watch(() => activeAttempt.value?.attempt_id, () => { registeredAttachments.value = []; }, { flush: "sync" });
+function attachmentReason(reason: string | null | undefined) {
+  return ({ INVALID_UTF8: "不是有效UTF-8", TXT_FILENAME_REQUIRED: "文件名必须为txt且不能含路径", TOO_LARGE: "超过1MiB",
+    SYNTHETIC_REJECTED: "合成扫描拒绝", SCANNER_UNAVAILABLE: "合成扫描不可用" } as Record<string, string>)[reason ?? ""] ?? "";
+}
+const attachmentsReady = computed(() => !attachmentLoading.value && !attachmentInvalid.value && attachments.value.length === attachmentStatuses.value.length && attachmentStatuses.value.every(item => item.status === "passed"));
+function clearAttachments() { attachmentInvalid.value = false; attachmentGeneration++; attachments.value = []; attachmentStatuses.value = []; registeredAttachments.value = []; attachmentMessage.value = ""; attachmentLoading.value = false; }
+watch(conversationId, clearAttachments, { flush: "sync" });
+async function chooseAttachments(event: Event) {
+  clearAttachments();
+  const input = event.target as HTMLInputElement, files = [...(input.files ?? [])]; input.value = "";
+  if (!files.length) return;
+  if (files.length > 3 || files.some(file => !file.name.endsWith(".txt") || file.size > 1048576)) { attachmentInvalid.value = true; attachmentMessage.value = "仅允许最多3个合成txt附件，每个不超过1MiB。"; return; }
+  const current = generation, revision = attachmentGeneration; attachmentLoading.value = true;
+  try {
+    const loaded = await Promise.all(files.map(async file => ({ name: file.name, text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer()) })));
+    if (current !== generation || revision !== attachmentGeneration) return;
+    attachments.value = loaded; attachmentMessage.value = "待扫描：内容仅在内存中，尚未登记。";
+  } catch { if (current === generation && revision === attachmentGeneration) { attachmentInvalid.value = true; attachmentMessage.value = "附件必须为有效UTF-8文本；未登记。"; } }
+  finally { if (current === generation && revision === attachmentGeneration) attachmentLoading.value = false; }
+}
+async function scanAttachments() {
+  if (!verified.value || attachmentLoading.value || !attachments.value.length) return;
+  const current = generation, revision = ++attachmentGeneration, scope = verified.value.scope_id;
+  attachmentLoading.value = true; attachmentStatuses.value = []; attachmentMessage.value = "正在运行合成扫描替身…";
+  try {
+    const rows = await client.previewAttachments(attachments.value, scope);
+    if (current !== generation || revision !== attachmentGeneration) return;
+    attachmentStatuses.value = rows;
+    attachmentMessage.value = rows.every(item => item.status === "passed") ? "合成扫描通过；登记时服务端仍会重新扫描并绑定内容。" : "扫描失败：请移除或更换附件后重新扫描；未登记。";
+  } catch { if (current === generation && revision === attachmentGeneration) attachmentMessage.value = "扫描不可用或响应不匹配；未登记，不自动重试。"; }
+  finally { if (current === generation && revision === attachmentGeneration) attachmentLoading.value = false; }
+}
+async function readRegisteredAttachments() {
+  const row = activeAttempt.value, current = generation; registeredAttachments.value = [];
+  if (!row || row.action !== "create") return;
+  await perform(async () => { const items = await client.registeredAttachments(row); if (current === generation && activeAttempt.value?.fingerprint === row.fingerprint) registeredAttachments.value = items; });
+}
+const conversationNext = ref<string | null>(null), historyNext = ref<string | null>(null);
+const conversationPageNumber = ref(0), historyPageNumber = ref(0);
+const conversationPageReady = ref(false), historyPageReady = ref(false);
+let conversationGeneration = 0;
+function newConversation() { clearConversations(); conversationId.value = crypto.randomUUID(); }
+function resetConversationHistory() { conversationGeneration++; selectedHistory.value = []; conversationHistory.value = []; historyNext.value = null; historyPageNumber.value = 0; historyPageReady.value = false; }
+function clearConversations() { clearAttachments(); resetConversationHistory(); conversationId.value = ""; conversationIds.value = []; conversationNext.value = null; conversationPageNumber.value = 0; conversationPageReady.value = false; }
+watch(agent, clearConversations, { flush: "sync" });
+watch(conversationId, resetConversationHistory, { flush: "sync" });
+async function readConversations(detail = false, next = false) {
+  if (!verified.value || busy.value) return;
+  const scope = verified.value.scope_id, selectedAgent = agent.value, id = conversationId.value;
+  const cursor = next ? (detail ? historyNext.value : conversationNext.value) : null;
+  if (next && cursor === null) return;
+  const page = next ? (detail ? historyPageNumber.value : conversationPageNumber.value) + 1 : 1;
+  const current = generation, revision = ++conversationGeneration;
+  selectedHistory.value = []; conversationHistory.value = []; historyNext.value = null; historyPageReady.value = false;
+  if (!detail) { conversationIds.value = []; conversationNext.value = null; conversationPageReady.value = false; }
+  await perform(async () => {
+    if (detail) {
+      const result = await client.conversationPage(id, selectedAgent, scope, cursor);
+      if (current !== generation || revision !== conversationGeneration) return;
+      conversationHistory.value = result.items; historyNext.value = result.next_cursor; historyPageNumber.value = page; historyPageReady.value = true;
+    } else {
+      const result = await client.conversationsPage(selectedAgent, scope, cursor);
+      if (current !== generation || revision !== conversationGeneration) return;
+      conversationIds.value = result.items; conversationNext.value = result.next_cursor; conversationPageNumber.value = page; conversationPageReady.value = true;
+    }
+  });
+}
 async function loadHistory(next = false) {
   if (!props.portalTokenProvider || !verified.value) return;
   const subject = verified.value.subject, selectedAgent = agent.value, current = generation;
@@ -82,6 +156,7 @@ function applyDemo() {
 function apply() {
   if (following.value) stopReading();
   if (busy.value) return;
+  clearConversations();
   history.value = []; nextHistory.value = null;
   generation++; closedFeedback.value = null; ledgerController?.abort(); ledgerController = null; checking.value = false;
   ledgerReady.value = false; verified.value = null; activeAttempt.value = null; ackPreview.value = null; expectedAttempt.value = ""; expectedRun.value = ""; expectedAction.value = null; expectedApproval.value = null;
@@ -269,17 +344,19 @@ async function perform(action: () => Promise<void>) {
   } finally { if (current === generation) busy.value = false; }
 }
 async function send() {
-  if (writeBlocked.value) return;
+  if (writeBlocked.value || !attachmentsReady.value) return;
   if (!agent.value.trim() || !text.value.trim()) return;
-  const selectedAgent = agent.value.trim(), original = text.value;
+  const selectedAgent = props.isolatedQueryText !== undefined ? "f4-data-query" : agent.value.trim(), original = text.value;
+  if (props.isolatedQueryText !== undefined) clearConversations();
   await ledgerAction(async () => {
     await preflight();
     const current = generation; clear();
     expectedAttempt.value = crypto.randomUUID(); expectedRun.value = ""; expectedAction.value = "create"; expectedApproval.value = null;
     expectedCreateAgent.value = selectedAgent;
-    const prepared = await client.prepareCreate(selectedAgent, original, verified.value!.scope_id, expectedAttempt.value);
+    const prepared = await client.prepareCreate(selectedAgent, original, verified.value!.scope_id, expectedAttempt.value,
+      conversationId.value ? { id: conversationId.value, selected: [...selectedHistory.value], attachments: attachments.value.map(item => ({ ...item })) } : undefined);
     if (current !== generation) return;
-    activeAttempt.value = prepared; expectedRun.value = prepared.run_id; executionCreate.value = original; text.value = "";
+    activeAttempt.value = prepared; expectedRun.value = prepared.run_id; executionCreate.value = original; text.value = ""; clearAttachments();
     message.value = "创建已登记，仅预留 Run 标识，尚未创建或入队；请核对 Agent 快照并显式执行一次。";
   });
 }
@@ -319,7 +396,7 @@ async function provide() {
     }
   });
 }
-onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?.abort(); readController = null; ledgerController = null; credentials.value = {}; identity.token = ""; executionAnswer.value = ""; executionCreate.value = ""; verified.value = null; activeAttempt.value = null; clear(); resetFollow(); });
+onBeforeUnmount(() => { clearConversations(); generation++; readController?.abort(); ledgerController?.abort(); readController = null; ledgerController = null; credentials.value = {}; identity.token = ""; executionAnswer.value = ""; executionCreate.value = ""; verified.value = null; activeAttempt.value = null; clear(); resetFollow(); });
 </script>
 
 <template>
@@ -378,8 +455,49 @@ onBeforeUnmount(() => { generation++; readController?.abort(); ledgerController?
   </section>
   <h3 id="workbench-compose" tabindex="-1">发起新任务</h3>
   <p>每次创建独立 Run；已有任务请使用下方定位入口继续读取。</p>
-  <form @submit.prevent="send"><fieldset :disabled="busy || checking || !applied || writeBlocked"><legend>发送消息</legend>
-    <label>Agent ID <input v-model="agent" :readonly="!!props.portalTokenProvider" required maxlength="64" /></label><label>消息 <textarea v-model="text" required /></label><button>登记新 Run（尚未创建）</button>
+  <section v-if="props.isolatedQueryText === undefined" class="panel" aria-label="隔离会话">
+      <h3>隔离会话 · 每轮独立任务</h3>
+      <p>仅本机试用启用。会话列表限定当前 Agent，重载后请重新核对 Agent 并读取本人会话。显式选择历史后登记下一轮；不自动重发，原始问题与历史快照由服务端绑定。</p>
+      <fieldset :disabled="busy || checking || !verified || writeBlocked">
+        <button type="button" @click="newConversation()">开始新会话（尚未写入）</button>
+        <button type="button" @click="readConversations()">读取本人会话</button>
+        <button type="button" :disabled="conversationNext === null" @click="readConversations(false, true)">会话下一页</button>
+        <p v-if="conversationPageReady" aria-label="会话分页状态">第 {{ conversationPageNumber }} 页 · 本页 {{ conversationIds.length }} 条 · {{ conversationNext ? '还有下一页' : '已到末页' }}。每页20条，无全量总数；点击读取本人会话返回首页。</p>
+        <button type="button" @click="clearConversations()">返回独立任务</button>
+        <label for="conversation-select">会话</label><select id="conversation-select" aria-label="会话" v-model="conversationId" >
+          <option value="">独立任务</option><option v-if="conversationId &amp;&amp; !conversationIds.includes(conversationId)" :value="conversationId">{{ conversationId }}</option>
+          <option v-for="id in conversationIds" :key="id" :value="id">{{ id }}</option>
+        </select>
+        <div v-if="conversationId" aria-label="合成txt附件">
+          <p>仅选合成UTF-8 txt；每个≤1MiB，最多3个。扫描为替身，不是真实杀毒；不会自动沿用历史附件。</p>
+          <label>选择合成txt附件<input type="file" accept=".txt" multiple @change="chooseAttachments" /></label>
+          <button type="button" :disabled="attachmentLoading || !attachments.length" @click="scanAttachments">扫描合成附件</button>
+          <button type="button" @click="clearAttachments">移除全部附件</button>
+          <p role="status" aria-label="附件状态">{{ attachmentMessage }}</p>
+          <article v-for="(item, index) in attachments" :key="index">
+            <strong>{{ item.name }}</strong><pre>{{ item.text.slice(0, 2000) }}</pre><p v-if="item.text.length > 2000">预览仅显示前2000字符，登记绑定完整内容。</p>
+            <p>{{ attachmentStatuses[index] ? (attachmentStatuses[index].status === 'passed' ? '通过' : '未通过') : '待扫描' }} {{ attachmentReason(attachmentStatuses[index]?.reason) }}</p>
+          </article>
+        </div>
+        <button type="button" :disabled="!conversationId" @click="readConversations(true)">读取权威历史</button>
+        <button type="button" :disabled="historyNext === null" @click="readConversations(true, true)">历史下一页</button>
+        <p>翻页或刷新会清空历史选择；最多选择20条终态记录。列表按读取时状态展示，不是固定快照，新增记录可能需要回到首页查看。</p>
+        <p v-if="historyPageReady" aria-label="历史分页状态">第 {{ historyPageNumber }} 页 · 本页 {{ conversationHistory.length }} 条 · {{ historyNext ? '还有下一页' : '已到末页' }} · 已选 {{ selectedHistory.length }} 条。点击读取权威历史返回首页。</p>
+        <label v-for="item in conversationHistory" :key="item.run_id"><input v-model="selectedHistory" type="checkbox" :value="item.run_id" :disabled="!item.selectable || (selectedHistory.length >= 20 && !selectedHistory.includes(item.run_id))" />{{ item.run_id }} · {{ item.state }}
+          <button type="button" @click="runId = item.run_id">查看同 Run 轨迹</button>
+        </label>
+      </fieldset>
+    </section>
+    <div v-if="activeAttempt?.action === 'create'">
+      <button type="button" :disabled="busy" @click="readRegisteredAttachments">只读核对登记附件摘要</button>
+      <p>恢复只读取服务端绑定的名称和摘要，不恢复附件正文、不重新上传。独立任务可能没有附件记录。</p>
+      <p v-for="(item, index) in registeredAttachments" :key="index">{{ item.name }} · {{ item.bytes }} bytes · {{ item.sha256 }} · 合成扫描通过</p>
+    </div>
+    <form @submit.prevent="send"><fieldset :disabled="busy || checking || !applied || writeBlocked"><legend>发送消息</legend>
+    <p v-if="linkedAgent && !props.portalTokenProvider">发布页推荐 Agent：{{ linkedAgent }}。仅填入标识，不固定版本、不转移管理权限；执行时由 Runtime 重新验权。</p>
+    <button v-if="linkedAgent && !props.portalTokenProvider" type="button" @click="agent = linkedAgent">使用发布页 Agent（不创建任务）</button>
+    <button v-if="props.isolatedQueryText !== undefined" type="button" @click="agent = 'f4-data-query'; text = props.isolatedQueryText; clearConversations()">填入受限查询草稿（不创建）</button>
+    <label>Agent ID <input v-model="agent" :readonly="!!props.portalTokenProvider || props.isolatedQueryText !== undefined" required maxlength="64" /></label><label>消息 <textarea v-model="text" required /></label><button :disabled="!attachmentsReady">登记新 Run（尚未创建）</button>
   </fieldset></form>
   <section v-if="props.portalTokenProvider && verified" aria-label="本人 Run 记录">
     <h3>当前 Agent · 本人 Run 记录</h3>

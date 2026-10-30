@@ -1,0 +1,14 @@
+[package]
+name = "ai-platform-desktop-candidate"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", default-features = false }
+
+[dependencies]
+tauri = { version = "=2.12.5", default-features = false, features = ["wry", "custom-protocol"] }
+serde = { version = "=1.0.229", features = ["derive"] }

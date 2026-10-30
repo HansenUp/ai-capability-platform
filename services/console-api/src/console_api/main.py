@@ -38,6 +38,8 @@ from console_api import (
     eval_gate,
     feedback_metrics,
     gateway_client,
+    isolated_alerts,
+    isolated_node_control,
     node_auth,
     owner_metrics,
     routing_auth,
@@ -72,6 +74,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="AI Capability Platform · Console API", version="0.1.0", lifespan=lifespan)
+
+app.include_router(isolated_alerts.router)
+app.include_router(isolated_node_control.router)
 app.include_router(directory.router)
 app.include_router(trace_metrics.router)
 app.include_router(feedback_metrics.router)
@@ -708,6 +713,11 @@ class CommandIn(BaseModel):
 
 
 async def _enqueue(s: AsyncSession, op: Operator, node_id: str, body: CommandIn) -> NodeCommand:
+    isolated = getattr(app.state, "isolated_node_control", None)
+    if isinstance(isolated, isolated_node_control.Store):
+        with isolated.transaction(write=False) as control_db:
+            if control_db.execute("SELECT 1 FROM nodes WHERE id=?", (node_id,)).fetchone():
+                raise HTTPException(409, "isolated control node refuses legacy command ingress")
     if body.type == "graceful_restart" and op.role < Role.PLATFORM_ADMIN:
         raise HTTPException(403, "shared node restart requires PLATFORM_ADMIN")
     cmd = NodeCommand(

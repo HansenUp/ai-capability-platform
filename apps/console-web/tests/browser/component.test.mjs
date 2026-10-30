@@ -207,3 +207,19 @@ test("B1 narrow committed receipt: keyboard ACK preview/cancel preserves write l
   assert.equal(await page.getByRole('button',{name:'登记新 Run（尚未创建）',exact:true}).isDisabled(),true);
   assert.equal(calls.filter(c=>c.method==='POST').length,0);
 }));
+
+test("F0辅助用量：压缩响应独立展示且换身份清空，不发送写请求", async () => fixture(async ({ page, calls, state }) => {
+  state({...run,state:"completed"}, [
+    {run_id:run.run_id,seq:1,type:"model.response",payload:{usage:{model:"main-test",input_tokens:10,output_tokens:2},hooks:[{name:"thinking_summary",point:"post_model",model_usage_record:{source:"thinking_summary",coverage:"response_record_only",billing_verified:false,response_model:"summary-test",usage:{input_reported:true,output_reported:true,cost_reported:true,input_tokens:40,output_tokens:6}}}]}},
+    {run_id:run.run_id,seq:2,type:"context.compacted",payload:{method:"llm",tokens:{before:9999,after:20},model_usage_record:{source:"context_compaction",coverage:"response_record_only",billing_verified:false,response_model:"compact-test",usage:{input_reported:true,output_reported:true,cost_reported:true,input_tokens:30,output_tokens:5,cost:0.1}}}},
+  ]);
+  await apply(page,"component-token"); await inspect(page);
+  const region=page.getByRole("region",{name:"模型用量与预算",exact:true});
+  await region.getByText(/独立响应记录：模型 compact-test/).waitFor();
+  await region.getByText(/输入 Token 30/).waitFor();
+  await region.getByText(/思维摘要响应记录 #1：模型 summary-test/).waitFor();
+  assert.equal((await region.innerText()).includes("9999"),false);
+  assert.equal(calls.filter(call=>call.method!=="GET").length,0);
+  await apply(page,"changed-token");
+  assert.equal(await page.getByRole("region",{name:"模型用量与预算",exact:true}).count(),0);
+}));

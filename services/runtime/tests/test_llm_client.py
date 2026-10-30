@@ -435,3 +435,15 @@ def test_to_openai_tools_and_tool_name():
     }
     assert out[1]["function"]["parameters"]["properties"] == {"x": {"type": "string"}}
     assert to_openai_tool_name("a b/c.d") == "a_b_c__d" and len(to_openai_tool_name("x" * 100)) == 64
+
+
+def test_usage_diagnostic_provenance_preserves_legacy_values():
+    from runtime.llm.client import _usage_from
+
+    missing = _usage_from({}, "")
+    zero = _usage_from({"prompt_tokens": 0, "completion_tokens": 0, "cost": 0}, "")
+    assert missing.input_tokens == zero.input_tokens == 0
+    assert not missing.input_reported and not missing.output_reported and not missing.cost_reported
+    assert zero.input_reported and zero.output_reported and zero.cost_reported
+    invalid = _usage_from({"prompt_tokens": True, "completion_tokens": -1, "cost": float("inf")}, "")
+    assert not invalid.input_reported and not invalid.output_reported and not invalid.cost_reported

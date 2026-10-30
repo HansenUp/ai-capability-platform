@@ -67,6 +67,11 @@ onBeforeUnmount(() => { controlRead.invalidate(); traceRead.invalidate(); });
   <section>
     <h2>运营只读视图</h2>
     <p>复用 S10 控制面与本机 Langfuse 接口，不新增采集或写入。Trace 不等于 Run；费用是来源报告的 USD，不是财务结算。</p>
+    <nav aria-label="运营功能导航" class="operations-nav">
+      <a href="#trace-usage">用量与费用</a><a href="#feedback-trusted">可信反馈</a><a href="#feedback-history">历史评分审计</a>
+      <a href="/manage/agents">评测与发布</a><a href="/manage/runs">任务与错误定位</a><a href="/manage/alerts">隔离告警与处理历史</a>
+    </nav>
+    <p>任务详情展示已记录的模型响应和辅助调用；本页按 Trace 统计，二者不能相加作为账户账单。评测入口只负责导航，不自动查询或发布。</p>
     <fieldset><legend>本机开发身份（非生产鉴权）</legend>
       <label>用户 <input v-model="operator.user" maxlength="128" /></label>
       <label>角色 <select v-model="operator.role"><option v-for="role in ['USER', 'ADMIN', 'TENANT_ADMIN', 'PLATFORM_ADMIN']" :key="role">{{ role }}</option></select></label>
@@ -85,7 +90,7 @@ onBeforeUnmount(() => { controlRead.invalidate(); traceRead.invalidate(); });
       <p>指令状态计数（不是 Run 成功率）</p><ul><li v-for="(count, status) in control.commands" :key="status">{{ status }}：{{ metric(count) }}</li></ul>
     </div>
     <p v-else>控制面数据未读取或不可用。</p>
-    <h3>本机 Langfuse Trace 用量与费用</h3>
+    <h3 id="trace-usage" tabindex="-1">本机 Langfuse Trace 用量与费用</h3>
     <form @submit.prevent="loadTraces"><fieldset :disabled="!allowed || traceBusy"><legend>同租户 Agent · 最长七天</legend>
       <label>Agent ID <input v-model="query.agent" required maxlength="64" /></label>
       <label>开始（浏览器本地时间）<input v-model="query.since" type="datetime-local" required /></label>
@@ -95,6 +100,14 @@ onBeforeUnmount(() => { controlRead.invalidate(); traceRead.invalidate(); });
     <p v-if="traceError" role="alert">{{ traceError }}</p>
     <div v-if="traces">
       <p>租户 {{ traces.tenant_id }} / {{ traces.agent_id }} · {{ traces.since }} 至 {{ traces.until }} · 读取时间 {{ traces.generated_at }}</p>
+      <section aria-label="用量统计覆盖范围">
+        <h4>本次查询覆盖范围</h4>
+        <p>用量完整 Trace：{{ metric(traces.tokens.traces_with_complete_usage) }} / {{ metric(traces.trace_calls) }}；费用完整 Trace：{{ metric(traces.cost_usd.traces_with_complete_cost) }} / {{ metric(traces.trace_calls) }}。</p>
+        <p v-if="traces.trace_calls === 0">该范围没有 Trace 样本，不能据此推断账户没有调用或费用。</p>
+        <p v-else-if="traces.tokens.total === null || traces.cost_usd.total === null">统计存在缺失：下方已知小计仅包含来源有记录的部分，不能视为全部消耗。</p>
+        <p v-else>当前范围已取得来源报告总量；不代表供应商实付账单或所有调用入口均已采集。</p>
+        <p>预算状态：本统计接口未提供预算证据，额度、已预留与剩余额度未知；不会据此解锁预算或重试调用。</p>
+      </section>
       <dl><dt>Trace 调用 / Generation</dt><dd>{{ metric(traces.trace_calls) }} / {{ metric(traces.generations) }}</dd>
         <dt>Token 总量</dt><dd>{{ metric(traces.tokens.total) }}</dd>
         <dt>Token 已知小计 / 用量完整 Trace</dt><dd>{{ metric(traces.tokens.known_trace_subtotal) }} / {{ metric(traces.tokens.traces_with_complete_usage) }}</dd>
@@ -103,13 +116,14 @@ onBeforeUnmount(() => { controlRead.invalidate(); traceRead.invalidate(); });
       <p>已完成有界扫描；不保证并发写入时的快照。已知小计不是总量；缺失值显示未知，不补零。</p>
     </div>
     <p v-else>Trace 数据尚未读取或不可用；不显示上一次结果。</p>
-    <FeedbackAudit :operator="operator" />
-    <TrustedFeedbackMetrics :operator="operator" />
+    <div id="feedback-history" tabindex="-1"><FeedbackAudit :operator="operator" /></div>
+    <div id="feedback-trusted" tabindex="-1"><TrustedFeedbackMetrics :operator="operator" /></div>
     <p>待定义：Run 成功率、时延、反馈采纳率及北极星指标；本页不推断这些值。</p>
   </section>
 </template>
 
 <style scoped>
+.operations-nav { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
 fieldset { margin: 16px 0; padding: 12px; } label { display: inline-flex; gap: 6px; margin: 6px; }
 dl { display: grid; grid-template-columns: minmax(180px, 1fr) 1fr; gap: 8px; } dd { margin: 0; }
 input, select, button { padding: 6px; } [role="alert"] { color: #b91c1c; } p { overflow-wrap: anywhere; }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { nodeReceiptGuidance } from "../node-diagnostics";
 import { commandPath, readSession } from "../operations";
 import { CommandSubmissionError, prepareCommand, submitCommand, type CommandForm, type PreparedCommand } from "../node-commands";
 import { auditPath, candidateId, historyPath, matchesAttempt, nextCursor, validateCommandSummary, validateHistoryPage, type AuditCandidate, type CommandSummary } from "../command-history";
@@ -253,7 +254,7 @@ onMounted(() => run());
 
 <template>
   <section class="nodes-page">
-    <header><div><h2>节点分组与路由</h2><p>仅本机开发管理。分组属于共享基础设施；Agent 路由绑定按租户隔离。</p></div>
+    <header><div><h2>节点分组与路由</h2><RouterLink to="/manage/node-control">独立排空／恢复隔离实验</RouterLink><p>仅本机开发管理。分组属于共享基础设施；Agent 路由绑定按租户隔离。</p></div>
       <button :disabled="busy" @click="run()">{{ busy ? "处理中…" : "刷新" }}</button></header>
     <fieldset :disabled="busy || commandBusy" class="operator">
       <legend>当前操作者（开发态身份头，不代表生产鉴权）</legend>
@@ -393,6 +394,10 @@ onMounted(() => run());
         <dt>类型 / 回执状态</dt><dd>{{ receipt.type }} / {{ receipt.status }}</dd>
         <dt>创建时间 / 回执时间</dt><dd>{{ receipt.created_at || '未知' }} / {{ receipt.acked_at || '尚未回执' }}</dd></dl>
       <p v-else>尚未查询或回执不可用；切换身份或查询条件后旧结果立即清空。参数和原始执行结果不在此展开。</p>
+      <aside v-if="receipt" aria-label="回执诊断与下一步">
+        <h4>回执诊断与下一步</h4><p>{{ nodeReceiptGuidance(receipt.type, receipt.status) }}</p>
+        <p>只读恢复：保留当前节点与指令 ID，再次查询同一回执；结果未知时使用指令历史与审计候选定位。候选匹配不能证明唯一受理，也不会解锁再次下发。</p>
+      </aside>
     </section>
     <section aria-labelledby="bindings-heading">
       <h3 id="bindings-heading">Agent 路由绑定 · {{ operator.tenant }}</h3>

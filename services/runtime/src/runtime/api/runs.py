@@ -67,6 +67,9 @@ async def list_runs(
         raise _forbid(request, "only an admin can list other subjects' runs")
     owner = subject if admin else principal.subject
     q = select(Run).where(Run.tenant_id == principal.tenant_id)
+    q = q.where(or_(Run.agent_id != "f4-data-query", Run.subject == principal.subject))
+    # Reserved F6.2 synthetic profile: even administrators cannot enumerate another owner's results.
+    q = q.where(or_(Run.model_alias.notin_(["synthetic-sales", "synthetic-analytics"]), Run.subject == principal.subject))
     if owner is not None:
         q = q.where(Run.subject == owner)
     if session_id is not None:

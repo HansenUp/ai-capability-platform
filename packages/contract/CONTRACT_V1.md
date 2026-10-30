@@ -154,3 +154,9 @@
 - 不变：`Event` 判别联合、`EventType`、`RunState` 与迁移表、`ToolSpec`、`TurnInput`、`SessionSpec`、`HarnessAdapter` 协议与 `capability_tier()` 不变。
 - 兼容性：未开启并行（默认）时每轮至多一个工具调用，事件日志与 1.3.0 逐字节一致（`evals/snapshots` 重录无漂移）；`batch` 只出现在多调用批次中，忽略该键的消费方把同批调用视为相继的单个调用即可；history 未超预算时不产生 `context.compacted`。
 - 契约测试：`packages/contract/tests/test_contract.py` 新增 `test_v14_parallel_tool_calls_and_context_compacted`、`test_v14_data_class_levels_and_matrix`。
+
+
+### 本机诊断增量：上下文压缩响应记录（2026-10-28）
+`context.compacted` 可选 `model_usage_record` 为只读诊断：`source=context_compaction`、`requested_alias`、`response_model`、`usage`（现有客户端记录值）、`coverage=response_record_only`、`billing_verified=false`。仅成功取得有效摘要时写入；失败或本地截断不补记录。它不属于主 `model.response` 用量，不改变现有执行预算统计，不声明覆盖失败/重试/回退，也不证明币种或实际扣费。客户端历史解析器可能默认0，消费方不得把它解释为供应商确认的零用量。历史缺失记录仍未知；`tokens.before/after` 仍是上下文大小估计，不是计费Token。
+
+`model.response.hooks[]` 中平台内置 `thinking_summary` 的成功记录可附带同结构 `model_usage_record`，source为`thinking_summary`；仅为响应诊断，不增加HOOK_OVERRIDABLE字段，不改变主执行预算或对原始推理内容的保护。历史未携带该字段仍为未知。

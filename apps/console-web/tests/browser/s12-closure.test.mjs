@@ -62,3 +62,28 @@ test("S12.1：Trace 响应时间窗须匹配请求，等价时区可接受，不
   await page.getByRole("alert").filter({ hasText: "时间窗不匹配" }).waitFor();
   assert.equal(await page.getByText("0.000000123456789 / 1", { exact: true }).count(), 0);
 }));
+
+test("F3：运营导航与统计覆盖区分缺失、完整及无样本，错误清空且只读", async () => mountReadOnly(engine, "operations", async ({ page, handle }) => {
+  let mode = "missing";
+  handle(async route => {
+    assert.equal(route.request().method(), "GET");
+    if (mode === "error") { await route.fulfill({ status: 503 }); return true; }
+    const row = traces();
+    row.tokens.total = mode === "missing" ? null : 0;
+    row.cost_usd.total = mode === "missing" ? null : "0";
+    if (mode === "empty") row.trace_calls = 0;
+    await route.fulfill({ json: row }); return true;
+  });
+  assert.equal(await page.getByRole("link", { name: "评测与发布", exact: true }).getAttribute("href"), "/manage/agents");
+  assert.equal(await page.getByRole("link", { name: "任务与错误定位", exact: true }).getAttribute("href"), "/manage/runs");
+  assert.equal(await page.getByRole("link", { name: "隔离告警与处理历史", exact: true }).getAttribute("href"), "/manage/alerts");
+  await traceForm(page);
+  const query = page.getByRole("button", { name: "查询 Trace 指标", exact: true });
+  await query.click(); await page.getByText(/统计存在缺失：/).waitFor();
+  await page.getByText(/额度、已预留与剩余额度未知/).waitFor();
+  mode = "complete"; await query.click(); await page.getByText(/当前范围已取得来源报告总量/).waitFor();
+  assert.equal(await page.getByText(/统计存在缺失：/).count(), 0);
+  mode = "empty"; await query.click(); await page.getByText(/该范围没有 Trace 样本/).waitFor();
+  mode = "error"; await query.click(); await page.getByRole("alert").filter({ hasText: "503" }).waitFor();
+  assert.equal(await page.getByRole("region", { name: "用量统计覆盖范围" }).count(), 0);
+}));

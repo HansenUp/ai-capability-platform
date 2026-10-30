@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AI Platform Isolated Candidate",
+  "version": "0.0.0",
+  "identifier": "local.ai-platform.isolated-candidate",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "F8 未验证原生候选",
+        "width": 900,
+        "height": 700
+      }
+    ],
+    "security": {
+      "capabilities": [
+        "main-candidate"
+      ],
+      "csp": "default-src 'self'; script-src 'self'; object-src 'none'; frame-src 'none'; connect-src 'none'"
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

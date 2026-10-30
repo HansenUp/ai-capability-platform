@@ -145,6 +145,28 @@ class AgentVersion(Base):
     __table_args__ = (UniqueConstraint("agent_id", "version", name="uq_agent_version"),)
 
 
+class Conversation(Base):
+    """Isolated F2 conversation ownership; never inferred from client claims."""
+
+    __tablename__ = "t_conversation"
+    conversation_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(64), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64))
+    subject: Mapped[str] = mapped_column(String(128))
+    agent_id: Mapped[str] = mapped_column(String(64))
+
+
+class ContinuationInput(Base):
+    __tablename__ = "t_continuation_input"
+    attempt_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(36), index=True)
+    run_id: Mapped[str] = mapped_column(String(40), unique=True)
+    question: Mapped[str] = mapped_column(Text)
+    selected_run_ids: Mapped[list[str]] = mapped_column(JSON)
+    composed: Mapped[str] = mapped_column(Text)
+    digest: Mapped[str] = mapped_column(String(64))
+
+
 class Run(Base):
     """单次 Run 的元信息表（当前状态快照，详细历史见 RunEventRow）。"""
 
