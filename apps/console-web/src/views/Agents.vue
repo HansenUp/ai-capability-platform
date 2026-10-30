@@ -26,6 +26,10 @@ const rows = ref<AgentVersion[]>([]);
 const selected = ref<AgentVersion | null>(null);
 const gate = ref<Gate | null>(null);
 const evaluation = ref<Evaluation | null>(null);
+const evaluationBaseline = ref<Evaluation | null>(null);
+function keepEvaluationBaseline() {
+  if (evaluation.value) evaluationBaseline.value = JSON.parse(JSON.stringify(evaluation.value));
+}
 const evaluationGuide = computed(() => {
   const r = evaluation.value;
   if (!r) return [];
@@ -93,6 +97,7 @@ async function refresh(current: number) {
 async function load() { await perform(refresh); }
 
 function applyIdentity() {
+  evaluationBaseline.value = null;
   if (busy.value || pending.value) return;
   scenarioPreview.value=null;scenarioText.value="";
   generation += 1;
@@ -109,6 +114,7 @@ function applyIdentity() {
 }
 
 async function inspect(row: AgentVersion) {
+  evaluationBaseline.value = null;
   selected.value = row;
   gate.value = null;
   evaluation.value = null;
@@ -120,6 +126,7 @@ async function inspect(row: AgentVersion) {
 }
 
 function editDraft(row: AgentVersion) {
+  evaluationBaseline.value = null;
   selected.value = null;
   gate.value = null;
   evaluation.value = null;
@@ -129,6 +136,7 @@ function editDraft(row: AgentVersion) {
 }
 
 async function saveDraft() {
+  evaluationBaseline.value = null;
   await perform(async current => {
     const config = configObject(draft.config);
     await request("POST", "/agents", { ...draft, harness: draft.harness || null, config });
@@ -271,6 +279,21 @@ onMounted(load);
     </fieldset>
     <section v-if="evaluation" aria-label="评测结果只读视图">
       <h4>当前策略重算 · {{ evaluation.status }}</h4>
+      <button :disabled="busy" @click="keepEvaluationBaseline">保留当前结果作只读对照</button>
+      <section v-if="evaluationBaseline" aria-label="评测结果并排对照">
+        <h4>同版本读取结果对照</h4>
+        <p>仅当前页面内存快照，切换版本或应用身份后清空。两次读取可能来自不同引用、样本或策略；不能据此判断质量提升，也不是历史发布证明。</p>
+        <table><thead><tr><th>项目</th><th>保留结果</th><th>本次结果</th></tr></thead><tbody>
+          <tr><th>引用</th><td>{{ evaluationBaseline.eval_run_ref ?? '未设置' }}</td><td>{{ evaluation.eval_run_ref ?? '未设置' }}</td></tr>
+          <tr><th>状态</th><td>{{ evaluationBaseline.status }}</td><td>{{ evaluation.status }}</td></tr>
+          <tr><th>通过 / 总条目</th><td>{{ evaluationBaseline.passed_items ?? '未知' }} / {{ evaluationBaseline.total_items ?? '未知' }}</td><td>{{ evaluation.passed_items ?? '未知' }} / {{ evaluation.total_items ?? '未知' }}</td></tr>
+          <tr><th>来源</th><td>{{ evaluationBaseline.source }}</td><td>{{ evaluation.source }}</td></tr>
+          <tr><th>策略：最少条目 / 最低通过率</th><td>{{ evaluationBaseline.policy.min_items }} / {{ evaluationBaseline.policy.min_pass_rate }}</td><td>{{ evaluation.policy.min_items }} / {{ evaluation.policy.min_pass_rate }}</td></tr>
+          <tr><th>读取时间</th><td>{{ evaluationBaseline.checked_at }}</td><td>{{ evaluation.checked_at }}</td></tr>
+          <tr><th>原因</th><td>{{ evaluationBaseline.reason ?? '无拒绝原因' }}</td><td>{{ evaluation.reason ?? '无拒绝原因' }}</td></tr>
+        </tbody></table>
+        <button @click="evaluationBaseline = null">清除对照结果</button>
+      </section>
       <section aria-label="评测处理指引">
         <h4>{{ evaluation.status === 'passed' ? '核验通过后的下一步' : '发布前需要处理' }}</h4>
         <ol><li v-for="step in evaluationGuide" :key="step">{{ step }}</li></ol>

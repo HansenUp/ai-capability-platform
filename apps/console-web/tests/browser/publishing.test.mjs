@@ -150,3 +150,23 @@ test("F3：评测处理指引区分失败与通过，始终只读", async () => 
   await page.getByLabel("真实评测引用", { exact: true }).fill("langfuse:other/run");
   assert.equal(await page.getByRole("region", { name: "评测处理指引" }).count(), 0);
 }));
+
+test("F11：同版本只读结果对照保留未知，切换身份清空，不产生写请求", async () => mount(engine, "agents", async ({page,writes,handle}) => {
+ const policy={...flag,mode:"langfuse",min_items:10,min_pass_rate:0.9}; let available=false;
+ handle(async(route,row)=>{
+  if(row.path.endsWith("eval-gate")){await route.fulfill({json:policy});return true;}
+  if(row.path.endsWith("/evaluation")){await route.fulfill({json:{status:available?"passed":"unavailable",reason:available?null:"unavailable",passed_items:available?10:null,total_items:available?10:null,pass_rate:available?1:null,source:"synthetic",checked_at:available?"2026-10-30T01:00:00Z":"2026-10-30T00:00:00Z",eval_run_ref:available?"langfuse:synthetic/new":"langfuse:synthetic/old",stored_eval_run_ref:null,policy}});return true;}
+  return false;
+ });
+ await release(page);
+ const read=page.getByRole("button",{name:"只读重算评测结果",exact:true});
+ await read.click();await page.getByRole("button",{name:"保留当前结果作只读对照"}).click();
+ available=true;await page.getByLabel("真实评测引用",{exact:true}).fill("langfuse:synthetic/new");
+ assert.equal(await page.getByRole("region",{name:"评测结果并排对照"}).count(),0);
+ await read.click();const comparison=page.getByRole("region",{name:"评测结果并排对照"});await comparison.waitFor();
+ assert.ok((await comparison.innerText()).includes("未知 / 未知"));assert.ok((await comparison.innerText()).includes("10 / 10"));
+ assert.match(await comparison.innerText(),/不能据此判断质量提升/);assert.equal(writes().length,0);
+ await page.getByRole("button",{name:"清除对照结果"}).click();assert.equal(await comparison.count(),0);
+ await page.getByRole("button",{name:"保留当前结果作只读对照"}).click();
+ await page.getByRole("button",{name:"应用开发身份",exact:true}).click();assert.equal(await comparison.count(),0);
+}));
