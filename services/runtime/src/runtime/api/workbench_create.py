@@ -5,11 +5,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from typing import Any
+from typing import Any, Self
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +27,12 @@ class CreateBody(BaseModel):
     conversation_id: UUID | None = None
     selected_run_ids: list[str] = Field(default_factory=list, max_length=20)
     synthetic_attachments: list[AttachmentBody] = Field(default_factory=list, max_length=3, repr=False, exclude=True)
+
+    @model_validator(mode="after")
+    def history_requires_conversation(self) -> Self:
+        if (self.selected_run_ids or self.synthetic_attachments) and self.conversation_id is None:
+            raise ValueError("history requires a conversation")
+        return self
 
 
 def snapshot(agent: AgentVersion, reason: str) -> str:
@@ -89,8 +95,6 @@ def content_binding(row: WorkbenchAttempt, value: Any) -> str:
 async def prepare(body: CreateBody, request: Request, principal: Principal) -> dict[str, Any]:
     from runtime.api import conversations, workbench
 
-    if (body.selected_run_ids or body.synthetic_attachments) and body.conversation_id is None:
-        raise HTTPException(422, "history requires a conversation")
     if body.conversation_id is not None:
         conversations.enabled()
     scope_id, attempt_id = workbench.user_scope(principal), str(body.attempt_id)

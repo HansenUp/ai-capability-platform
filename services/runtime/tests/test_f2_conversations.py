@@ -138,3 +138,19 @@ def test_corrupted_snapshot_fails_without_run(client, idp, field):
     )
     assert result.json()["status"] == "REJECTED_NO_EFFECT"
     assert client.get(f"/v1/runs/{row['run_id']}", headers=alice).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "extra", [{"selected_run_ids": ["old-run"]}, {"synthetic_attachments": [{"name": "test.txt", "text": "test"}]}]
+)
+def test_history_without_conversation_is_structured_validation_error(client, idp, extra):
+    user = _user(idp, "invalid-history-" + uuid4().hex)
+    response = client.post(
+        "/v1/workbench/create-attempts",
+        headers=user,
+        json={"attempt_id": str(uuid4()), "agent_id": "demo", "text": "synthetic", **extra},
+    )
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)
+    assert "history requires a conversation" in response.json()["detail"][0]["msg"]
+    assert client.get("/v1/workbench/attempts", headers=user).json()["active"] is None
