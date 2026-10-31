@@ -233,3 +233,31 @@ test("F11：切换版本清空评测对照并聚焦所选版本", async () => mo
   assert.equal(await page.getByRole("region",{name:"评测结果并排对照"}).count(),0);
   assert.equal(writes().length,0);
 }));
+test("F11：样本明细筛选分页、未知及引用清空，不发写请求", async () => mount(engine, "agents", async ({page,writes,handle}) => {
+  let unavailable = false;
+  handle(async(route,row) => {
+    if (!row.path.endsWith("/evaluation")) return false;
+    await route.fulfill({json:{status:unavailable?"unavailable":"failed",reason:"synthetic",passed_items:unavailable?null:21,total_items:unavailable?null:22,pass_rate:unavailable?null:21/22,source:"synthetic",checked_at:"2026-10-31T00:00:00Z",eval_run_ref:null,stored_eval_run_ref:null,policy:flag,
+      sample_details:unavailable?null:Array.from({length:22},(_,i)=>({sample_label:`sample-${i+1}`,verdict:i===21?"not_verifiable":"passed",reasons:i===21?["evidence_not_accepted"]:[]}))}});return true;
+  });
+  await release(page);
+  const read=page.getByRole("button",{name:"只读重算评测结果",exact:true});
+  await read.click();
+  const detail=page.getByRole("region",{name:"评测样本只读明细"});
+  await detail.getByText(/完整读取 22 条/).waitFor();
+  assert.equal(await detail.getByRole("row").count(),21);
+  await detail.getByRole("button",{name:"样本下一页"}).click();
+  await detail.getByText("sample-22",{exact:true}).waitFor();
+  await detail.getByLabel("样本判定筛选").selectOption("not_verifiable");
+  assert.equal(await detail.getByRole("row").count(),2);
+  await detail.getByText(/第 1 页/).waitFor();
+  assert.match(await detail.innerText(),/汇总通过 21 \/ 22/);
+  await detail.getByLabel("样本判定筛选").selectOption("not_passed");
+  await detail.getByText("当前筛选无样本",{exact:true}).waitFor();
+  unavailable=true;await read.click();
+  await detail.getByText(/样本明细不可用/).waitFor();
+  assert.equal(await detail.getByRole("row").count(),0);
+  await page.getByLabel("真实评测引用",{exact:true}).fill("langfuse:changed/run");
+  assert.equal(await detail.count(),0);
+  assert.equal(writes().length,0);
+}));

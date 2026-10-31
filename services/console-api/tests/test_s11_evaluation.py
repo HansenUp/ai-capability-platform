@@ -129,3 +129,74 @@ async def test_deadline_never_returns_partial_counts(monkeypatch):
     result = await eval_gate.evaluate("a", "1", None, None, "default")
     assert result["status"] == "unavailable" and result["total_items"] is None
     assert await eval_gate.check("a", "1", None, None) == result["reason"]
+
+
+@pytest.mark.parametrize("score,verdict", [(1, "passed"), (0, "not_passed"), (True, "not_passed")])
+def test_sample_details_are_read_local_minimal_projection(c, monkeypatch, score, verdict):
+    path, _ = setup(c, monkeypatch, "detail-" + str(score), score=score)
+    response = c.get(path, params={"eval_run_ref": "langfuse:dataset/run"})
+    rows = response.json()["sample_details"]
+    assert rows == [
+        {"sample_label": f"sample-{i}", "verdict": verdict, "reasons": [] if score == 1 and score is not True else ["score_not_passed"]}
+        for i in (1, 2)
+    ]
+    assert "not exposed" not in response.text
+    assert response.json()["total_items"] == len(rows)
+
+
+@pytest.mark.parametrize("kind", ["foreign", "no-tenant", "missing-score", "time", "outage"])
+def test_sample_diagnostics_do_not_disclose_source_identity(c, monkeypatch, kind):
+    agent = "details-" + kind
+    path, _ = setup(c, monkeypatch, agent)
+    original = eval_gate._transport
+
+    def handler(request):
+        if "/datasets/" in request.url.path:
+            response = original.handle_request(request)
+            data = response.json()
+            if kind == "no-tenant":
+                data["metadata"].pop("tenant_id")
+            return httpx.Response(200, json=data)
+        if kind == "outage":
+            return httpx.Response(503)
+        return httpx.Response(200, json={
+            "id": "PRIVATE-ID", "input": "PRIVATE-PROMPT", "output": "PRIVATE-OUTPUT",
+            "metadata": {"tenant_id": "PRIVATE-TENANT" if kind == "foreign" else "default", "agent_id": agent, "agent_version": "1"},
+            "timestamp": "2020-01-01T00:00:00Z" if kind == "time" else "2026-10-21T00:00:00Z",
+            "scores": [] if kind == "missing-score" else [{"name": "eval_pass", "value": 1, "comment": "PRIVATE-COMMENT"}],
+        })
+
+    monkeypatch.setattr(eval_gate, "_transport", httpx.MockTransport(handler))
+    response = c.get(path, params={"eval_run_ref": "langfuse:dataset/run"})
+    assert "PRIVATE-" not in response.text
+    rows = response.json()["sample_details"]
+    if kind in {"outage", "no-tenant"}:
+        assert rows is None
+    else:
+        expected = {"foreign": "evidence_not_accepted", "missing-score": "score_missing", "time": "time_window_not_verified"}[kind]
+        assert all(row["verdict"] == "not_verifiable" and row["reasons"] == [expected] for row in rows)
+        assert response.json()["passed_items"] == 0 and response.json()["total_items"] == 2
+
+
+async def test_details_group_multiple_traces_and_missing_evidence():
+    run = {"createdAt": "2026-10-21T00:01:00Z", "datasetRunItems": [
+        {"datasetItemId": "PRIVATE-A", "traceId": "one"},
+        {"datasetItemId": "PRIVATE-A", "traceId": "two"},
+        {"datasetItemId": "PRIVATE-A", "traceId": "two"},
+        {"datasetItemId": "PRIVATE-B"},
+    ]}
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"timestamp": "2026-10-21T00:00:00Z", "metadata": {"tenant_id": "default"},
+                                        "scores": [{"name": "eval_pass", "value": int(request.url.path.endswith("one"))}]})
+
+    details = []
+    async with httpx.AsyncClient(base_url="http://synthetic", transport=httpx.MockTransport(handler)) as client:
+        assert await eval_gate.recompute(client, run, "synthetic", {"tenant_id": "default"}, details) == (0, 2)
+    assert len(calls) == 2
+    assert details == [
+        {"sample_label": "sample-1", "verdict": "not_passed", "reasons": ["score_not_passed"]},
+        {"sample_label": "sample-2", "verdict": "not_verifiable", "reasons": ["trace_missing"]},
+    ]

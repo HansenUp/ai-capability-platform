@@ -207,31 +207,39 @@ async def _run_items(c: httpx.AsyncClient, run: dict[str, Any], run_name: str) -
     raise _Unavailable("Langfuse pagination exceeds the verification limit; evaluation is incomplete")
 
 
+async def _trace_verdict(
+    c: httpx.AsyncClient, sem: asyncio.Semaphore, trace_id: str, expect: dict[str, str], window: tuple[float, float] | None
+) -> str:
+    """Fixed diagnostic codes only; never project source identifiers or content."""
+    async with sem:
+        trace = await _get(c, f"/api/public/traces/{quote(trace_id, safe='')}")
+    if not isinstance(trace, dict) or any(str(_trace_meta(trace, k)) != v for k, v in expect.items()):
+        return "evidence_not_accepted"
+    ts = _ts(trace.get("timestamp"))
+    if window is None or ts is None or not window[0] <= ts <= window[1]:
+        return "time_window_not_verified"
+    raw_scores = trace.get("scores")
+    if not isinstance(raw_scores, list):
+        return "score_missing"
+    scores = [score for score in raw_scores if isinstance(score, dict) and score.get("name") == SCORE_NAME]
+    if not scores:
+        return "score_missing"
+    passed = all(
+        isinstance(score.get("value"), (int, float)) and not isinstance(score["value"], bool) and score["value"] == 1 for score in scores
+    )
+    return "passed" if passed else "score_not_passed"
+
+
 async def _trace_passed(
     c: httpx.AsyncClient, sem: asyncio.Semaphore, trace_id: str, expect: dict[str, str], window: tuple[float, float] | None
 ) -> bool:
-    """该 Trace 属于本次发布的 Agent / 版本 / 租户、时间戳在评测运行时间窗内，且 eval_pass 评分存在且全为 1。"""
-    async with sem:
-        trace = await _get(c, f"/api/public/traces/{quote(trace_id, safe='')}")
-    if not isinstance(trace, dict):
-        return False
-    if any(str(_trace_meta(trace, k)) != v for k, v in expect.items()):
-        return False
-    ts = _ts(trace.get("timestamp"))
-    if window is None or ts is None or not window[0] <= ts <= window[1]:
-        return False
-    raw_scores = trace.get("scores")
-    if not isinstance(raw_scores, list):
-        return False
-    scores = [score for score in raw_scores if isinstance(score, dict) and score.get("name") == SCORE_NAME]
-    if not scores:
-        return False
-    return all(
-        isinstance(score.get("value"), (int, float)) and not isinstance(score["value"], bool) and score["value"] == 1 for score in scores
-    )
+    return await _trace_verdict(c, sem, trace_id, expect, window) == "passed"
 
 
-async def recompute(c: httpx.AsyncClient, run: dict[str, Any], run_name: str, expect: dict[str, str] | None = None) -> tuple[int, int]:
+async def recompute(
+    c: httpx.AsyncClient, run: dict[str, Any], run_name: str, expect: dict[str, str] | None = None,
+    details: list[dict[str, Any]] | None = None,
+) -> tuple[int, int]:
     """按运行项与 eval_pass 评分重算，返回 (通过的条目数, 去重后的条目数)。expect 为 Trace metadata 须匹配的属性
     （agent_id / agent_version / tenant_id）。同一 traceId 出现在不同数据集条目下抛 _Rejected。"""
     items = await _run_items(c, run, run_name)
@@ -259,9 +267,14 @@ async def recompute(c: httpx.AsyncClient, run: dict[str, Any], run_name: str, ex
         known = [s for s in stamps if s is not None]
         return max(known) - TRACE_MAX_AGE_S, min(known) + TRACE_SKEW_S
 
-    results = await asyncio.gather(*(_trace_passed(c, sem, t, expect or {}, window(t)) for t in traces))
+    results = await asyncio.gather(*(_trace_verdict(c, sem, t, expect or {}, window(t)) for t in traces))
     ok = dict(zip(traces, results, strict=True))
-    passed = sum(1 for ts in by_item.values() if all(t is not None and ok.get(t, False) for t in ts))
+    passed = sum(1 for ts in by_item.values() if all(t is not None and ok.get(t) == "passed" for t in ts))
+    if details is not None:
+        for index, tids in enumerate(by_item.values(), 1):
+            reasons = sorted({ok[t] if t is not None else "trace_missing" for t in tids} - {"passed"})
+            verdict = "passed" if not reasons else "not_passed" if reasons == ["score_not_passed"] else "not_verifiable"
+            details.append({"sample_label": f"sample-{index}", "verdict": verdict, "reasons": reasons})
     return passed, len(by_item)
 
 
@@ -270,8 +283,12 @@ async def _evaluate(
 ) -> dict[str, Any]:
     """按发布闸门当前策略重算汇总；不返回 Trace 原文，也不写发布状态。"""
 
+    details: list[dict[str, Any]] | None = []
+
     def result(reason: str | None, status: str = "failed", passed: int | None = None, total: int | None = None) -> dict[str, Any]:
         return {
+            "sample_details": details if total is not None and tenant else None,
+            "sample_scope": "read_local_ordinals_not_source_ids_not_cross_read_identifiers",
             "status": "passed" if reason is None else status,
             "reason": reason,
             "passed_items": passed,
@@ -307,7 +324,11 @@ async def _evaluate(
             if tenant and meta.get("tenant_id", meta.get("tenant", tenant)) != tenant:
                 return result("evaluation run tenant mismatch")
             expect = {"agent_id": agent_id, "agent_version": version} | ({"tenant_id": tenant} if tenant else {})
-            passed, total = await recompute(c, run, run_name, expect)
+            # Detail disclosure additionally requires an explicit matching run tenant.
+            disclose = bool(tenant and meta.get("tenant_id", meta.get("tenant")) == tenant)
+            passed, total = await recompute(c, run, run_name, expect, details if disclose else None)
+            if not disclose:
+                details = None
         except _Rejected:
             return result("evaluation run rejected: trace reused across dataset items")
         except _Unavailable as e:
@@ -333,6 +354,7 @@ async def evaluate(
         return {
             "status": "unavailable",
             "reason": "evaluation verification deadline exceeded",
+            "sample_details": None,
             "passed_items": None,
             "total_items": None,
             "pass_rate": None,

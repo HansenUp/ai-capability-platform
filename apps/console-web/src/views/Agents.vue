@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import {parseScenarioPack} from "../scenario-pack";
 import orderPackText from "../scenarios/order-metrics.json?raw";
 import salesPackText from "../scenarios/sales-readonly.json?raw";
@@ -13,7 +13,9 @@ interface AgentVersion {
   canary: { percent: number; allowlist: string[] };
 }
 interface Gate { mode: string; min_items: number; min_pass_rate: number; datasets: string[] }
+interface SampleDetail { sample_label: string; verdict: string; reasons: string[] }
 interface Evaluation {
+  sample_details?: SampleDetail[] | null;
   status: string; reason: string | null; passed_items: number | null; total_items: number | null;
   pass_rate: number | null; source: string; checked_at: string; eval_run_ref: string | null;
   stored_eval_run_ref: string | null; policy: Gate;
@@ -27,6 +29,17 @@ const selected = ref<AgentVersion | null>(null);
 const gate = ref<Gate | null>(null);
 const evaluation = ref<Evaluation | null>(null);
 const evaluationBaseline = ref<Evaluation | null>(null);
+const sampleFilter = ref("all");
+const samplePage = ref(0);
+const sampleReasons: Record<string, string> = {
+  evidence_not_accepted: "证据未获接纳（不披露归属详情）", time_window_not_verified: "时间窗未核验",
+  score_missing: "缺少可核验评分", score_not_passed: "评分未全部达到通过值", trace_missing: "缺少关联证据",
+};
+const sampleVerdicts: Record<string, string> = {passed: "通过", not_passed: "未通过", not_verifiable: "不可核验"};
+const filteredSamples = computed(() => (evaluation.value?.sample_details ?? []).filter(row => sampleFilter.value === "all" || row.verdict === sampleFilter.value));
+const visibleSamples = computed(() => filteredSamples.value.slice(samplePage.value * 20, (samplePage.value + 1) * 20));
+watch(evaluation, () => { sampleFilter.value = "all"; samplePage.value = 0; });
+watch(sampleFilter, () => { samplePage.value = 0; });
 function keepEvaluationBaseline() {
   if (evaluation.value) evaluationBaseline.value = JSON.parse(JSON.stringify(evaluation.value));
 }
@@ -321,6 +334,21 @@ onMounted(load);
           <tr><th>原因</th><td>{{ evaluationBaseline.reason ?? '无拒绝原因' }}</td><td>{{ evaluation.reason ?? '无拒绝原因' }}</td></tr>
         </tbody></table>
         <button @click="evaluationBaseline = null">清除对照结果</button>
+      </section>
+      <section aria-label="评测样本只读明细">
+        <h4>本次读取的样本诊断</h4>
+        <p>序号只在本次读取有效，不是数据集或Trace标识，不能跨读取关联。按数据集条目合并，所有关联评分通过才通过；不可核验仍计入原闸门分母，不作为通过，不改变发布规则。</p>
+        <p v-if="evaluation.sample_details == null">样本明细不可用；来源、归属或扫描完整性未获核验，不能据此推断没有样本。</p>
+        <template v-else>
+          <p>完整读取 {{ evaluation.sample_details.length }} 条，汇总通过 {{ evaluation.passed_items ?? '未知' }} / {{ evaluation.total_items ?? '未知' }}；筛选仅影响展示，不改变汇总。</p>
+          <label>样本判定筛选 <select v-model="sampleFilter"><option value="all">全部</option><option value="passed">通过</option><option value="not_passed">未通过</option><option value="not_verifiable">不可核验</option></select></label>
+          <p v-if="!filteredSamples.length">当前筛选无样本</p>
+          <table v-else><thead><tr><th>本次序号</th><th>判定</th><th>未通过／拒收原因</th></tr></thead><tbody><tr v-for="row in visibleSamples" :key="row.sample_label"><td>{{ row.sample_label }}</td><td>{{ sampleVerdicts[row.verdict] ?? '未知' }}</td><td>{{ row.reasons.map(reason => sampleReasons[reason] ?? '未识别诊断，保持未知').join('；') || '无' }}</td></tr></tbody></table>
+          <p>第 {{ samplePage + 1 }} 页 · 筛选后 {{ filteredSamples.length }} 条 · 每页20条</p>
+          <button :disabled="samplePage === 0" @click="samplePage--">样本上一页</button>
+          <button :disabled="(samplePage + 1) * 20 >= filteredSamples.length" @click="samplePage++">样本下一页</button>
+        </template>
+        <p>不提供提示词、输出、评分评论、真实样本标识或Trace跳转；仅当前内存展示，无导出或自动重读。</p>
       </section>
       <section aria-label="评测处理指引">
         <h4>{{ evaluation.status === 'passed' ? '核验通过后的下一步' : '发布前需要处理' }}</h4>
