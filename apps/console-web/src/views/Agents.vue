@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import {parseScenarioPack} from "../scenario-pack";
 import orderPackText from "../scenarios/order-metrics.json?raw";
 import salesPackText from "../scenarios/sales-readonly.json?raw";
@@ -44,6 +44,9 @@ const evaluationGuide = computed(() => {
   return steps;
 });
 const busy = ref(false);
+const readOnlyBusy = ref(false);
+const evaluationError = ref("");
+const evaluationHeading = ref<HTMLElement | null>(null);
 const message = ref("");
 const pending = ref<Action | null>(null);
 const comparisonAgent = ref("");
@@ -78,14 +81,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (text ? JSON.parse(text) : null) as T;
 }
 
-async function perform(action: (current: number) => Promise<void>) {
+async function perform(action: (current: number) => Promise<void>, readOnly = false) {
   if (busy.value) return;
   const current = generation;
   busy.value = true;
+  readOnlyBusy.value = readOnly;
   message.value = "";
   try { await action(current); }
   catch (error) { if (current === generation) message.value = String(error); }
-  finally { if (current === generation) busy.value = false; }
+  finally { if (current === generation) { busy.value = false; readOnlyBusy.value = false; } }
 }
 
 async function refresh(current: number) {
@@ -94,11 +98,13 @@ async function refresh(current: number) {
   rows.value = result;
   if (selected.value) selected.value = result.find(row => row.agent_id === selected.value?.agent_id && row.version === selected.value?.version) ?? null;
 }
-async function load() { await perform(refresh); }
+async function load() { await perform(refresh, true); }
 
 function applyIdentity() {
   evaluationBaseline.value = null;
-  if (busy.value || pending.value) return;
+  if ((busy.value && !readOnlyBusy.value) || pending.value) return;
+  busy.value = false;
+  readOnlyBusy.value = false;
   scenarioPreview.value=null;scenarioText.value="";
   generation += 1;
   Object.assign(op, identity);
@@ -107,6 +113,7 @@ function applyIdentity() {
   selected.value = null;
   gate.value = null;
   evaluation.value = null;
+  evaluationError.value = "";
   Object.assign(draft, { agent_id: "", version: "1", system_prompt: "", model_alias: "default-chat", harness: "mock", config: "{}" });
   Object.assign(release, { reference: "", percent: 100, allowlist: "", developmentPass: false });
   try { localStorage.setItem("console.operator", JSON.stringify(op)); } catch {}
@@ -118,11 +125,14 @@ async function inspect(row: AgentVersion) {
   selected.value = row;
   gate.value = null;
   evaluation.value = null;
+  evaluationError.value = "";
   Object.assign(release, { reference: row.eval_run_ref ?? "", percent: row.canary.percent, allowlist: row.canary.allowlist.join("\n"), developmentPass: false });
   await perform(async current => {
     const result = await request<Gate>("GET", `/agents/${encodeURIComponent(row.agent_id)}/eval-gate`);
     if (current === generation) gate.value = result;
-  });
+  }, true);
+  await nextTick();
+  evaluationHeading.value?.focus();
 }
 
 function editDraft(row: AgentVersion) {
@@ -130,6 +140,7 @@ function editDraft(row: AgentVersion) {
   selected.value = null;
   gate.value = null;
   evaluation.value = null;
+  evaluationError.value = "";
   Object.assign(draft, { agent_id: row.agent_id, version: row.status === "draft" ? row.version : "", system_prompt: row.system_prompt,
     model_alias: row.model_alias, harness: row.harness ?? "", config: JSON.stringify(row.config, null, 2) });
   message.value = row.status === "draft" ? "仅编辑草稿；保存不会发布。" : "已复制配置，请填写新版本；已发布快照不可修改。";
@@ -143,6 +154,7 @@ async function saveDraft() {
     selected.value = null;
     gate.value = null;
     evaluation.value = null;
+    evaluationError.value = "";
     await refresh(current);
     if (current === generation) message.value = "草稿已保存，未发布、未调用 Runtime 发布接口。";
   });
@@ -152,12 +164,19 @@ async function inspectEvaluation() {
   const row = selected.value;
   if (!row) return;
   evaluation.value = null;
+  evaluationError.value = "";
   const reference = release.reference.trim();
   await perform(async current => {
     const query = reference ? `?${new URLSearchParams({ eval_run_ref: reference })}` : "";
-    const result = await request<Evaluation>("GET", pathOf(row) + "/evaluation" + query);
-    if (current === generation && selected.value === row) evaluation.value = result;
-  });
+    try {
+      const result = await request<Evaluation>("GET", pathOf(row) + "/evaluation" + query);
+      if (current === generation && selected.value === row) evaluation.value = result;
+    } catch (error) {
+      if (current === generation && selected.value === row)
+        evaluationError.value = "读取失败，结果未知。核对引用与读取权限后手动重算；不会自动发布或重试。";
+      throw error;
+    }
+  }, true);
 }
 
 function prepare(kind: "publish" | "canary" | "rollback") {
@@ -203,13 +222,14 @@ async function confirmAction() {
     if (current === generation) message.value = "操作成功，已刷新服务端状态；此页面不是生产部署入口。";
   });
 }
+onBeforeUnmount(() => { generation += 1; });
 onMounted(load);
 </script>
 
 <template>
   <h2>Agent 草稿、评测与发布</h2>
   <p>仅本机功能。保存草稿不发布；发布／放量由服务端评测闸门最终裁决，不代表生产部署或外部验收。</p>
-  <fieldset :disabled="busy || pending !== null">
+  <fieldset :disabled="(busy && !readOnlyBusy) || pending !== null">
     <legend>开发态身份（不是生产鉴权） · 当前 {{ op.tenant }} / {{ op.user }} / {{ op.role }}</legend>
     <form @submit.prevent="applyIdentity">
       <label>用户 <input v-model="identity.user" required maxlength="128" /></label>
@@ -262,21 +282,29 @@ onMounted(load);
     <p v-if="comparison && !comparison.length">配置一致</p>
     <table v-if="comparison?.length" border="1"><thead><tr><th>字段（JSON Pointer）</th><th>基准</th><th>目标</th></tr></thead><tbody><tr v-for="item in comparison" :key="item.path"><td>{{ item.path }}</td><td><pre>{{ item.before }}</pre></td><td><pre>{{ item.after }}</pre></td></tr></tbody></table>
   </section>
-  <section v-if="selected">
-    <h3>{{ selected.agent_id }}@{{ selected.version }} · {{ selected.status }}</h3>
+  <section v-if="selected" aria-label="评测与发布工作区">
+    <h3 ref="evaluationHeading" tabindex="-1">{{ selected.agent_id }}@{{ selected.version }} · {{ selected.status }}</h3>
+    <nav aria-label="评测流程导航">
+      <a href="#evaluation-input">1. 核对引用</a> · <a href="#evaluation-result">2. 查看结果与对照</a> · <a href="#release-actions">3. 显式发布确认</a>
+    </nav>
+    <p>先核对当前 Agent 与版本，再读取已有评测证据；此页面不会执行模型评测。只读通过不等于已发布。</p>
     <p v-if="gate">闸门 {{ gate.mode }} · 最少 {{ gate.min_items }} 条 · 通过率至少 {{ Math.round(gate.min_pass_rate * 100) }}% · 数据集 {{ gate.datasets.join(', ') || '未配置' }}</p>
     <p v-if="gate?.mode === 'flag'">当前为开发 flag 模式，不会伪称 Langfuse 真实评测通过。</p>
     <fieldset :disabled="locked || !gate">
       <legend>发布／灰度参数</legend>
-      <label class="block">真实评测引用 <input v-model="release.reference" placeholder="langfuse:dataset/run" @input="evaluation = null" /></label>
+      <label id="evaluation-input" class="block">真实评测引用 <input v-model="release.reference" placeholder="langfuse:dataset/run" @input="evaluation = null; evaluationError = ''" /></label>
       <button @click="inspectEvaluation">只读重算评测结果</button>
       <label>灰度比例 <input v-model.number="release.percent" type="number" min="0" max="100" step="1" required /></label>
       <label class="block">灰度白名单（每行或逗号分隔）<textarea v-model="release.allowlist" rows="3" /></label>
       <label v-if="gate?.mode === 'flag'"><input v-model="release.developmentPass" type="checkbox" />显式确认开发态评测通过（非真实评测验收）</label>
-      <button @click="prepare('publish')">检查并发布</button>
+      <button id="release-actions" @click="prepare('publish')">检查并发布</button>
       <button v-if="selected.status === 'published'" @click="prepare('canary')">检查并调整灰度</button>
       <button v-if="selected.status !== 'draft' && selected.canary.percent > 0" @click="prepare('rollback')">检查回滚</button>
     </fieldset>
+    <div id="evaluation-result">
+      <p v-if="evaluationError" role="alert">{{ evaluationError }}</p>
+      <p v-else-if="!evaluation">{{ busy && readOnlyBusy ? '正在读取评测证据…' : '尚未读取当前引用的评测证据；发布资格未知，请显式只读重算。' }}</p>
+    </div>
     <section v-if="evaluation" aria-label="评测结果只读视图">
       <h4>当前策略重算 · {{ evaluation.status }}</h4>
       <button :disabled="busy" @click="keepEvaluationBaseline">保留当前结果作只读对照</button>
@@ -302,7 +330,7 @@ onMounted(load);
       <p>引用 {{ evaluation.eval_run_ref ?? '未设置' }} · 已保存引用 {{ evaluation.stored_eval_run_ref ?? '未设置' }}</p>
       <p>通过条目 {{ evaluation.passed_items ?? '未知' }} / 总条目 {{ evaluation.total_items ?? '未知' }} · 通过率 {{ evaluation.pass_rate === null ? '未知' : `${(evaluation.pass_rate * 100).toFixed(1)}%` }}</p>
       <p>重算策略：{{ evaluation.policy.mode }} · 最少 {{ evaluation.policy.min_items }} 条 · 通过率至少 {{ (evaluation.policy.min_pass_rate * 100).toFixed(1) }}% · 来源 {{ evaluation.source }}</p>
-      <p>读取时间 {{ evaluation.checked_at }} · {{ evaluation.reason ?? '当前策略重算通过' }}</p>
+      <p>读取时间 {{ evaluation.checked_at }} · {{ evaluation.reason ?? (evaluation.status === 'passed' ? '当前策略重算通过' : '未提供原因，不能据此判断通过') }}</p>
       <p>只读结果不是历史发布证明、不会发布／放量；实际变更仍须确认并由服务端重新执行发布闸门。开发 flag 不提供真实评测统计，缺失数据不补零。</p>
     </section>
   </section>

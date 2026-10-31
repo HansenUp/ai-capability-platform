@@ -170,3 +170,66 @@ test("F11：同版本只读结果对照保留未知，切换身份清空，不�
  await page.getByRole("button",{name:"保留当前结果作只读对照"}).click();
  await page.getByRole("button",{name:"应用开发身份",exact:true}).click();assert.equal(await comparison.count(),0);
 }));
+test("F11：读取失败清空结果，无样本不冒充通过，导航不写入", async () => mount(engine, "agents", async ({page,writes,handle}) => {
+  let fail = false;
+  handle(async (route, row) => {
+    if (!row.path.endsWith("/evaluation")) return false;
+    await route.fulfill(fail ? {status:503,json:{detail:"synthetic unavailable"}} : {json:{status:"failed",reason:null,passed_items:0,total_items:0,pass_rate:null,source:"synthetic",checked_at:"2026-10-31T00:00:00Z",eval_run_ref:null,stored_eval_run_ref:null,policy:{...flag,mode:"langfuse",min_items:10}}});
+    return true;
+  });
+  await release(page);
+  await page.getByRole("navigation", {name:"评测流程导航"}).waitFor();
+  await page.getByText(/尚未读取当前引用的评测证据/).waitFor();
+  const read = page.getByRole("button",{name:"只读重算评测结果",exact:true});
+  await read.click();
+  await page.getByText(/未提供原因，不能据此判断通过/).waitFor();
+  await page.getByText(/样本不足：当前 0 条/).waitFor();
+  fail = true;
+  await read.click();
+  await page.getByRole("alert").filter({hasText:"读取失败，结果未知"}).waitFor();
+  assert.equal(await page.getByRole("region",{name:"评测结果只读视图",exact:true}).count(),0);
+  assert.equal(writes().length,0);
+}));
+
+test("F11：只读请求在途切换身份，迟到评测不得恢复旧结果", async () => mount(engine, "agents", async ({page,writes,handle}) => {
+  let finish;
+  const held = new Promise(resolve => { finish = resolve; });
+  let started;
+  const arrived = new Promise(resolve => { started = resolve; });
+  handle(async (route,row) => {
+    if (!row.path.endsWith("/evaluation")) return false;
+    started(); await held;
+    await route.fulfill({json:{status:"passed",reason:"OLD-IDENTITY",passed_items:10,total_items:10,pass_rate:1,source:"synthetic",checked_at:"2026-10-31T00:00:00Z",eval_run_ref:null,stored_eval_run_ref:null,policy:flag}});
+    return true;
+  });
+  await release(page);
+  await page.getByRole("button",{name:"只读重算评测结果",exact:true}).click();
+  await arrived;
+  await page.getByLabel("租户",{exact:true}).fill("other");
+  await page.getByRole("button",{name:"应用开发身份",exact:true}).click();
+  const received = page.waitForResponse(r => r.url().includes("/evaluation"));
+  finish(); await received;
+  await page.getByRole("button",{name:"刷新版本",exact:true}).click();
+  assert.equal(await page.getByRole("region",{name:"评测结果只读视图",exact:true}).count(),0);
+  assert.equal(await page.getByText("OLD-IDENTITY",{exact:false}).count(),0);
+  assert.equal(writes().length,0);
+}));
+test("F11：切换版本清空评测对照并聚焦所选版本", async () => mount(engine, "agents", async ({page,writes,handle}) => {
+  handle(async(route,row) => {
+    if(row.path === "/agents") { await route.fulfill({json:[version,{...version,version:"2"}]}); return true; }
+    if(row.path.endsWith("/evaluation")) { await route.fulfill({json:{status:"passed",reason:null,passed_items:1,total_items:1,pass_rate:1,source:"synthetic",checked_at:"2026-10-31T00:00:00Z",eval_run_ref:null,stored_eval_run_ref:null,policy:flag}});return true; }
+    return false;
+  });
+  await page.getByRole("button",{name:"刷新版本",exact:true}).click();
+  await page.getByRole("button",{name:"评测与发布",exact:true}).first().click();
+  await page.getByRole("button",{name:"只读重算评测结果",exact:true}).click();
+  await page.getByRole("button",{name:"保留当前结果作只读对照"}).click();
+  await page.getByRole("region",{name:"评测结果并排对照"}).waitFor();
+  await page.getByRole("button",{name:"评测与发布",exact:true}).nth(1).click();
+  await page.waitForFunction(() => document.activeElement?.textContent?.includes("@2"));
+  assert.equal(await page.getByRole("region",{name:"评测结果只读视图",exact:true}).count(),0);
+  await page.getByRole("button",{name:"只读重算评测结果",exact:true}).click();
+  await page.getByRole("region",{name:"评测结果只读视图",exact:true}).waitFor();
+  assert.equal(await page.getByRole("region",{name:"评测结果并排对照"}).count(),0);
+  assert.equal(writes().length,0);
+}));
