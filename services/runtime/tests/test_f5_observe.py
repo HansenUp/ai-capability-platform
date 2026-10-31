@@ -24,12 +24,11 @@ def lab(client, idp, monkeypatch):
     if not any(getattr(r, "path", "") == observe.PREFIX + "/events" for r in app.routes):
         app.include_router(observe.router)
     tenant = "observe-" + uuid4().hex
-    monkeypatch.setattr(app.state, "isolated_observe", observe.ENABLED, raising=False)
-    monkeypatch.setattr(
-        app.state,
+    monkeypatch.setitem(app.state._state, "isolated_observe", observe.ENABLED)
+    monkeypatch.setitem(
+        app.state._state,
         "isolated_observe_bindings",
         {(auth.settings.jwt_issuer, "observe-test", "reporter"): (tenant, "synthetic-agent")},
-        raising=False,
     )
 
     async def init():

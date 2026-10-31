@@ -28,7 +28,7 @@ def host(fixture, monkeypatch):
 
     if not any(getattr(r, "path", "") == mcp.PREFIX for r in app.routes):
         app.include_router(mcp.router)
-    monkeypatch.setattr(app.state, "isolated_mcp", mcp.ENABLED, raising=False)
+    monkeypatch.setitem(app.state._state, "isolated_mcp", mcp.ENABLED)
     return fixture
 
 
@@ -125,5 +125,5 @@ def test_mcp_requires_fixture_enablement(host, idp, monkeypatch):
     from runtime.main import app
 
     client, _, _, _ = host
-    monkeypatch.setattr(app.state, "isolated_mcp", None)
+    monkeypatch.setitem(app.state._state, "isolated_mcp", None)
     assert rpc(client, h(idp), "tools/list", {}).status_code == 503

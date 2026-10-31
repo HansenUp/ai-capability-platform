@@ -21,7 +21,7 @@ def lab(client, monkeypatch):
 
     if not any(getattr(r, "path", "") == "/v1/isolated-policies" for r in app.routes):
         app.include_router(policies.router)
-    monkeypatch.setattr(app.state, "isolated_policies", policies.ENABLED, raising=False)
+    monkeypatch.setitem(app.state._state, "isolated_policies", policies.ENABLED)
 
     async def create():
         async with db.engine.begin() as connection:

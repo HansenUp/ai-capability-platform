@@ -22,13 +22,15 @@ def lab(client, monkeypatch):
 
     if not any(getattr(r, "path", "") == "/v1/isolated-discovery/agents" for r in app.routes):
         app.include_router(discovery.router)
-    monkeypatch.setattr(app.state, "isolated_discovery", discovery.ENABLED, raising=False)
+    # State forwards attributes into _state; patch the mapping so nested contexts
+    # restore values on pytest 9.2 as well as older versions.
+    monkeypatch.setitem(app.state._state, "isolated_discovery", discovery.ENABLED)
     snapshot = {"tenant": "default", "revision": 1, "rules": []}
 
     async def read(tenant):
         return copy.deepcopy(snapshot if tenant == "default" else {"tenant": tenant, "revision": 1, "rules": []})
 
-    monkeypatch.setattr(app.state, "isolated_visibility_reader", read, raising=False)
+    monkeypatch.setitem(app.state._state, "isolated_visibility_reader", read)
     return client, snapshot
 
 
@@ -113,7 +115,7 @@ def test_direct_user_only_and_disabled(lab, idp, monkeypatch):
     with monkeypatch.context() as patch:
         patch.setattr(discovery, "settings", replace(settings, runtime_env="prod"))
         assert client.get(ROOT, headers=who(idp)).status_code == 503
-    monkeypatch.setattr(app.state, "isolated_discovery", None)
+    monkeypatch.setitem(app.state._state, "isolated_discovery", None)
     assert client.get(ROOT, headers=who(idp)).status_code == 503
 
 
@@ -133,7 +135,7 @@ def test_withdrawn_rules_and_changed_evidence_fail_closed(lab, idp, monkeypatch)
         calls += 1
         return {"tenant": tenant, "revision": calls, "rules": [rule(visible)]}
 
-    monkeypatch.setattr(app.state, "isolated_visibility_reader", changed)
+    monkeypatch.setitem(app.state._state, "isolated_visibility_reader", changed)
     response = client.get(ROOT, headers=who(idp))
     assert response.status_code == 503
     assert visible not in response.text
@@ -141,7 +143,7 @@ def test_withdrawn_rules_and_changed_evidence_fail_closed(lab, idp, monkeypatch)
     async def broken(tenant):
         raise RuntimeError("private provider diagnostic")
 
-    monkeypatch.setattr(app.state, "isolated_visibility_reader", broken)
+    monkeypatch.setitem(app.state._state, "isolated_visibility_reader", broken)
     assert "private provider" not in client.get(ROOT, headers=who(idp)).text
     assert client.get(ROOT, headers=who(idp)).status_code == 503
 
@@ -181,5 +183,5 @@ def test_invalid_visibility_never_returns_partial_data(lab, idp, monkeypatch, va
     async def read(tenant):
         return value
 
-    monkeypatch.setattr(app.state, "isolated_visibility_reader", read)
+    monkeypatch.setitem(app.state._state, "isolated_visibility_reader", read)
     assert client.get(ROOT, headers=who(idp)).status_code == 503

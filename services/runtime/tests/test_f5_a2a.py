@@ -32,7 +32,7 @@ def fixture(lab, monkeypatch):
     client, snapshot = lab
     if not any(getattr(route, "path", "") == ROOT + "/prepare" for route in app.routes):
         app.include_router(a2a.router)
-    monkeypatch.setattr(app.state, "isolated_a2a", a2a.ENABLED, raising=False)
+    monkeypatch.setitem(app.state._state, "isolated_a2a", a2a.ENABLED)
 
     async def init():
         async with db.engine.begin() as connection:
@@ -239,7 +239,7 @@ def test_unavailable_authority_does_not_invent_rejection(fixture, idp, monkeypat
         raise RuntimeError("synthetic outage")
 
     with monkeypatch.context() as patch:
-        patch.setattr(app.state, "isolated_visibility_reader", unavailable)
+        patch.setitem(app.state._state, "isolated_visibility_reader", unavailable)
         assert client.post(ROOT + "/message:send", headers=h, json=send_body(body, p)).status_code == 503
     assert client.get(ROOT + "/attempts/" + body["attempt_id"], headers=h).json()["receipt"]["status"] == "PREPARED"
     cleanup(client, send_body(body, p), h)
@@ -285,7 +285,7 @@ def test_card_and_profile_disabled(fixture, idp, monkeypatch):
     with monkeypatch.context() as patch:
         patch.setattr(isolated_discovery, "settings", replace(isolated_discovery.settings, runtime_env="prod"))
         assert client.post(ROOT + "/prepare", headers=h, json=payload(agent)).status_code == 503
-    monkeypatch.setattr(app.state, "isolated_a2a", None)
+    monkeypatch.setitem(app.state._state, "isolated_a2a", None)
     assert client.post(ROOT + "/prepare", headers=h, json=payload(agent)).status_code == 503
 
 
@@ -408,7 +408,7 @@ def test_owner_withdrawal_revocation_independent_ack(fixture, idp, monkeypatch):
         raise RuntimeError("synthetic directory unavailable")
 
     with monkeypatch.context() as patch:
-        patch.setattr(app.state, "isolated_visibility_reader", unavailable)
+        patch.setitem(app.state._state, "isolated_visibility_reader", unavailable)
         response = withdraw_call(client, h, prepared)
         assert response.status_code == 200, response.text
         terminal = response.json()

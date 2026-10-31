@@ -21,8 +21,8 @@ def lab(client, monkeypatch):
 
     if not any(getattr(r, "path", "") == "/v1/isolated-views" for r in app.routes):
         app.include_router(views.router)
-    monkeypatch.setattr(app.state, "isolated_views", views.ENABLED, raising=False)
-    monkeypatch.setattr(app.state, "isolated_view_source", {"view_sha256": "a" * 64, "source_sha256": "b" * 64}, raising=False)
+    monkeypatch.setitem(app.state._state, "isolated_views", views.ENABLED)
+    monkeypatch.setitem(app.state._state, "isolated_view_source", {"view_sha256": "a" * 64, "source_sha256": "b" * 64})
 
     async def create():
         async with db.engine.begin() as connection:
@@ -159,7 +159,7 @@ def test_source_change_rejected_without_effect(lab, idp, monkeypatch):
 
     owner = who(idp, "f4-source", [views.MAINTAINER])
     pending = prepare(lab, owner, command("draft", proposal=proposal()))
-    monkeypatch.setattr(app.state, "isolated_view_source", {"view_sha256": "c" * 64, "source_sha256": "b" * 64})
+    monkeypatch.setitem(app.state._state, "isolated_view_source", {"view_sha256": "c" * 64, "source_sha256": "b" * 64})
     rejected = execute(lab, owner, pending)
     assert rejected["status"] == "REJECTED_NO_EFFECT"
     ack(lab, owner, rejected)
@@ -203,5 +203,5 @@ def test_disabled_and_tenant_scopes(lab, idp, monkeypatch):
     row = act(lab, owner, command("draft", proposal=proposal()))
     foreign = who(idp, "f4-isolation", [views.MAINTAINER], "foreign")
     assert row["id"] not in [r["id"] for r in lab.get(ROOT, headers=foreign).json()["items"]]
-    monkeypatch.setattr(app.state, "isolated_views", None)
+    monkeypatch.setitem(app.state._state, "isolated_views", None)
     assert lab.get(ROOT, headers=owner).status_code == 503
