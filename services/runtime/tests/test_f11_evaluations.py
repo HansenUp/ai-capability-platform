@@ -45,21 +45,32 @@ def setup(lab, idp, monkeypatch, scenario="ticket-summary-readonly"):
     actor = "alice-" + uuid.uuid4().hex
     app.state.isolated_dataset_bindings[(ds.auth.settings.jwt_issuer, "default", "human:" + actor)] = "alice"
     a = ds.bearer(idp.token({"sub": actor, "tenant": "default"}))
+    agent_id = "f11-eval-" + uuid.uuid4().hex
+    lab[1].add(("default", "alice", agent_id))
     cmd = ds.command()
+    cmd["agent_id"] = agent_id
     cmd["proposal"]["scenario_id"] = scenario
     cmd["proposal"]["case_ids"] = sorted(api.rules.CASES[scenario])
-    dataset = ds.finish(c, a, cmd)
-    dataset = ds.finish(c, a, ds.command("freeze", dataset))
+    def save(command):
+        command["agent_id"] = agent_id
+        prepared = ds.post(c, a, "/prepare", command)
+        done = ds.post(c, a, f"/{prepared['attempt_id']}/execute", ds.receipt(prepared))
+        assert done["status"] == "COMMITTED", done
+        ds.post(c, a, f"/{prepared['attempt_id']}/acknowledge", ds.receipt(done))
+        return next(row for row in c.get(ds.ROOT + "?agent_id=" + agent_id, headers=a).json()["items"]
+                    if row["version"] == command["version"])
+    dataset = save(cmd)
+    dataset = save(ds.command("freeze", dataset))
     version = uuid.uuid4().hex
     async def seed():
         async with db.SessionLocal() as session:
-            session.add(db.AgentVersion(agent_id="demo", tenant_id="default", version=version, status="published",
+            session.add(db.AgentVersion(agent_id=agent_id, tenant_id="default", version=version, status="published",
                                         harness="mock", model_alias="default-chat", system_prompt="synthetic",
                                         config={"tools": [api.rules.TOOLS[scenario]]}, rollout_percent=100))
             await session.commit()
     c.portal.call(seed)
-    app.state.isolated_evaluation_grants = {("default", "human:" + actor, "demo", version)}
-    command = {"attempt_id": str(uuid.uuid4()), "dataset_id": dataset["id"], "agent_id": "demo", "agent_version": version}
+    app.state.isolated_evaluation_grants = {("default", "human:" + actor, agent_id, version)}
+    command = {"attempt_id": str(uuid.uuid4()), "dataset_id": dataset["id"], "agent_id": agent_id, "agent_version": version}
     return c, a, b, command
 
 
@@ -100,7 +111,7 @@ def test_admission_recheck_no_effect(lab, idp, monkeypatch, change):
     if change == "execution":
         lab[2].state.isolated_evaluation_grants.clear()
     elif change == "management":
-        lab[1].remove(("default", "alice", "demo"))
+        lab[1].remove(("default", "alice", cmd["agent_id"]))
     else:
         async def mutate():
             async with db.SessionLocal() as session:
@@ -155,7 +166,7 @@ def test_prepare_denies_missing_authority(lab, idp, monkeypatch, change):
     if change == "missing_grant":
         lab[2].state.isolated_evaluation_grants.clear()
     elif change == "missing_management":
-        lab[1].remove(("default", "alice", "demo"))
+        lab[1].remove(("default", "alice", cmd["agent_id"]))
     elif change == "foreign":
         a = ds.bearer(idp.token({"sub": "alice", "tenant": "foreign"}))
     elif change == "service":
@@ -206,3 +217,12 @@ def test_ack_requires_unchanged_terminal_evidence(lab, idp, monkeypatch, change)
     c.portal.call(mutate)
     assert c.post(ROOT + f"/{p['attempt_id']}/acknowledge", headers=a, json=ds.receipt(done)).status_code == 409
     assert active(c, a)["acknowledged"] is False
+
+
+def test_fixture_does_not_change_shared_demo_versions(lab, idp, monkeypatch):
+    async def versions():
+        async with db.SessionLocal() as session:
+            return list(await session.scalars(select(db.AgentVersion.id).where(db.AgentVersion.agent_id == "demo")))
+    before = lab[0].portal.call(versions)
+    setup(lab, idp, monkeypatch)
+    assert lab[0].portal.call(versions) == before
