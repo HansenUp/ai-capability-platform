@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import {onBeforeUnmount, ref} from "vue";
+import SyntheticEvaluation from "./SyntheticEvaluation.vue";
+const evaluationToken=ref(""), evaluationKey=ref(0);
 const props = defineProps<{proposal: {scenario_id:string;catalog_revision:string;case_ids:string[]} | null}>();
 type Entry={id:string;agent_id:string;version:string;state:string;revision:number;maintainer:string;proposal:{scenario_id:string;case_ids:string[]}};
 type Attempt={scope_id:string;attempt_id:string;fingerprint:string;revision:number;status:string;acknowledged:boolean;command:{action:string;agent_id:string;version:string};evidence:unknown};
@@ -11,13 +13,13 @@ const entries=ref<Entry[]>([]), active=ref<Attempt|null>(null), selected=ref<Ent
 const authorized=ref(false);
 const busy=ref(false), ready=ref(false), elsewhere=ref(false), ackPreview=ref(false);
 let token="", scope="", generation=0, controller:AbortController|null=null;
-function clear() { generation++;controller?.abort();token="";scope="";actor.value="";subject.value="";entries.value=[];active.value=null;selected.value=null;ready.value=false;authorized.value=false;busy.value=false;elsewhere.value=false;ackPreview.value=false; }
+function clear() { evaluationToken.value="";evaluationKey.value++;generation++;controller?.abort();token="";scope="";actor.value="";subject.value="";entries.value=[];active.value=null;selected.value=null;ready.value=false;authorized.value=false;busy.value=false;elsewhere.value=false;ackPreview.value=false; }
 onBeforeUnmount(() => { clear(); demoTokens={}; });
 async function call(path:string,body?:unknown) {
  const r=await fetch(`/v1/${path}`,{method:body===undefined?"GET":"POST",headers:{Authorization:`Bearer ${token}`,...(body===undefined?{}:{"Content-Type":"application/json"})},body:body===undefined?undefined:JSON.stringify(body),signal:controller?.signal,cache:"no-store",credentials:"omit",redirect:"error"});
  if(!r.ok)throw new Error(`Runtime HTTP ${r.status}`);return r.json();
 }
-async function apply() {const next=tokenInput.value;clear();tokenInput.value="";token=next;await refresh();}
+async function apply() {const next=tokenInput.value;clear();tokenInput.value="";token=next;evaluationToken.value=next;await refresh();}
 async function refresh() {
  if(!token||busy.value)return;
  const current=generation;busy.value=true;ready.value=false;authorized.value=false;entries.value=[];selected.value=null;active.value=null;ackPreview.value=false;controller=new AbortController();
@@ -110,5 +112,6 @@ function changeAgent(){clear();message.value="Agent已变化，请重新应用�
     <button :disabled="!ready||busy||!ackPreview" @click="ack">本人ACK数据集回执</button>
    </template>
   </section>
+  <SyntheticEvaluation v-if="evaluationToken" :key="evaluationKey" :token="evaluationToken" :agent="agent" :dataset-id="selected?.state==='frozen'?selected.id:''" />
  </section>
 </template>

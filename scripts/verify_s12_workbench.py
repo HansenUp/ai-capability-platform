@@ -379,6 +379,9 @@ def main() -> None:
         from runtime.api import isolated_datasets
 
         app.include_router(isolated_datasets.router)
+        from runtime.api import isolated_evaluations
+
+        app.include_router(isolated_evaluations.router)
         app.state.isolated_policies = isolated_policies.ENABLED
         app.include_router(isolated_policies.router)
         from runtime.api import isolated_discovery
@@ -533,6 +536,13 @@ def main() -> None:
 
                 f11_dataset_fixture.seed(console_base)
                 f11_dataset_fixture.install(app, auth_settings.jwt_issuer)
+                import f11_evaluation_fixture
+
+                f11_evaluation_fixture.install(app)
+                with httpx.Client(base_url=base, headers={"Authorization": f"Bearer {admin}"}, trust_env=False) as seed:
+                    assert seed.post("/admin/agents", json={"agent_id": "f11-dataset-demo", "version": "1",
+                        "harness": "mock", "model_alias": "default-chat", "config": {"tools": ["ticket.get"]}}).status_code == 201
+                    assert seed.post("/admin/agents/f11-dataset-demo/versions/1/publish", json={"eval_passed": True}).status_code == 200
         if args.ticket_readonly_demo:
             args.browser_info.write_text(json.dumps({"runtime": base, "console": console_base, "tokens": str(token_file)}))
             args.browser_info.chmod(0o600)

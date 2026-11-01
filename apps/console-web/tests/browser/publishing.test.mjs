@@ -361,6 +361,57 @@ test("F11数据集：真实隔离账本保存、重载、丢响应恢复、本�
  await restore();await area.getByRole("button",{name:`选择 ${v}`,exact:true}).click();
  assert.match(await area.getByRole("region",{name:"合成数据集只读明细",exact:true}).innerText(),/frozen/);
  assert.equal(await area.getByRole("button",{name:"登记冻结所选版本",exact:true}).isDisabled(),true);
+ const evaluation=page.getByRole("region",{name:"隔离合成评测执行",exact:true});
+ const recoverEvaluation=async()=>{
+  await evaluation.getByRole("button",{name:"只读恢复评测账本",exact:true}).click();
+  await evaluation.getByRole("status").filter({hasText:"已只读核对"}).waitFor();
+ };
+ await recoverEvaluation();
+ await evaluation.getByRole("button",{name:"登记本次合成评测",exact:true}).click();
+ await evaluation.getByRole("status").filter({hasText:"请求已返回"}).waitFor();
+ await page.reload();await applyDataset();await recoverEvaluation();
+ const evalReceipt=evaluation.getByRole("region",{name:"合成评测回执",exact:true});
+ await evalReceipt.getByText(/PREPARED/).waitFor();
+ await mount(engine,"agents",async({page:other})=>{
+  const registry=other.getByRole("region",{name:"隔离合成数据集管理",exact:true});
+  await registry.getByLabel("数据集 Agent",{exact:true}).fill("f11-dataset-demo");
+  await registry.getByLabel("数据集签名测试令牌",{exact:true}).fill(tokens.dataset_admin);
+  await registry.getByRole("button",{name:"应用数据集身份并清空",exact:true}).click();
+  const second=other.getByRole("region",{name:"隔离合成评测执行",exact:true});
+  await second.getByRole("button",{name:"只读恢复评测账本",exact:true}).click();
+  await second.getByRole("region",{name:"合成评测回执",exact:true}).getByText(/PREPARED/).waitFor();
+  assert.equal(await second.getByRole("button",{name:"登记本次合成评测",exact:true}).isDisabled(),true);
+ });
+
+ let evalExecutions=0;
+ await page.route("**/v1/isolated-evaluations/*/execute",async route=>{evalExecutions++;const result=await route.fetch();assert.equal(result.status(),200);await route.abort("failed");});
+ await evalReceipt.getByRole("button",{name:"显式执行本次合成评测一次",exact:true}).click();
+ await evaluation.getByRole("status").filter({hasText:"结果可能未知"}).waitFor();
+ await recoverEvaluation();await evalReceipt.getByText(/COMMITTED/).waitFor();
+ assert.equal(evalExecutions,1);
+ assert.match(await evalReceipt.innerText(),/100%/);
+ assert.equal(await evalReceipt.getByRole("button",{name:"显式执行本次合成评测一次",exact:true}).count(),0);
+ assert.equal(await evalReceipt.getByText(/模拟工单摘要/).count(),0);
+ // A late response from the original identity must not restore its receipt after switching.
+ let finishRead, startedRead;
+ const heldRead=new Promise(resolve=>{finishRead=resolve;});
+ const arrivedRead=new Promise(resolve=>{startedRead=resolve;});
+ await page.route("**/v1/isolated-evaluations/ledger",async route=>{
+  const response=await route.fetch();startedRead();await heldRead;
+  await route.fulfill({response}).catch(()=>{});
+ });
+ await evaluation.getByRole("button",{name:"只读恢复评测账本",exact:true}).click();await arrivedRead;
+ await area.getByLabel("数据集签名测试令牌",{exact:true}).fill(tokens.dataset_unassigned);
+ await area.getByRole("button",{name:"应用数据集身份并清空",exact:true}).click();
+ await area.getByRole("status").filter({hasText:"403"}).waitFor();
+ finishRead();await page.unroute("**/v1/isolated-evaluations/ledger");
+ assert.equal(await page.getByRole("region",{name:"合成评测回执",exact:true}).count(),0);
+ await applyDataset();await recoverEvaluation();
+ await evalReceipt.getByLabel("核对评测终结回执后本人确认",{exact:true}).check();
+ await evalReceipt.getByRole("button",{name:"本人ACK评测回执",exact:true}).click();
+ await evaluation.getByRole("status").filter({hasText:"请求已返回"}).waitFor();
+ await recoverEvaluation();assert.equal(await evalReceipt.count(),0);
+ assert.equal(evalExecutions,1);
  await area.getByLabel("数据集签名测试令牌",{exact:true}).fill(tokens.dataset_unassigned);
  await area.getByRole("button",{name:"应用数据集身份并清空",exact:true}).click();
  await area.getByRole("status").filter({hasText:"403"}).waitFor();
