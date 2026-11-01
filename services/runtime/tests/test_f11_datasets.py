@@ -7,7 +7,8 @@ import test_s7_run_api as authkit
 from fastapi import HTTPException
 from test_auth import bearer
 
-from runtime.api import auth, isolated_datasets as api
+from runtime.api import auth
+from runtime.api import isolated_datasets as api
 from runtime.state import db
 
 ROOT = "/v1/isolated-datasets"
