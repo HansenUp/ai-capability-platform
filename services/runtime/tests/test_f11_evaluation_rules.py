@@ -37,7 +37,10 @@ def test_fixed_cases(scenario, case):
 
 @pytest.mark.parametrize("state", ["submitted", "working", "failed", "canceled", "input-required", "auth-required"])
 def test_nonterminal_and_failed_run_never_pass_expected_failure(state):
-    assert evaluate("ticket-summary-readonly", "failure", state, evidence("ticket-summary-readonly", "failure")).judgement == "not_verifiable"
+    assert (
+        evaluate("ticket-summary-readonly", "failure", state, evidence("ticket-summary-readonly", "failure")).judgement
+        == "not_verifiable"
+    )
 
 
 @pytest.mark.parametrize("change", ["gap", "duplicate", "bool_seq", "no_answer", "no_tool_result", "bad_creation", "run_error"])

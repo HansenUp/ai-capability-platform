@@ -28,6 +28,7 @@ def lab(client, monkeypatch):
     import f11_evaluation_fixture as profile
     restore = profile.install(app)
     from dataclasses import replace
+
     from runtime.loop import toolbroker
     monkeypatch.setattr(toolbroker, "settings", replace(toolbroker.settings, tool_result_offload_tokens=10000))
     async def setup():

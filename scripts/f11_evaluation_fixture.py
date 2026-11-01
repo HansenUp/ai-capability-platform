@@ -103,7 +103,9 @@ def install(app):
         schema = {"type": "object", "properties": {"synthetic_case": {"type": "string"}},
                   "required": ["synthetic_case"], "additionalProperties": False}
         if name in previous_tools:
-            LOCAL_TOOLS[name] = previous_tools[name].model_copy(update={"input_schema": {"oneOf": [previous_tools[name].input_schema, schema]}})
+            LOCAL_TOOLS[name] = previous_tools[name].model_copy(
+                update={"input_schema": {"oneOf": [previous_tools[name].input_schema, schema]}}
+            )
             continue
         LOCAL_TOOLS[name] = ToolSpec(name=name, description="F11 synthetic read only", capability_id=f"cap.{name}",
                                    data_class="confidential" if name == "crm.opportunity.search" else "internal",
