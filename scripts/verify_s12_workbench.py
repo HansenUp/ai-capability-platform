@@ -110,6 +110,9 @@ def main() -> None:
                     from runtime.api import isolated_policies, isolated_views
 
                     await connection.run_sync(isolated_views.Base.metadata.create_all)
+                    from runtime.api import isolated_datasets
+
+                    await connection.run_sync(isolated_datasets.Base.metadata.create_all)
                     await connection.run_sync(isolated_policies.Base.metadata.create_all)
                     from runtime.api import isolated_a2a
 
@@ -373,6 +376,9 @@ def main() -> None:
 
         app.state.isolated_views = isolated_views.ENABLED
         app.include_router(isolated_views.router)
+        from runtime.api import isolated_datasets
+
+        app.include_router(isolated_datasets.router)
         app.state.isolated_policies = isolated_policies.ENABLED
         app.include_router(isolated_policies.router)
         from runtime.api import isolated_discovery
@@ -404,7 +410,10 @@ def main() -> None:
         app.state.isolated_observe_bindings = {(auth_settings.jwt_issuer, "observe-test", "reporter"): ("default", "s12-workbench")}
         app.include_router(isolated_observe.router)
 
-    tokens = {name: provider.token({"sub": name, "exp": int(time.time()) + 1800}) for name in ["alice", "bob", "pagination"]}
+    tokens = {
+        name: provider.token({"sub": name, "exp": int(time.time()) + 1800})
+        for name in ["alice", "bob", "pagination", "dataset_admin", "dataset_unassigned"]
+    }
     for name, roles in [
         ("policy_maintainer", ["data-policy-maintainer"]),
         ("policy_reviewer_a", ["data-policy-reviewer"]),
@@ -519,6 +528,11 @@ def main() -> None:
                 asyncio.run(admit_f7())
             if not args.ticket_readonly_demo:
                 owner_browser_fixture.seed(console_base)
+            if args.demo_no_migrations:
+                import f11_dataset_fixture
+
+                f11_dataset_fixture.seed(console_base)
+                f11_dataset_fixture.install(app, auth_settings.jwt_issuer)
         if args.ticket_readonly_demo:
             args.browser_info.write_text(json.dumps({"runtime": base, "console": console_base, "tokens": str(token_file)}))
             args.browser_info.chmod(0o600)

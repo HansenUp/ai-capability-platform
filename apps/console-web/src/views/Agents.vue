@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import {catalogRevision, previewSelection} from "../synthetic-selection";
 import {parseScenarioPack} from "../scenario-pack";
 import orderPackText from "../scenarios/order-metrics.json?raw";
 import salesPackText from "../scenarios/sales-readonly.json?raw";
 import ticketPackText from "../scenarios/ticket-readonly.json?raw";
+import SyntheticDatasetRegistry from "../components/SyntheticDatasetRegistry.vue";
 import AgentConfig from "../components/AgentConfig.vue";
 import { configObject, differences } from "../agent-config";
 
@@ -76,6 +78,27 @@ const scenarioText=ref("");
 const scenarioPreview=ref<ReturnType<typeof parseScenarioPack>|null>(null);
 function validateScenario(){scenarioPreview.value=null;try{scenarioPreview.value=parseScenarioPack(scenarioText.value);message.value="场景包校验通过；请预览后显式填入草稿，尚未保存。";}catch(error){message.value=String(error);}}
 function importScenario(){if(locked.value||!scenarioPreview.value)return;const pack=parseScenarioPack(scenarioText.value);Object.assign(draft,{...pack.agent,config:JSON.stringify(pack.agent.config,null,2)});scenarioPreview.value=null;message.value="已填入隔离场景配置；请填写独立Agent ID和版本，再显式保存。未发布或创建任务。";}
+const syntheticCatalogs = [ticketPackText, salesPackText, orderPackText].map(parseScenarioPack);
+const syntheticScenario = ref(syntheticCatalogs[0]!.scenario_id);
+const syntheticCases = ref<string[]>([]);
+const syntheticText = ref("");
+const syntheticPreview = ref<ReturnType<typeof previewSelection> | null>(null);
+const syntheticError = ref("");
+const syntheticCatalog = computed(() => syntheticCatalogs.find(row => row.scenario_id === syntheticScenario.value)!);
+function clearSyntheticPreview() { syntheticPreview.value = null; syntheticError.value = ""; }
+watch(syntheticScenario, () => { syntheticCases.value = []; syntheticText.value = ""; clearSyntheticPreview(); });
+watch(syntheticCases, () => { syntheticText.value = ""; clearSyntheticPreview(); });
+watch(() => [op.user, op.role, op.tenant], () => { syntheticCases.value = []; syntheticText.value = ""; clearSyntheticPreview(); }, {flush: "sync"});
+function fillSyntheticSelection() {
+  clearSyntheticPreview();
+  syntheticText.value = JSON.stringify({schema_version: 1, scenario_id: syntheticScenario.value, catalog_revision: catalogRevision, case_ids: syntheticCases.value}, null, 2);
+}
+function validateSyntheticSelection() {
+  clearSyntheticPreview();
+  if (!canManage.value) return;
+  try { syntheticPreview.value = previewSelection(syntheticText.value, syntheticCatalogs); }
+  catch (error) { syntheticError.value = error instanceof Error ? error.message : "清单不可解析"; }
+}
 const draft = reactive({ agent_id: "", version: "1", system_prompt: "", model_alias: "default-chat", harness: "mock", config: "{}" });
 const release = reactive({ reference: "", percent: 100, allowlist: "", developmentPass: false });
 const canManage = computed(() => ["ADMIN", "TENANT_ADMIN", "PLATFORM_ADMIN"].includes(op.role));
@@ -255,6 +278,22 @@ onMounted(load);
   <p v-if="!canManage">当前角色仅可查看；保存、发布与灰度操作需要已有管理权限。切换开发身份不代表生产授权。</p>
   <p v-if="message" class="scope-note">保存或发布未得到明确成功结果时，先使用“刷新版本”只读核对服务端状态，再决定下一步；刷新不会重发变更。评测不足时补齐评测证据，不降低门槛。</p>
   <button :disabled="busy || pending !== null" @click="load">刷新版本</button>
+  <fieldset v-if="canManage" :disabled="locked" aria-label="合成用例清单预览">
+    <legend>合成用例清单 · 仅本页预览</legend>
+    <p>固定工单、销售、经营分析用例。不保存数据集、不执行评测、不改变发布闸门；没有绑定Agent或取得数据访问权限。重载或切换身份将清空。</p>
+    <label>合成场景 <select v-model="syntheticScenario"><option v-for="row in syntheticCatalogs" :key="row.scenario_id" :value="row.scenario_id">{{ row.scenario_id }}</option></select></label>
+    <label v-for="row in syntheticCatalog.cases" :key="row.id"><input v-model="syntheticCases" type="checkbox" :value="row.id" />固定用例 {{ row.id }}</label>
+    <button :disabled="!syntheticCases.length" @click="fillSyntheticSelection">生成预览清单</button>
+    <label class="block">合成用例清单 JSON <textarea v-model="syntheticText" @input="clearSyntheticPreview" maxlength="16384" /></label>
+    <button @click="validateSyntheticSelection">校验并预览清单</button>
+    <p v-if="syntheticError" role="alert">{{ syntheticError }}</p>
+    <section v-if="syntheticPreview" aria-label="合成清单校验结果">
+      <p>校验通过 · {{ syntheticPreview.scenario_id }} · {{ syntheticPreview.catalog_revision }} · {{ syntheticPreview.case_ids.length }}条固定用例</p>
+      <ul><li v-for="id in syntheticPreview.case_ids" :key="id">{{ id }}</li></ul>
+      <p>仅结构校验通过，未执行用例，无评测通过率或发布证明。</p>
+    </section>
+  </fieldset>
+  <SyntheticDatasetRegistry v-if="canManage" :key="JSON.stringify([op.user,op.role,op.tenant])" :proposal="syntheticPreview" />
   <fieldset :disabled="locked" aria-label="只读场景包导入">
     <legend>只读隔离场景包 · 工单 / 销售 / 经营</legend>
     <p>只导入本地草稿配置，不保存、不发布、不创建Run。仅适用于临时库、mock模型与工具替身；合成评测不是正式发布证据。</p>

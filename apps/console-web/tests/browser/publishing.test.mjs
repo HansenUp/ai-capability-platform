@@ -1,6 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { browser } from "./support.mjs";
+import { browser, profile } from "./support.mjs";
+import { readFile } from "node:fs/promises";
 import { flag, mount, release, version } from "./management-fixture.mjs";
 let engine;
 before(async () => { engine = await browser(); });
@@ -260,4 +261,109 @@ test("F11：样本明细筛选分页、未知及引用清空，不发写请求",
   await page.getByLabel("真实评测引用",{exact:true}).fill("langfuse:changed/run");
   assert.equal(await detail.count(),0);
   assert.equal(writes().length,0);
+}));
+
+
+test("合成清单：预览无写入、错误清空、身份切换清空且普通用户隐藏", async () => mount(engine, "agents", async ({page,writes}) => {
+ const area=page.getByRole("group",{name:"合成用例清单预览",exact:true});
+ await area.getByLabel("固定用例 success",{exact:true}).check();
+ await area.getByRole("button",{name:"生成预览清单",exact:true}).click();
+ await area.getByRole("button",{name:"校验并预览清单",exact:true}).click();
+ await page.getByRole("region",{name:"合成清单校验结果",exact:true}).waitFor();
+ assert.equal(writes().length,0);
+ const input=area.getByLabel("合成用例清单 JSON",{exact:true});
+ const valid=await input.inputValue();
+ await input.fill("{}");
+ assert.equal(await page.getByRole("region",{name:"合成清单校验结果",exact:true}).count(),0);
+ await area.getByRole("button",{name:"校验并预览清单",exact:true}).click();
+ await area.getByRole("alert").waitFor();
+ await input.fill(valid);
+ await area.getByRole("button",{name:"校验并预览清单",exact:true}).click();
+ await area.getByRole("combobox",{name:/^合成场景/}).selectOption("sales-summary-readonly");
+ assert.equal(await input.inputValue(),"");
+ assert.equal(await page.getByRole("region",{name:"合成清单校验结果",exact:true}).count(),0);
+ await input.fill(valid);
+ await area.getByRole("button",{name:"校验并预览清单",exact:true}).click();
+ await page.reload();
+ assert.equal(await input.inputValue(),"");
+ assert.equal(await page.getByRole("region",{name:"合成清单校验结果",exact:true}).count(),0);
+ await input.fill(valid);
+ await area.getByRole("button",{name:"校验并预览清单",exact:true}).click();
+ await page.getByLabel("用户",{exact:true}).fill("another-admin");
+ await page.getByRole("button",{name:"应用开发身份",exact:true}).click();
+ assert.equal(await input.inputValue(),"");
+ assert.equal(await page.getByRole("region",{name:"合成清单校验结果",exact:true}).count(),0);
+ await page.getByRole("combobox",{name:/^角色/}).selectOption("USER");
+ await page.getByRole("button",{name:"应用开发身份",exact:true}).click();
+ assert.equal(await area.count(),0);
+ assert.equal(writes().length,0);
+}));
+
+
+test("F11数据集：真实隔离账本保存、重载、丢响应恢复、本人ACK及冻结", async () => mount(engine, "agents", async ({page,writes}) => {
+ const tokens=JSON.parse(await readFile(profile.tokens,"utf8"));
+ await page.route("**/__demo/info",route=>route.fulfill({json:{dataset_tokens:{dataset_admin:tokens.dataset_admin,dataset_unassigned:tokens.dataset_unassigned},expires_at:new Date(Date.now()+600000).toISOString()}}));
+ const area=page.getByRole("region",{name:"隔离合成数据集管理",exact:true});
+ const preview=page.getByRole("group",{name:"合成用例清单预览",exact:true});
+ const applyDataset=async()=>{
+  await area.getByLabel("数据集 Agent",{exact:true}).fill("f11-dataset-demo");
+  await area.getByRole("button",{name:"加载数据集测试身份",exact:true}).click();
+  await area.getByRole("status").filter({hasText:"数据集测试身份已载入内存"}).waitFor();
+  await area.getByRole("button",{name:"应用数据集测试角色",exact:true}).click();
+  await area.getByText("当前验签身份：default / human:dataset_admin",{exact:false}).waitFor();
+  await area.getByRole("status").filter({hasText:"已核对本人账本"}).waitFor();
+ };
+ const restore=async()=>{
+  await area.getByRole("button",{name:"只读恢复数据集账本",exact:true}).click();
+  await area.getByRole("status").filter({hasText:"已核对本人账本"}).waitFor();
+ };
+ await preview.getByLabel("固定用例 success",{exact:true}).check();
+ await preview.getByRole("button",{name:"生成预览清单",exact:true}).click();
+ await preview.getByRole("button",{name:"校验并预览清单",exact:true}).click();
+ await applyDataset();
+ const v=`browser-${Date.now()}`;
+ await area.getByLabel("新数据集版本",{exact:true}).fill(v);
+ await area.getByRole("button",{name:"登记保存合成草稿",exact:true}).click();
+ await area.getByRole("status").filter({hasText:"已登记"}).waitFor();
+ await page.reload();await applyDataset();
+ const receipt=area.getByRole("region",{name:"数据集写回执",exact:true});
+ await receipt.getByText(/PREPARED/).waitFor();
+ await mount(engine, "agents", async ({page:other}) => {
+  const second=other.getByRole("region",{name:"隔离合成数据集管理",exact:true});
+  await second.getByLabel("数据集 Agent",{exact:true}).fill("f11-dataset-demo");
+  await second.getByLabel("数据集签名测试令牌",{exact:true}).fill(tokens.dataset_admin);
+  await second.getByRole("button",{name:"应用数据集身份并清空",exact:true}).click();
+  await second.getByRole("region",{name:"数据集写回执",exact:true}).getByText(/PREPARED/).waitFor();
+  assert.equal(await second.getByRole("button",{name:"登记保存合成草稿",exact:true}).isDisabled(),true);
+ });
+ let executed=0;
+ await page.route("**/v1/isolated-datasets/*/execute",async route=>{executed++;await route.fetch();await route.abort("failed");});
+ await receipt.getByRole("button",{name:"显式执行本次数据集登记",exact:true}).click();
+ await area.getByRole("status").filter({hasText:"写结果未知"}).waitFor();
+ assert.equal(executed,1);
+ await restore();await receipt.getByText(/COMMITTED/).waitFor();
+ assert.equal(executed,1);
+ await receipt.getByLabel("核对数据集终结回执后本人确认",{exact:true}).check();
+ await receipt.getByRole("button",{name:"本人ACK数据集回执",exact:true}).click();
+ await area.getByRole("status").filter({hasText:"本人ACK已返回"}).waitFor();
+ await restore();
+ await area.getByRole("button",{name:`选择 ${v}`,exact:true}).click();
+ await area.getByRole("button",{name:"登记冻结所选版本",exact:true}).click();
+ await area.getByRole("status").filter({hasText:"已登记"}).waitFor();
+ await restore();
+ await page.unroute("**/v1/isolated-datasets/*/execute");
+ await receipt.getByRole("button",{name:"显式执行本次数据集登记",exact:true}).click();
+ await area.getByRole("status").filter({hasText:"执行已返回"}).waitFor();
+ await restore();
+ await receipt.getByLabel("核对数据集终结回执后本人确认",{exact:true}).check();
+ await receipt.getByRole("button",{name:"本人ACK数据集回执",exact:true}).click();
+ await area.getByRole("status").filter({hasText:"本人ACK已返回"}).waitFor();
+ await restore();await area.getByRole("button",{name:`选择 ${v}`,exact:true}).click();
+ assert.match(await area.getByRole("region",{name:"合成数据集只读明细",exact:true}).innerText(),/frozen/);
+ assert.equal(await area.getByRole("button",{name:"登记冻结所选版本",exact:true}).isDisabled(),true);
+ await area.getByLabel("数据集签名测试令牌",{exact:true}).fill(tokens.dataset_unassigned);
+ await area.getByRole("button",{name:"应用数据集身份并清空",exact:true}).click();
+ await area.getByRole("status").filter({hasText:"403"}).waitFor();
+ assert.equal(await area.getByRole("region",{name:"合成数据集只读明细",exact:true}).count(),0);
+ assert.equal(writes().length,0);
 }));
