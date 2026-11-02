@@ -32,6 +32,11 @@ test('统一体验入口：合成配置、Portal任务定位及未知结果指�
   assert.match(await evaluation.innerText(),/撤权后拒绝历史浏览/);
   assert.match(await evaluation.innerText(),/不展示提示词或输出正文/);
   assert.equal(await evaluation.getByRole('link',{name:'Agent管理',exact:true}).getAttribute('href'),'/manage/agents');
+  const startup=page.getByRole('region',{name:'启动与失败处理',exact:true});
+  assert.match(await startup.innerText(),/--preflight-only/);
+  assert.match(await startup.innerText(),/DEMO_READY/);
+  assert.match(await startup.innerText(),/清理不明、读取密文或hash差异时暂停/);
+  assert.match(await startup.innerText(),/--verify-only/);
   const boundary=page.getByRole('region',{name:'本机交付环境边界',exact:true});
   assert.match(await boundary.innerText(),/--f6-readonly/);
   assert.match(await boundary.innerText(),/不会启动节点或下发操作/);

@@ -77,3 +77,43 @@ test("整合演示：身份切换与跨页定位不解除未决写，显式执�
     assert.equal(await page.getByLabel("演示Run定位", { exact: true }).inputValue(), "");
   } finally { await context.close(); await engine.close(); }
 });
+
+test("Portal演示：身份读取失败与到期显示恢复指引，不自动重试或保留任务页面", async () => {
+  const engine = await browser();
+  try {
+    const infoResponse = await fetch(profile.url + "/__demo/info");
+    assert.equal(infoResponse.status, 200);
+    const info = await infoResponse.json();
+    for (const mode of ["http", "disconnect", "invalid-json", "expired", "expires-open"]) {
+      const context = await engine.newContext(), page = await context.newPage();
+      page.setDefaultTimeout(5000);
+      let reads = 0; const api = [], errors = [];
+      page.on("pageerror", error => errors.push(error.message));
+      await page.route("**/__demo/info", route => {
+        reads++;
+        if (mode === "disconnect") return route.abort();
+        if (mode === "http") return route.fulfill({status: 503, body: "unavailable"});
+        if (mode === "invalid-json") return route.fulfill({contentType: "application/json", body: "invalid"});
+        return route.fulfill({json: {console: profile.url + "/demo", tokens: {alice: "synthetic-alice", bob: "synthetic-bob"}, expires_at: mode === "expired" ? "2000-01-01T00:00:00Z" : "2099-01-01T00:00:00Z"}});
+      });
+      await page.route("**/v1/**", route => { api.push(route.request().method()); return route.fulfill({status: 403, json: {detail: "synthetic refusal"}}); });
+      await page.route("**/console/**", route => { api.push(route.request().method()); return route.fulfill({status: 403, json: {detail: "synthetic refusal"}}); });
+      try {
+        await page.goto(info.portal);
+        if (mode === "expires-open") {
+          await page.getByRole("button", {name: "应用测试身份", exact: true}).waitFor();
+          await page.evaluate(() => { Date.now = () => Date.parse("2100-01-01T00:00:00Z"); });
+        }
+        const alert = page.getByRole("alert").filter({hasText: /演示身份/});
+        await alert.waitFor();
+        assert.match(await page.locator("main").innerText(), /刷新不能续期，旧Run与回执不迁移，不自动重发或解锁/);
+        assert.equal(await page.getByRole("button", {name: "应用测试身份", exact: true}).count(), 0);
+        assert.equal(await page.getByRole("combobox").count(), 0);
+        assert.equal(reads, 1);
+        assert.ok(api.every(method => method === "GET"));
+        if (mode !== "expires-open") assert.deepEqual(api, []);
+        assert.deepEqual(errors, []);
+      } finally {await context.close();}
+    }
+  } finally {await engine.close();}
+});
