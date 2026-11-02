@@ -412,6 +412,55 @@ test("F11数据集：真实隔离账本保存、重载、丢响应恢复、本�
  await evaluation.getByRole("status").filter({hasText:"请求已返回"}).waitFor();
  await recoverEvaluation();assert.equal(await evalReceipt.count(),0);
  assert.equal(evalExecutions,1);
+ const history=page.getByRole("region",{name:"本人评测历史与版本对照",exact:true});
+ const readHistory=async()=>{
+  await history.getByRole("button",{name:"读取本人评测历史",exact:true}).click();
+  await history.getByRole("status").filter({hasText:"已读取本人历史"}).waitFor();
+ };
+ await readHistory();
+ await history.getByRole("button",{name:"查看评测明细",exact:true}).first().click();
+ await history.getByRole("region",{name:"历史评测明细",exact:true}).getByText(/已ACK/).waitFor();
+ assert.equal(await history.getByText(/模拟工单摘要/).count(),0);
+ // ACK does not erase history; a reload must read it from the server again.
+ await page.reload();await applyDataset();await readHistory();
+ await page.unroute("**/v1/isolated-evaluations/*/execute");
+ await area.getByRole("button",{name:`选择 ${v}`,exact:true}).click();
+ await recoverEvaluation();
+ await evaluation.getByRole("button",{name:"登记本次合成评测",exact:true}).click();
+ await evaluation.getByRole("status").filter({hasText:"请求已返回"}).waitFor();
+ await recoverEvaluation();
+ await evalReceipt.getByRole("button",{name:"显式执行本次合成评测一次",exact:true}).click();
+ await evaluation.getByRole("status").filter({hasText:"请求已返回"}).waitFor();
+ await recoverEvaluation();
+ await evalReceipt.getByLabel("核对评测终结回执后本人确认",{exact:true}).check();
+ await evalReceipt.getByRole("button",{name:"本人ACK评测回执",exact:true}).click();
+ await evaluation.getByRole("status").filter({hasText:"请求已返回"}).waitFor();
+ await readHistory();
+ const checks=history.getByRole("checkbox");await checks.nth(0).check();await checks.nth(1).check();
+ await history.getByRole("button",{name:"只读对照选中评测",exact:true}).click();
+ await history.getByRole("region",{name:"评测版本对照结果",exact:true}).getByText("条件一致，可对照",{exact:true}).waitFor();
+ assert.equal(await history.getByRole("region",{name:"历史评测明细",exact:true}).count(),2);
+ // Errors discard previously displayed details rather than retaining stale successful results.
+ await page.route("**/v1/isolated-evaluations/history?**",route=>route.fulfill({status:403,contentType:"application/json",body:'{"detail":"revoked"}'}));
+ await history.getByRole("button",{name:"读取本人评测历史",exact:true}).click();
+ await history.getByRole("status").filter({hasText:"403"}).waitFor();
+ assert.equal(await history.getByRole("region",{name:"历史评测明细",exact:true}).count(),0);
+ await page.unroute("**/v1/isolated-evaluations/history?**");
+ let releaseHistory, historyArrived;
+ const waitingHistory=new Promise(resolve=>{releaseHistory=resolve;});
+ const arrivedHistory=new Promise(resolve=>{historyArrived=resolve;});
+ await page.route("**/v1/isolated-evaluations/history?**",async route=>{
+  const response=await route.fetch();historyArrived();await waitingHistory;
+  await route.fulfill({response}).catch(()=>{});
+ });
+ await history.getByRole("button",{name:"读取本人评测历史",exact:true}).click();await arrivedHistory;
+ await area.getByLabel("数据集签名测试令牌",{exact:true}).fill(tokens.dataset_unassigned);
+ await area.getByRole("button",{name:"应用数据集身份并清空",exact:true}).click();
+ await area.getByRole("status").filter({hasText:"403"}).waitFor();
+ releaseHistory();await page.unroute("**/v1/isolated-evaluations/history?**");
+ assert.equal(await history.getByRole("listitem").count(),0);
+ assert.equal(await history.getByRole("region",{name:"历史评测明细",exact:true}).count(),0);
+
  await area.getByLabel("数据集签名测试令牌",{exact:true}).fill(tokens.dataset_unassigned);
  await area.getByRole("button",{name:"应用数据集身份并清空",exact:true}).click();
  await area.getByRole("status").filter({hasText:"403"}).waitFor();

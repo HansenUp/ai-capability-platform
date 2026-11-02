@@ -226,3 +226,145 @@ def test_fixture_does_not_change_shared_demo_versions(lab, idp, monkeypatch):
     before = lab[0].portal.call(versions)
     setup(lab, idp, monkeypatch)
     assert lab[0].portal.call(versions) == before
+
+
+
+def test_history_after_ack_permissions_pagination_and_comparison(lab, idp, monkeypatch):
+    c, a, b, cmd = setup(lab, idp, monkeypatch)
+    records = []
+    for _ in range(3):
+        cmd["attempt_id"] = str(uuid.uuid4())
+        prepared = post(c, a, "/prepare", cmd)
+        done = post(c, a, f"/{prepared['attempt_id']}/execute", ds.receipt(prepared))
+        post(c, a, f"/{prepared['attempt_id']}/acknowledge", ds.receipt(done))
+        records.append(prepared["attempt_id"])
+    params = {"agent_id": cmd["agent_id"], "limit": 2}
+    first = c.get(ROOT + "/history", headers=a, params=params)
+    assert first.status_code == 200, first.text
+    data = first.json()
+    assert [v["attempt_id"] for v in data["items"]] == list(reversed(records[1:]))
+    assert all(v["acknowledged"] for v in data["items"])
+    assert data["snapshot_guaranteed"] is False
+    second = c.get(ROOT + "/history", headers=a, params=params | {"before": data["next_cursor"]}).json()
+    assert [v["attempt_id"] for v in second["items"]] == records[:1]
+    assert second["next_cursor"] is None
+    detail = c.get(ROOT + "/history/" + records[0], headers=a, params=params)
+    assert detail.status_code == 200 and detail.json()["acknowledged"]
+    assert "模拟工单摘要" not in detail.text and "system_prompt" not in detail.text
+    pair = {"agent_id": cmd["agent_id"], "left": records[0], "right": records[1]}
+    result = c.get(ROOT + "/history/compare", headers=a, params=pair)
+    assert result.status_code == 200, result.text
+    assert result.json()["comparison"]["pass_rate_delta"] == 0
+    assert result.json()["comparison"]["publish_eligible"] is False
+    assert c.get(ROOT + "/history", headers=a, params=params | {"status": "EXECUTING"}).json()["items"] == []
+    for bad in ({"limit": 0}, {"limit": 51}, {"before": "invalid"}, {"status": "unknown"}):
+        assert c.get(ROOT + "/history", headers=a, params=params | bad).status_code == 422
+    # Management alone cannot read another actor's records, even with the same Agent assignment.
+    lab[1].add(("default", "bob", cmd["agent_id"]))
+    assert c.get(ROOT + "/history/" + records[0], headers=b, params=params).status_code == 404
+    assert c.get(ROOT + "/history", headers=b, params=params).json()["items"] == []
+    assert c.get(ROOT + "/history", headers=b, params=params | {"before": records[0]}).status_code == 404
+    assert c.get(ROOT + "/history/compare", headers=b, params=pair).status_code in (403, 404)
+    # Revocation affects all history paths, but neither releases nor mutates a subject lock.
+    lab[1].remove(("default", "alice", cmd["agent_id"]))
+    for path, query in [("/history", params), ("/history/" + records[0], params), ("/history/compare", pair)]:
+        assert c.get(ROOT + path, headers=a, params=query).status_code == 403
+    assert active(c, a) is None
+
+
+def test_revoked_history_keeps_terminal_recovery_and_ack(lab, idp, monkeypatch):
+    c, a, _, cmd = setup(lab, idp, monkeypatch)
+    p = post(c, a, "/prepare", cmd)
+    done = post(c, a, f"/{p['attempt_id']}/execute", ds.receipt(p))
+    lab[1].remove(("default", "alice", cmd["agent_id"]))
+    assert c.get(ROOT + "/history", headers=a, params={"agent_id": cmd["agent_id"]}).status_code == 403
+    assert active(c, a) == done
+    post(c, a, f"/{p['attempt_id']}/acknowledge", ds.receipt(done))
+    assert active(c, a) is None
+
+
+@pytest.mark.parametrize("identity", ["missing", "service", "foreign", "delegated"])
+def test_history_requires_direct_same_scope_user(lab, idp, monkeypatch, identity):
+    c, a, _, cmd = setup(lab, idp, monkeypatch)
+    p = post(c, a, "/prepare", cmd)
+    if identity == "missing":
+        headers = {"X-User-Id": "alice", "X-Role": "platform-admin"}
+    else:
+        claims = {"sub": "alice", "tenant": "default"}
+        if identity == "service":
+            claims["client_id"] = "isolated-service"
+        elif identity == "foreign":
+            claims["tenant"] = "foreign"
+        else:
+            claims["act"] = {"sub": "gateway"}
+        headers = ds.bearer(idp.token(claims))
+    assert c.get(ROOT + "/history", headers=headers, params={"agent_id": cmd["agent_id"]}).status_code in (401, 403)
+    assert c.get(ROOT + "/history/" + p["attempt_id"], headers=headers,
+                 params={"agent_id": cmd["agent_id"]}).status_code in (401, 403, 404)
+
+
+
+def test_history_rechecks_management_before_returning(lab, idp, monkeypatch):
+    from fastapi import HTTPException
+
+    c, a, _, cmd = setup(lab, idp, monkeypatch)
+    p = post(c, a, "/prepare", cmd)
+    original = lab[2].state.isolated_dataset_authorize
+    calls = []
+    async def revoked_during_read(*args):
+        calls.append(args)
+        if len(calls) == 2:
+            raise HTTPException(403, "revoked during read")
+        await original(*args)
+    monkeypatch.setattr(lab[2].state, "isolated_dataset_authorize", revoked_during_read)
+    response = c.get(ROOT + "/history/" + p["attempt_id"], headers=a, params={"agent_id": cmd["agent_id"]})
+    assert response.status_code == 403
+    assert len(calls) == 2
+    assert active(c, a)["status"] == "PREPARED"
+
+
+
+def test_history_distinct_versions_tied_cursor_and_incomplete_comparison(lab, idp, monkeypatch):
+    c, a, _, cmd = setup(lab, idp, monkeypatch)
+    first = post(c, a, "/prepare", cmd)
+    done = post(c, a, f"/{first['attempt_id']}/execute", ds.receipt(first))
+    post(c, a, f"/{first['attempt_id']}/acknowledge", ds.receipt(done))
+    new_version = uuid.uuid4().hex
+    async def seed_version():
+        async with db.SessionLocal() as session:
+            old = await session.scalar(select(db.AgentVersion).where(
+                db.AgentVersion.agent_id == cmd["agent_id"], db.AgentVersion.version == cmd["agent_version"]))
+            session.add(db.AgentVersion(agent_id=old.agent_id, tenant_id=old.tenant_id,
+                                        version=new_version, status="published", harness="mock",
+                                        model_alias=old.model_alias, system_prompt="another synthetic version",
+                                        config=old.config, rollout_percent=100))
+            await session.commit()
+    c.portal.call(seed_version)
+    grant = next(iter(lab[2].state.isolated_evaluation_grants))
+    lab[2].state.isolated_evaluation_grants.add((*grant[:3], new_version))
+    second = post(c, a, "/prepare", cmd | {"attempt_id": str(uuid.uuid4()), "agent_version": new_version})
+    params = {"agent_id": cmd["agent_id"], "left": first["attempt_id"], "right": second["attempt_id"]}
+    incomplete = c.get(ROOT + "/history/compare", headers=a, params=params).json()
+    assert incomplete["comparison"]["reasons"] == ["INCOMPLETE_RESULT"]
+    assert incomplete["comparison"]["pass_rate_delta"] is None
+    assert active(c, a)["status"] == "PREPARED"  # GET never executes or ACKs.
+    done = post(c, a, f"/{second['attempt_id']}/execute", ds.receipt(second))
+    post(c, a, f"/{second['attempt_id']}/acknowledge", ds.receipt(done))
+    result = c.get(ROOT + "/history/compare", headers=a, params=params).json()
+    assert result["left"]["binding"]["agent_snapshot"] != result["right"]["binding"]["agent_snapshot"]
+    assert result["comparison"]["comparable"] is True
+    assert result["comparison"]["pass_rate_delta"] == 0
+    async def tie_dates():
+        async with db.SessionLocal() as session:
+            left = await session.get(db.WorkbenchAttempt, first["attempt_id"])
+            right = await session.get(db.WorkbenchAttempt, second["attempt_id"])
+            right.created_at = left.created_at
+            await session.commit()
+    c.portal.call(tie_dates)
+    query = {"agent_id": cmd["agent_id"], "limit": 1}
+    page1 = c.get(ROOT + "/history", headers=a, params=query).json()
+    page2 = c.get(ROOT + "/history", headers=a, params=query | {"before": page1["next_cursor"]}).json()
+    assert [page1["items"][0]["attempt_id"], page2["items"][0]["attempt_id"]] == sorted(
+        [first["attempt_id"], second["attempt_id"]], reverse=True)
+    assert page2["next_cursor"] is None
+    assert active(c, a) is None

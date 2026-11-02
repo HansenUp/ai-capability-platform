@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SyntheticEvaluationHistory from "./SyntheticEvaluationHistory.vue";
 import {onBeforeUnmount, ref} from "vue";
 const props=defineProps<{token:string;agent:string;datasetId:string}>();
 type Child={case_id:string;run_id:string;evidence:null|{state:string;judgement:string;reasons:string[]}};
@@ -69,5 +70,6 @@ async function action(name:"execute"|"acknowledge"){
     <button :disabled="busy||!ready||!confirmed" @click="action('acknowledge')">本人ACK评测回执</button>
    </template>
   </section>
+  <SyntheticEvaluationHistory :token="token" :agent="agent" />
  </section>
 </template>

@@ -5,11 +5,12 @@ EXECUTING untouched: reads and repeated execute requests cannot resume work.
 """
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import JSON, String, UniqueConstraint, select
+from sqlalchemy import JSON, String, UniqueConstraint, and_, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from runtime.api import isolated_datasets as datasets
@@ -131,6 +132,95 @@ async def ledger(request: Request, principal: Principal = Depends(current_princi
             return {"active": None, "blocked_elsewhere": True}
         row, batch = await owned(session, principal, row.attempt_id)
         return {"active": await view(session, row, batch), "blocked_elsewhere": False}
+
+
+async def history_authorized(request, principal, agent_id):
+    enabled(request)
+    workbench.user_scope(principal)
+    claims = await verify_jwt(principal.token, request)
+    if "act" in claims:
+        raise HTTPException(403, "direct test user required")
+    await datasets.authorize(request, principal, agent_id)
+
+
+async def history_owned(session, principal, attempt_id, agent_id):
+    row, batch = await owned(session, principal, attempt_id)
+    if (batch.binding.get("tenant") != principal.tenant_id
+            or batch.binding.get("subject") != principal.subject
+            or batch.binding.get("agent_id") != agent_id):
+        raise HTTPException(404, "evaluation history not found")
+    return row, batch
+
+
+@router.get("/history")
+async def history(
+    request: Request, agent_id: str = Query(min_length=1, max_length=64),
+    limit: int = Query(default=20, ge=1, le=50), before: UUID | None = None,
+    status: Literal["PREPARED", "EXECUTING", "COMMITTED", "REJECTED_NO_EFFECT"] | None = None,
+    principal: Principal = Depends(current_principal),
+):
+    await history_authorized(request, principal, agent_id)
+    async with db.SessionLocal() as session:
+        query = select(db.WorkbenchAttempt, Batch).join(Batch, Batch.id == db.WorkbenchAttempt.attempt_id).where(
+            db.WorkbenchAttempt.scope_id == workbench.user_scope(principal),
+            db.WorkbenchAttempt.action == ACTION,
+            Batch.binding["tenant"].as_string() == principal.tenant_id,
+            Batch.binding["subject"].as_string() == principal.subject,
+            Batch.binding["agent_id"].as_string() == agent_id,
+        )
+        if status:
+            query = query.where(db.WorkbenchAttempt.status == status)
+        if before:
+            anchor, _ = await history_owned(session, principal, before, agent_id)
+            query = query.where(or_(
+                db.WorkbenchAttempt.created_at < anchor.created_at,
+                and_(db.WorkbenchAttempt.created_at == anchor.created_at,
+                     db.WorkbenchAttempt.attempt_id < anchor.attempt_id),
+            ))
+        rows = list((await session.execute(query.order_by(
+            db.WorkbenchAttempt.created_at.desc(), db.WorkbenchAttempt.attempt_id.desc()
+        ).limit(limit + 1))).all())
+        items = [{
+            "attempt_id": row.attempt_id, "created_at": row.created_at.isoformat(),
+            "status": row.status, "acknowledged": row.acknowledged,
+            "agent_version": batch.binding["agent_version"],
+            "dataset_version": batch.binding["dataset_version"],
+        } for row, batch in rows[:limit]]
+        await history_authorized(request, principal, agent_id)
+        return {
+            "scope_id": workbench.user_scope(principal), "agent_id": agent_id, "items": items,
+            "next_cursor": items[-1]["attempt_id"] if len(rows) > limit else None,
+            "snapshot_guaranteed": False, "source": "isolated-synthetic", "publish_eligible": False,
+        }
+
+
+@router.get("/history/compare")
+async def compare_history(
+    request: Request, left: UUID, right: UUID, agent_id: str = Query(min_length=1, max_length=64),
+    principal: Principal = Depends(current_principal),
+):
+    await history_authorized(request, principal, agent_id)
+    if left == right:
+        raise HTTPException(422, "two distinct evaluations required")
+    async with db.SessionLocal() as session:
+        a, b = [await history_owned(session, principal, key, agent_id) for key in (left, right)]
+        values = [await view(session, *pair) for pair in (a, b)]
+        await history_authorized(request, principal, agent_id)
+        return {"scope_id": workbench.user_scope(principal), "agent_id": agent_id,
+                "left": values[0], "right": values[1], "comparison": rules.comparison(*values)}
+
+
+@router.get("/history/{attempt_id}")
+async def history_detail(
+    attempt_id: UUID, request: Request, agent_id: str = Query(min_length=1, max_length=64),
+    principal: Principal = Depends(current_principal),
+):
+    await history_authorized(request, principal, agent_id)
+    async with db.SessionLocal() as session:
+        pair = await history_owned(session, principal, attempt_id, agent_id)
+        result = await view(session, *pair)
+        await history_authorized(request, principal, agent_id)
+        return result
 
 
 @router.post("/prepare")

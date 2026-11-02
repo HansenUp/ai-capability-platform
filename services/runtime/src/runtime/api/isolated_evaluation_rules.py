@@ -144,3 +144,47 @@ def aggregate(selected: list[str], verdicts: list[Verdict]) -> dict:
         "passed_count": passed,
         "pass_rate": passed / len(selected) if complete else None,
     }
+
+
+def comparison(left: dict, right: dict) -> dict:
+    """Compare persisted minimal projections only; never grant release eligibility.
+
+    Agent version/snapshot may differ; all evaluation conditions must be present
+    and identical. Missing evidence is not a zero score.
+    """
+    conditions = (
+        "tenant", "subject", "agent_id", "dataset_id", "dataset_version",
+        "dataset_revision", "dataset_digest", "catalog_revision",
+        "evaluator_version", "scenario", "cases", "profile_digest",
+    )
+    reasons = []
+    bindings = [item.get("binding") or {} for item in (left, right)]
+    for key in conditions:
+        if any(key not in binding or binding[key] is None for binding in bindings):
+            reasons.append("MISSING_" + key.upper())
+        elif bindings[0][key] != bindings[1][key]:
+            reasons.append("DIFFERENT_" + key.upper())
+    rates = []
+    for item in (left, right):
+        result = (item.get("receipt") or {}).get("result") or {}
+        rate = result.get("pass_rate")
+        selected = result.get("selected_count")
+        verified = result.get("verified_count")
+        passed = result.get("passed_count")
+        valid = (
+            item.get("source") == "isolated-synthetic"
+            and item.get("publish_eligible") is False
+            and item.get("status") == "COMMITTED"
+            and type(selected) is int and selected > 0
+            and type(verified) is int and verified == selected
+            and type(passed) is int and 0 <= passed <= selected
+            and type(rate) in (int, float) and rate == passed / selected
+        )
+        rates.append(rate if valid else None)
+    if any(rate is None for rate in rates):
+        reasons.append("INCOMPLETE_RESULT")
+    return {
+        "comparable": not reasons, "reasons": reasons,
+        "pass_rate_delta": rates[1] - rates[0] if not reasons else None,
+        "source": "isolated-synthetic", "publish_eligible": False,
+    }
