@@ -25,6 +25,18 @@ test('统一体验入口：合成配置、Portal任务定位及未知结果指�
   }
   assert.match(await page.getByRole('complementary',{name:'任务异常处理'}).innerText(),/先只读核对原登记和回执，不再次执行/);
   assert.match(await region.innerText(),/普通演示不执行真实节点操作/);
+  const evaluation=page.getByRole('region',{name:'F11评测完整体验指引',exact:true});
+  assert.match(await evaluation.innerText(),/显式执行一次/);
+  assert.match(await evaluation.innerText(),/本人独立ACK/);
+  assert.match(await evaluation.innerText(),/左、右顺序/);
+  assert.match(await evaluation.innerText(),/撤权后拒绝历史浏览/);
+  assert.match(await evaluation.innerText(),/不展示提示词或输出正文/);
+  assert.equal(await evaluation.getByRole('link',{name:'Agent管理',exact:true}).getAttribute('href'),'/manage/agents');
+  const boundary=page.getByRole('region',{name:'本机交付环境边界',exact:true});
+  assert.match(await boundary.innerText(),/--f6-readonly/);
+  assert.match(await boundary.innerText(),/不会启动节点或下发操作/);
+  assert.match(await boundary.innerText(),/桌面F8继续暂缓/);
+
   await page.setViewportSize({width:375,height:812});
   await page.locator('#portal-tasks-link').focus();
   assert.equal(await page.locator('#portal-tasks-link').evaluate(e=>e===document.activeElement),true);

@@ -1,4 +1,4 @@
-import { createRequire } from "node:module";
+import { preflight } from "./demo-preflight.mjs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { mkdtemp, readFile, writeFile, access, rm, mkdir } from "node:fs/promises";
@@ -7,9 +7,17 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const requireConsole = createRequire(join(root, "apps/console-web/package.json"));
-const { createServer } = await import(requireConsole.resolve("vite"));
-const { default: vue } = await import(requireConsole.resolve("@vitejs/plugin-vue"));
+if (process.argv.includes("--help")) {
+  console.log("隔离演示：node scripts/start_local_demo.mjs [--verify-only] [--preflight-only] [单一模式：--b3-read | --ticket-readonly | --sales-readonly | --analytics-readonly | --f6-readonly]。PLAYWRIGHT_MODULE指向已有本机入口；S12_DEMO_EVIDENCE可指定证据目录。无自动安装或真实模型调用。");
+  process.exit(0);
+}
+let config;
+try {config = await preflight({root, args: process.argv.slice(2), env: process.env});}
+catch (error) {console.error(error.message); process.exit(1);}
+console.log("DEMO_PREFLIGHT_OK: 本机入口可读；不代表浏览器可启动或功能验收通过");
+if (process.argv.includes("--preflight-only")) process.exit(0);
+const { createServer } = await import(config.vite);
+const { default: vue } = await import(config.vue);
 const temporary = await mkdtemp(join(tmpdir(), "ai-platform-demo-")), metadata = join(temporary, "fixture.json");
 const b3Read = process.argv.includes("--b3-read");
 const f6Readonly = process.argv.includes("--f6-readonly");
@@ -19,19 +27,26 @@ const ticketReadonly = analyticsReadonly || salesReadonly || b3Read || process.a
 const evidence = process.env.S12_DEMO_EVIDENCE || join(root, f6Readonly ? `docs/evidence/f6/local-demo-${Date.now()}` : ticketReadonly ? "docs/evidence/s4/2026-10-27-readonly-demo" : "docs/evidence/s12/2026-10-26-local-demo");
 const verifyOnly = process.argv.includes("--verify-only");
 const safeEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: temporary, LANG: "en_US.UTF-8", PYTHONUNBUFFERED: "1" };
+let fixtureError = null;
+function checkInterrupted() {if (interrupted) throw new Error("DEMO_INTERRUPTED: 已取消启动，进入自有资源清理。");}
 let server, portal, fixture, tests, info, interrupted = false, fixtureLog = "", base;
 const stop = () => { interrupted = true; tests?.kill("SIGTERM"); };
 process.on("SIGINT", stop); process.on("SIGTERM", stop);
 try {
   await mkdir(evidence, { recursive: true });
-  fixture = spawn(join(root, ".venv/bin/python"), ["scripts/verify_s12_workbench.py", "--serve", "--browser-info", metadata, "--demo-no-migrations", ...(ticketReadonly ? ["--ticket-readonly-demo"] : []), ...(b3Read ? ["--b3-read-demo"] : []), ...(analyticsReadonly ? ["--analytics-readonly-demo"] : [])],
+  fixture = spawn(config.python, ["scripts/verify_s12_workbench.py", "--serve", "--browser-info", metadata, "--demo-no-migrations", ...(ticketReadonly ? ["--ticket-readonly-demo"] : []), ...(b3Read ? ["--b3-read-demo"] : []), ...(analyticsReadonly ? ["--analytics-readonly-demo"] : [])],
     { cwd: root, env: safeEnv, stdio: ["ignore", "pipe", "pipe"] });
+  fixture.on("error", error => {fixtureError = error.code || "SPAWN_ERROR";});
   fixture.stdout.on("data", value => { fixtureLog += value.toString(); }); fixture.stderr.on("data", value => { fixtureLog += value.toString(); });
   const deadline = Date.now() + 40000;
   while (!info) {
-    if (interrupted || fixture.exitCode !== null || Date.now() >= deadline) throw new Error(`Demo fixture not ready: ${fixtureLog}`);
+    checkInterrupted();
+    if (fixtureError) throw new Error(`DEMO_FIXTURE_START_FAILED: ${fixtureError}`);
+    if (fixture.exitCode !== null || Date.now() >= deadline) throw new Error(`Demo fixture not ready: ${fixtureLog}`);
     try { info = JSON.parse(await readFile(metadata, "utf8")); } catch { await sleep(50); }
   }
+  console.log("DEMO_PHASE: fixture-ready");
+  await sleep(0); checkInterrupted();
   for (const address of [info.runtime, info.console]) if (new URL(address).hostname !== "127.0.0.1") throw new Error("Non-loopback demo refused");
   const tokens = JSON.parse(await readFile(info.tokens, "utf8")), expiresAt = Date.now() + 28 * 60000;
   let verified = null;
@@ -52,7 +67,9 @@ try {
   }], define: { "import.meta.env.VITE_ISOLATED_DEMO": JSON.stringify("1"), "import.meta.env.VITE_LANGFUSE_HOST": JSON.stringify("http://127.0.0.1:1"), "import.meta.env.VITE_LANGFUSE_PROJECT_ID": JSON.stringify("") },
   server: { host: "127.0.0.1", port: 0, proxy: { "/v1": info.runtime,
     "/console": { target: info.console, rewrite: path => path.replace(/^\/console/, "") } } } });
+  checkInterrupted();
   await new Promise((ready, reject) => { server.httpServer.once("error", reject); server.httpServer.listen(0, "127.0.0.1", ready); });
+  checkInterrupted();
   base = `http://127.0.0.1:${server.httpServer.address().port}`;
   portal = await createServer({ configFile: false, envDir: temporary, cacheDir: join(temporary, "portal-vite-cache"), root: join(root, "apps/portal-web"), plugins: [vue(), {
     name: "isolated-portal-identity",
@@ -67,13 +84,17 @@ try {
     },
   }], define: { "import.meta.env.VITE_ISOLATED_DEMO": JSON.stringify("1") },
   server: { host: "127.0.0.1", port: 0, proxy: { "/v1": info.runtime, "/console": { target: info.console, rewrite: path => path.replace(/^\/console/, "") } } } });
+  checkInterrupted();
   await new Promise((ready, reject) => { portal.httpServer.once("error", reject); portal.httpServer.listen(0, "127.0.0.1", ready); });
   const portalUrl = `http://127.0.0.1:${portal.httpServer.address().port}/demo.html`;
   info.portal = portalUrl;
+  checkInterrupted();
+  console.log("DEMO_PHASE: browser-validation");
   tests = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-timeout=30000", ...(f6Readonly ? ["apps/console-web/tests/browser/order-metrics-demo.test.mjs", "apps/console-web/tests/browser/sales-readonly-demo.test.mjs", "apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ticketReadonly ? [analyticsReadonly ? "apps/console-web/tests/browser/order-metrics-demo.test.mjs" : salesReadonly ? "apps/console-web/tests/browser/sales-readonly-demo.test.mjs" : "apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ["apps/console-web/tests/browser/demo-alerts.test.mjs", "apps/console-web/tests/browser/a-demo-navigation.test.mjs", "apps/console-web/tests/browser/e2e.test.mjs", "apps/console-web/tests/browser/local-demo-trace.test.mjs"])],
     { cwd: root, env: { ...safeEnv, S12_BROWSER_URL: base, S12_RUNTIME_URL: info.runtime, S12_TEST_TOKEN_FILE: info.tokens,
-      S12_BROWSER_EVIDENCE: evidence, B3_READ_DEMO: b3Read ? "1" : "", F6_READONLY: f6Readonly ? "1" : "", PLAYWRIGHT_MODULE: process.env.PLAYWRIGHT_MODULE }, stdio: "inherit" });
+      S12_BROWSER_EVIDENCE: evidence, B3_READ_DEMO: b3Read ? "1" : "", F6_READONLY: f6Readonly ? "1" : "", PLAYWRIGHT_MODULE: config.playwright }, stdio: "inherit" });
   const [code] = await once(tests, "exit"); if (code !== 0) throw new Error("Demo main-chain browser validation failed");
+  checkInterrupted();
   verified = JSON.parse(await readFile(join(evidence, "result.json"), "utf8"));
   if (f6Readonly) {
     verified = { scenarios: await Promise.all(["ticket", "sales", "orders"].map(async name => JSON.parse(await readFile(join(evidence, `${name}-result.json`), "utf8")))) };
@@ -95,7 +116,7 @@ finally {
   if (tests?.exitCode === null && tests.signalCode === null) { tests.kill("SIGTERM"); await once(tests, "exit"); }
   await portal?.close();
   await server?.close();
-  if (fixture?.exitCode === null && fixture.signalCode === null) { fixture.kill("SIGINT"); await once(fixture, "exit"); }
+  if (fixture?.pid && fixture.exitCode === null && fixture.signalCode === null) { fixture.kill("SIGINT"); await once(fixture, "exit"); }
   await mkdir(evidence, { recursive: true });
   await writeFile(join(evidence, "fixture.log"), fixtureLog);
   // Every child temporary file is under this invocation's private TMPDIR.

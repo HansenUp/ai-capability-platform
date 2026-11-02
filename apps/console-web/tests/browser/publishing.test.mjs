@@ -440,6 +440,44 @@ test("F11数据集：真实隔离账本保存、重载、丢响应恢复、本�
  await history.getByRole("button",{name:"只读对照选中评测",exact:true}).click();
  await history.getByRole("region",{name:"评测版本对照结果",exact:true}).getByText("条件一致，可对照",{exact:true}).waitFor();
  assert.equal(await history.getByRole("region",{name:"历史评测明细",exact:true}).count(),2);
+ const diffTable=history.getByRole("table",{name:"逐用例判定差异",exact:true});
+ await diffTable.getByRole("rowheader",{name:"success",exact:true}).waitFor();
+ assert.match(await diffTable.innerText(),/判定与原因相同/);
+ const comparisonPanel=history.getByRole("region",{name:"评测版本对照结果",exact:true});
+ assert.match(await comparisonPanel.innerText(),/左侧：Runtime 1/);
+ assert.match(await comparisonPanel.innerText(),/右侧：Runtime 1/);
+ await page.setViewportSize({width:375,height:812});
+ const scrollArea=history.getByRole("region",{name:"逐用例差异表滚动区域",exact:true});
+ await scrollArea.focus();assert.equal(await scrollArea.evaluate(el=>el===document.activeElement),true);
+ await page.setViewportSize({width:1280,height:900});
+ // Read-only fixture changes only returned diagnostics, not persisted results or permissions.
+ await page.route("**/v1/isolated-evaluations/history/compare?**",async route=>{
+  const response=await route.fetch();const value=await response.json();
+  value.comparison={comparable:false,reasons:["DIFFERENT_DATASET_DIGEST"],pass_rate_delta:null};
+  value.right.children=[];
+  await route.fulfill({json:value});
+ });
+ await history.getByRole("button",{name:"只读对照选中评测",exact:true}).click();
+ await comparisonPanel.getByText("不可比",{exact:true}).waitFor();
+ assert.match(await comparisonPanel.innerText(),/数据集内容摘要不一致/);
+ assert.match(await diffTable.innerText(),/未知（证据缺失）/);
+ assert.doesNotMatch(await diffTable.innerText(),/通过 →/);
+ await page.unroute("**/v1/isolated-evaluations/history/compare?**");
+ await page.route("**/v1/isolated-evaluations/history?**",async route=>{
+  const url=new URL(route.request().url());const response=await route.fetch();const value=await response.json();
+  if (!url.searchParams.has("before")) {value.items=value.items.slice(0,1);value.next_cursor=value.items[0].attempt_id;}
+  await route.fulfill({json:value});
+ });
+ await readHistory();
+ await history.getByRole("button",{name:"下一页评测历史",exact:true}).click();
+ await history.getByText(/后续页 · 本页/).waitFor();
+ assert.equal(await history.getByRole("checkbox",{checked:true}).count(),0);
+ await history.getByRole("button",{name:"返回评测历史首页",exact:true}).click();
+ await history.getByText(/首页 · 本页/).waitFor();
+ assert.equal(await history.getByRole("button",{name:"返回评测历史首页",exact:true}).isDisabled(),true);
+ await page.unroute("**/v1/isolated-evaluations/history?**");
+
+
  // Errors discard previously displayed details rather than retaining stale successful results.
  await page.route("**/v1/isolated-evaluations/history?**",route=>route.fulfill({status:403,contentType:"application/json",body:'{"detail":"revoked"}'}));
  await history.getByRole("button",{name:"读取本人评测历史",exact:true}).click();
