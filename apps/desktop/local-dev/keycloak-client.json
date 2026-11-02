@@ -1,0 +1,21 @@
+{
+  "clientId": "f8-desktop",
+  "name": "F8 local desktop development",
+  "enabled": true,
+  "protocol": "openid-connect",
+  "publicClient": true,
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "serviceAccountsEnabled": false,
+  "fullScopeAllowed": false,
+  "redirectUris": [
+    "http://127.0.0.1:18765/callback"
+  ],
+  "webOrigins": [],
+  "defaultClientScopes": [
+    "ai-runtime"
+  ],
+  "attributes": {
+    "pkce.code.challenge.method": "S256"
+  }
+}

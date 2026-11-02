@@ -1,0 +1,1089 @@
+{
+  "target": "aarch64-apple-darwin",
+  "reachable_without_dev": 234,
+  "compile_entries": [
+    {
+      "name": "ai-platform-desktop-candidate",
+      "version": "0.0.0",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "41caf005d889deb435c6c42270dcbea95e3c03be4ff58f01c7aeaf99f2c6c296"
+        }
+      ],
+      "archive_sha256": null
+    },
+    {
+      "name": "anyhow",
+      "version": "1.0.104",
+      "features": [
+        "default",
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "89d1baedcff59822ed692d3a33f131c211a213bdec33c83f68b54110d9c64223"
+        }
+      ],
+      "archive_sha256": "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+    },
+    {
+      "name": "camino",
+      "version": "1.2.6",
+      "features": [
+        "serde1"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "5bc29910c9644c320a7cceed121474915f7e832f484f1bf694dec80a45182aa0"
+        }
+      ],
+      "archive_sha256": "bbbad30e4b4c14a39e3cc8aed085a12a327257c316619c93581e017bc52be591"
+    },
+    {
+      "name": "cookie",
+      "version": "0.18.2",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "75c45e6b8566ca721dd5759b6ef16e365d5cb201660eee5ec04e278f9d1eefe2"
+        }
+      ],
+      "archive_sha256": "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"
+    },
+    {
+      "name": "crc32fast",
+      "version": "1.5.3",
+      "features": [
+        "default",
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "deb6052c4a586e8875ef677fe2d9e9dcfafebfa949803455ea8eff6e7dbde436"
+        }
+      ],
+      "archive_sha256": "0ba106e844045ddc02c20768ac4b0b7cb45f2cc2ecbd833ac9f5dacb183c2055"
+    },
+    {
+      "name": "crossbeam-utils",
+      "version": "0.8.23",
+      "features": [
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "79cc5363313f77ab76e2de4779e384c672a747fbcd4b96647a79286568714807"
+        }
+      ],
+      "archive_sha256": "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
+    },
+    {
+      "name": "cssparser-macros",
+      "version": "0.7.1",
+      "features": [],
+      "targets": [
+        {
+          "name": "cssparser_macros",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "lib.rs",
+          "source_sha256": "aacf2da94ecee820621cae6ec166dcd6b949de06658de7b45648e7a078ab5481"
+        }
+      ],
+      "archive_sha256": "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
+    },
+    {
+      "name": "darling_macro",
+      "version": "0.24.1",
+      "features": [],
+      "targets": [
+        {
+          "name": "darling_macro",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "728be3bb12c9cdaaf0520bce87e489a0820e436c78fa3627e238fc1acc11dd7f"
+        }
+      ],
+      "archive_sha256": "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
+    },
+    {
+      "name": "defmt-macros",
+      "version": "1.2.0",
+      "features": [],
+      "targets": [
+        {
+          "name": "defmt_macros",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "2f8cae7fc0aa41518e8d22a8c6a07b7a688bb3cba3871ae24c33658a53fa06d6"
+        },
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "e95adebcba8785d938de75f1555c0baf2ab7a7bf527c01fb9a5f36380fc4a2aa"
+        }
+      ],
+      "archive_sha256": "840bb056bd99c495c9188198a258ab787c79f306d864db3e6e8451442d6d8366"
+    },
+    {
+      "name": "defmt",
+      "version": "1.2.0",
+      "features": [
+        "alloc"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "9477326f9231bbbbb894499e9c3b28f70f06bc37ce08527def13d7fc634db1c7"
+        }
+      ],
+      "archive_sha256": "e4a0795ac740cb54d7b3775c9c17345f6aaecf884c01733b39d6017738e0e3e1"
+    },
+    {
+      "name": "derive_more-impl",
+      "version": "2.1.1",
+      "features": [
+        "add",
+        "add_assign",
+        "default"
+      ],
+      "targets": [
+        {
+          "name": "derive_more_impl",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "895212067718a72aa9fff1c086ca67e90c8a97132b71406c95f9a390d67a41e8"
+        }
+      ],
+      "archive_sha256": "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
+    },
+    {
+      "name": "displaydoc",
+      "version": "0.2.7",
+      "features": [],
+      "targets": [
+        {
+          "name": "displaydoc",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "8663b91124a84c026b02ee5febb92018d49dc5357049a318a07503b7923529b0"
+        }
+      ],
+      "archive_sha256": "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
+    },
+    {
+      "name": "erased-serde",
+      "version": "0.4.11",
+      "features": [
+        "alloc"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "cc81259cd7861fc7c4b054656fc50bc381b5e96f22501e1c77f045ca93d41f77"
+        }
+      ],
+      "archive_sha256": "1e59b668157f32d3459d4bd634861a06ffa2503a461ca5f0916b9f0252605e66"
+    },
+    {
+      "name": "foreign-types-macros",
+      "version": "0.2.4",
+      "features": [
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "foreign_types_macros",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "7bb43075bede4947ee8f07a05e4d1b00e0daedadbde15f1b386f97514853ad1c"
+        }
+      ],
+      "archive_sha256": "ea5190182e6915eb873ddbc16e23b711b6eb1f9c00a0d0a3a91b5f6228475225"
+    },
+    {
+      "name": "generic-array",
+      "version": "0.14.7",
+      "features": [
+        "more_lengths"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "08fa30c4a2c1ad24fe5f987e721dfb20131f45ea5b5dc3e836dcf88a8e33248c"
+        }
+      ],
+      "archive_sha256": "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
+    },
+    {
+      "name": "getrandom",
+      "version": "0.3.4",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "d542c9c3bbc2f64a26c758eac8af16178aab52464bdd8bf0b9a767ba87665021"
+        }
+      ],
+      "archive_sha256": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+    },
+    {
+      "name": "getrandom",
+      "version": "0.4.3",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "662faa06d7b2a9c5bea2c17a127a90e00b9f9b31105b0360da516e47cf816e95"
+        }
+      ],
+      "archive_sha256": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+    },
+    {
+      "name": "icu_normalizer_data",
+      "version": "2.4.0",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "c2d446772e3d766a804963dbf36e51729f910920f91f4b68c0c199fe6ca0853e"
+        }
+      ],
+      "archive_sha256": "20f0088bfb7441f7a37fa0c9e20cb1e9cba1cac6b9ce8cd2a6dc44294f8e8cbc"
+    },
+    {
+      "name": "icu_properties_data",
+      "version": "2.4.0",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "c2d446772e3d766a804963dbf36e51729f910920f91f4b68c0c199fe6ca0853e"
+        }
+      ],
+      "archive_sha256": "b98f29af82d02b163fe50161388350e743bb3107cc8e8c2f7314cb505faddfcf"
+    },
+    {
+      "name": "indexmap",
+      "version": "1.9.3",
+      "features": [
+        "serde",
+        "serde-1",
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "558b4d0b9e9b3a44f7e1a2b69f7a7567ea721cd45cb54f4e458e850bf702f35c"
+        }
+      ],
+      "archive_sha256": "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
+    },
+    {
+      "name": "libc",
+      "version": "0.2.191",
+      "features": [
+        "default",
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "e70593206df4d2a3138eab463567e0ae8f91c1bea565da4ab5370ea8986840ac"
+        }
+      ],
+      "archive_sha256": "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+    },
+    {
+      "name": "muda",
+      "version": "0.20.0",
+      "features": [
+        "gtk3",
+        "serde"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "087095c740ca659aba359144353dd34a592aea3f39cb5bc8524db36b925b0448"
+        }
+      ],
+      "archive_sha256": "cca139e57da4383727f189e43e66e84fa372347027fc996f9f1a007ec0a37996"
+    },
+    {
+      "name": "num-traits",
+      "version": "0.2.19",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "d3969209fc1c9d201c66ed11820d0b328600d75b3971f8ceebeab04900bc0587"
+        }
+      ],
+      "archive_sha256": "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+    },
+    {
+      "name": "objc2-exception-helper",
+      "version": "0.1.1",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "6c338b9ad9f2d47c6c9d4e3d9d604334828da36dfda4bc4d999b99aab005ceba"
+        }
+      ],
+      "archive_sha256": "c7a1c5fbb72d7735b076bb47b578523aedc40f3c439bea6dfd595c089d79d98a"
+    },
+    {
+      "name": "objc2",
+      "version": "0.6.5",
+      "features": [
+        "alloc",
+        "default",
+        "disable-encoding-assertions",
+        "exception",
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "f13d2effabc1cfa07fa5018c78eadc645914d676c034adf78acb24b8b419ce7a"
+        }
+      ],
+      "archive_sha256": "08849bbd4767dfae9457696856ae1c84fe4e0281bbe4a7abff2d0e06fb7981f8"
+    },
+    {
+      "name": "parking_lot_core",
+      "version": "0.9.12",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "3698c936b75f8332d9b6b30a8a6838ea116c1ff0a819a025c9ea9696e4d8ce72"
+        }
+      ],
+      "archive_sha256": "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
+    },
+    {
+      "name": "phf_macros",
+      "version": "0.13.1",
+      "features": [],
+      "targets": [
+        {
+          "name": "phf_macros",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "2d889e3f9deeaf4ac3d231bd415c5443d6e69742eadf3b949f1e7e2485a32e72"
+        }
+      ],
+      "archive_sha256": "812f032b54b1e759ccd5f8b6677695d5268c588701effba24601f6932f8269ef"
+    },
+    {
+      "name": "proc-macro2",
+      "version": "1.0.107",
+      "features": [
+        "default",
+        "proc-macro",
+        "span-locations"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "baeb20b52f6b536be8657a566591a507bb2e34a45cf8baa42b135510a0c3c729"
+        }
+      ],
+      "archive_sha256": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+    },
+    {
+      "name": "quote",
+      "version": "1.0.47",
+      "features": [
+        "default",
+        "proc-macro"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "cd6808c02e476b09a520105e2c6f6d325cccb1ecd542cbbcc836a0ae6f6fb0f1"
+        }
+      ],
+      "archive_sha256": "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
+    },
+    {
+      "name": "ref-cast-impl",
+      "version": "1.0.27",
+      "features": [],
+      "targets": [
+        {
+          "name": "ref_cast_impl",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "9ea20de5ba784993a12f7f0ce98d3ea9b4c05aaa4ac4974f37bff9f8ac727cfb"
+        }
+      ],
+      "archive_sha256": "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
+    },
+    {
+      "name": "ref-cast",
+      "version": "1.0.27",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "095bc1870b75dd5c80a68bddaae03d2de9f817e134b026ebf3f63e0ff81cf5ca"
+        }
+      ],
+      "archive_sha256": "7e440fb4e4b4147295338efb76001ab9e4efc0e5839df2c47fc5ac2381d365c3"
+    },
+    {
+      "name": "schemars",
+      "version": "0.8.22",
+      "features": [
+        "default",
+        "derive",
+        "indexmap",
+        "preserve_order",
+        "schemars_derive",
+        "url",
+        "uuid1"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "5ef3c87640a839e95aa892c4dbc9557d8b6437caa697b53a598954cf471e2303"
+        }
+      ],
+      "archive_sha256": "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
+    },
+    {
+      "name": "schemars_derive",
+      "version": "0.8.22",
+      "features": [],
+      "targets": [
+        {
+          "name": "schemars_derive",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "aa0245fb6bde2ba985c25e40bea3f66366a1704b87433af53b9d4f8c6667f8a6"
+        }
+      ],
+      "archive_sha256": "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+    },
+    {
+      "name": "selectors",
+      "version": "0.38.0",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "36ba09a8d2089d0cae8e310829ecf0e94bcbaa87e775a6578c7d2f0459a5b6ca"
+        }
+      ],
+      "archive_sha256": "8adfa1c298912827b8a28b223b3b874357397ae706e6190acd9bf28cee99114d"
+    },
+    {
+      "name": "serde",
+      "version": "1.0.229",
+      "features": [
+        "alloc",
+        "default",
+        "derive",
+        "rc",
+        "serde_derive",
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "e2ea6a7a82f5404c3e28cb055883c737ee7903367a10206fbb47b75c009f0eb3"
+        }
+      ],
+      "archive_sha256": "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
+    },
+    {
+      "name": "serde_core",
+      "version": "1.0.229",
+      "features": [
+        "alloc",
+        "default",
+        "rc",
+        "result",
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "7bc6b1eec8913ff4cd8e4b9b92cd04a82a4f38beb30a0b73a64c1e6e49f07b5f"
+        }
+      ],
+      "archive_sha256": "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
+    },
+    {
+      "name": "serde_derive",
+      "version": "1.0.229",
+      "features": [
+        "default"
+      ],
+      "targets": [
+        {
+          "name": "serde_derive",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "9c8efaaaad77caa41178ca4316bff1ccbb7a864673d88639d258b7c5619a4ad4"
+        }
+      ],
+      "archive_sha256": "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+    },
+    {
+      "name": "serde_json",
+      "version": "1.0.154",
+      "features": [
+        "alloc",
+        "default",
+        "raw_value",
+        "std",
+        "unbounded_depth"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "a681e754be844c7dbef957f5d2d00b01f37c5dca160ef1055a8d8f975697a881"
+        }
+      ],
+      "archive_sha256": "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
+    },
+    {
+      "name": "serde_repr",
+      "version": "0.1.21",
+      "features": [],
+      "targets": [
+        {
+          "name": "serde_repr",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "5e687c2b53270065cf6d68a54e97bbe54c832913a44001b3a5016f89a90e3476"
+        }
+      ],
+      "archive_sha256": "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
+    },
+    {
+      "name": "serde_with_macros",
+      "version": "3.24.0",
+      "features": [],
+      "targets": [
+        {
+          "name": "serde_with_macros",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "04429ca1dbc103f75419f40d7612dce29a024d74d0a67106cc323c86873ce543"
+        }
+      ],
+      "archive_sha256": "3e17bbc68e28663bbbb90df47e058aa7eda4fb445b89fe70457bb94fbccf6e49"
+    },
+    {
+      "name": "serialize-to-javascript-impl",
+      "version": "0.1.2",
+      "features": [],
+      "targets": [
+        {
+          "name": "serialize_to_javascript_impl",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "47e5536024ad09a0becdcf904e07bf8c32a6ed878a9bba361640d72b515359ce"
+        }
+      ],
+      "archive_sha256": "772ee033c0916d670af7860b6e1ef7d658a4629a6d0b4c8c3e67f09b3765b75d"
+    },
+    {
+      "name": "swift-rs",
+      "version": "1.0.9",
+      "features": [
+        "build",
+        "default",
+        "serde",
+        "serde_json"
+      ],
+      "targets": [
+        {
+          "name": "build-script-test-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "src-rs/test-build.rs",
+          "source_sha256": "82941bdb037e5479003967346ae2f1932391770c8515f4b10cc90569a9b171a1"
+        }
+      ],
+      "archive_sha256": "cefd87076fd385308ee4aff597256c902f1fbb4d031de1558efc12f8ffefadd9"
+    },
+    {
+      "name": "tauri-macros",
+      "version": "2.7.4",
+      "features": [
+        "custom-protocol"
+      ],
+      "targets": [
+        {
+          "name": "tauri_macros",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "2df9b0baeccf32aab13ee2e32e8748ecd99716fcb90f5e256d57762fa510cc03"
+        }
+      ],
+      "archive_sha256": "0cc38db58854c10fb5f91a887ed8bf82d3239bb92b5d8db86eda09e96d9963d1"
+    },
+    {
+      "name": "tauri-runtime-wry",
+      "version": "2.12.3",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "68b2727346e58a9963803a75ac29695b500aaa7d0673e18551465502b60cbf11"
+        }
+      ],
+      "archive_sha256": "e1aa9d8b7a120f879f44fdc1053f7b7dbf416bf0bbc6a72b714dec46b782b52f"
+    },
+    {
+      "name": "tauri-runtime",
+      "version": "2.12.2",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "68b2727346e58a9963803a75ac29695b500aaa7d0673e18551465502b60cbf11"
+        }
+      ],
+      "archive_sha256": "7c55766d99cea69055904d1735b93c2049302b2e09effd462120deb5581d78e9"
+    },
+    {
+      "name": "tauri-utils",
+      "version": "2.10.2",
+      "features": [
+        "build-2",
+        "cargo_metadata",
+        "html-manipulation-2",
+        "proc-macro2",
+        "quote",
+        "resources",
+        "schema",
+        "schemars",
+        "swift-rs",
+        "walkdir"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "ef0fdc09ec8dcad507f38db5083f9695bb3d6e01f051ab1c7e57396c4f81f831"
+        }
+      ],
+      "archive_sha256": "362ab21cd4cc713f2a02b1a9b5688198b1541cfb6907c4281e9190e0f0ef4aa3"
+    },
+    {
+      "name": "tauri",
+      "version": "2.12.5",
+      "features": [
+        "custom-protocol",
+        "tauri-runtime-wry",
+        "webkit2gtk",
+        "webview2-com",
+        "wry"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "98109a67415599af635edd9c041ccdd9b92525556d012369e59cb4b4df25ca29"
+        }
+      ],
+      "archive_sha256": "5fb0244332cfb9cee7e2a568bf5da29a36ed8fdbd717f6f47a66b6b7b358c072"
+    },
+    {
+      "name": "thiserror-impl",
+      "version": "2.0.21",
+      "features": [],
+      "targets": [
+        {
+          "name": "thiserror_impl",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "c1ba27791c3c9124517c3df66da113a7b6c5e1292c6bb05847223343000647b1"
+        }
+      ],
+      "archive_sha256": "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
+    },
+    {
+      "name": "thiserror",
+      "version": "2.0.21",
+      "features": [
+        "default",
+        "std"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "ccc38283604f99237ad2333bbe395259e29fdf2ff4e04a60a95de9e4499c09a3"
+        }
+      ],
+      "archive_sha256": "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
+    },
+    {
+      "name": "time-macros",
+      "version": "0.2.32",
+      "features": [
+        "formatting",
+        "parsing",
+        "serde"
+      ],
+      "targets": [
+        {
+          "name": "time_macros",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "033880bea18338352e72850c89d5cec301a5f193f3294871d269c1e3ec0aab59"
+        }
+      ],
+      "archive_sha256": "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
+    },
+    {
+      "name": "typeid",
+      "version": "1.0.3",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "688afbcaa398ea159c3481b26d74fde6ce3a675d48364d772557c8e91100de46"
+        }
+      ],
+      "archive_sha256": "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
+    },
+    {
+      "name": "web_atoms",
+      "version": "0.2.6",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "8b50922bbb295e90a26edc3e2ab34f068fee930cefd73ae03cca210cf08f9d89"
+        }
+      ],
+      "archive_sha256": "ba8b815c1b593dc0baf78dd0f4fc8fdb2de53198fb1163738093e9a311c33fb3"
+    },
+    {
+      "name": "wry",
+      "version": "0.57.1",
+      "features": [
+        "javascriptcore-rs",
+        "linux-body",
+        "os-webview",
+        "soup3",
+        "webkit2gtk",
+        "webkit2gtk-sys"
+      ],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "689c618b57d95f2d9e4578744c8126615d93c5624d9b3747af20650e577ccb1b"
+        }
+      ],
+      "archive_sha256": "759c50ddad0ef9913bb5496cb9d509a50433a3b78cb0238d61105526589cf0e9"
+    },
+    {
+      "name": "yoke-derive",
+      "version": "0.8.4",
+      "features": [],
+      "targets": [
+        {
+          "name": "yoke_derive",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "d36389901997bce7c14baf3f4d24452311bda2c05368f592a733dade281767ad"
+        }
+      ],
+      "archive_sha256": "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
+    },
+    {
+      "name": "zerofrom-derive",
+      "version": "0.1.8",
+      "features": [],
+      "targets": [
+        {
+          "name": "zerofrom_derive",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "a8cd6a9c4f7634539660001146ee078887679655844509c0f46ea5b88c5f69f9"
+        }
+      ],
+      "archive_sha256": "f75b4683f6c7f45248d4d64056a24298c6281e0993356d7d1b4a1a962ef10d4a"
+    },
+    {
+      "name": "zerovec-derive",
+      "version": "0.11.7",
+      "features": [],
+      "targets": [
+        {
+          "name": "zerovec_derive",
+          "kind": [
+            "proc-macro"
+          ],
+          "source": "src/lib.rs",
+          "source_sha256": "b583dd33c6a6c18f9f026c2693c260a33a38449ef270573870739e00fcd54923"
+        }
+      ],
+      "archive_sha256": "c3743ddbf47738d929cd1ae2e199d40d0162979dfe31aef8ae646d2bf00bf97a"
+    },
+    {
+      "name": "zmij",
+      "version": "1.0.23",
+      "features": [],
+      "targets": [
+        {
+          "name": "build-script-build",
+          "kind": [
+            "custom-build"
+          ],
+          "source": "build.rs",
+          "source_sha256": "ad320bc635887879bdbbf1b9322da4a157ec2c5a4243bd7c2cf9b6884a3b2a41"
+        }
+      ],
+      "archive_sha256": "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+    }
+  ],
+  "status": "FROZEN_LOCAL_DEVELOPMENT_INPUTS",
+  "lock_sha256": "5dd2203b3c9d5f40c85c28c5d473312737083559eb56b3612cdfea66288586ca",
+  "tools": [
+    {
+      "path": "${HOME}/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+      "resolved": "${HOME}/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+      "sha256": "6d576d8058f8ca643e8fce55b64ee3c614ba64c9da2e536bae843e6a2e1f3951",
+      "bytes": 32182376
+    },
+    {
+      "path": "${HOME}/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc",
+      "resolved": "${HOME}/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc",
+      "sha256": "1ba7bb8e273bd64125f4048d2ecce530e0a6470e565ab1b3aecf0b82b532f7b1",
+      "bytes": 413480
+    },
+    {
+      "path": "/usr/bin/sandbox-exec",
+      "resolved": "/usr/bin/sandbox-exec",
+      "sha256": "58839ef01b4eef8aac0d2aa8f9d1c074ae45aafe3533965b030672450064acc8",
+      "bytes": 135136
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/usr/bin/clang",
+      "resolved": "/Library/Developer/CommandLineTools/usr/bin/clang",
+      "sha256": "1590ac950a3d627817d09ade5cb60b2115f17a72182a3141e010b4bcc482a0c9",
+      "bytes": 124676976
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/usr/bin/ar",
+      "resolved": "/Library/Developer/CommandLineTools/usr/bin/ar",
+      "sha256": "85d15bd3999895f659e8a483b17ea9ab44b924c8e0b3026abfe359f2de02cbd7",
+      "bytes": 73520
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/usr/bin/ld",
+      "resolved": "/Library/Developer/CommandLineTools/usr/bin/ld",
+      "sha256": "374d9f0713bce2c8a9e1e82bde51615d5433516a10d99b63107eb6ee70542e4c",
+      "bytes": 2749664
+    }
+  ],
+  "resources": {
+    "image_logical_bytes": 7516192768,
+    "workspace_host_stop_bytes": 8589934592,
+    "tree_rss_soft_stop_bytes": 4294967296,
+    "sampling_seconds": 0.1,
+    "wall_seconds": 3600,
+    "cargo_jobs": 2,
+    "network": "deny",
+    "automatic_retry": false
+  },
+  "scope": "Single isolated offline native candidate compilation only after separate build authorization; generated build scripts/macros inherit same sandbox; runtime app forbidden"
+}

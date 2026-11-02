@@ -1,0 +1,8 @@
+artifacts/
+__pycache__/
+
+# Machine-local resolution/build/verification outputs
+/g0-evidence/
+/g1-size-evidence/
+/g2-a-evidence/
+/g2-b-preflight/

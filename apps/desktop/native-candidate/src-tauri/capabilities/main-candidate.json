@@ -6,6 +6,8 @@
     "main"
   ],
   "permissions": [
-    "allow-host-command"
+    "allow-host-command",
+    "allow-desktop-command",
+    "allow-verification-report"
   ]
 }

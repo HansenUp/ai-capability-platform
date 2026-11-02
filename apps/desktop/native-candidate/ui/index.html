@@ -1,1 +1,7 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>F8 原生候选</title><h1>未验证原生候选</h1><p>仅静态壳候选；原生适配器未启用，不启动 sidecar。</p><p>尚未构建或启动，不能视为桌面验收通过。</p></html>
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>F8 本机原生验证</title><link rel="stylesheet" href="style.css">
+<main><header><p class="eyebrow">AI CAPABILITY PLATFORM / F8</p><h1>本机原生验证</h1><p id="subtitle">真实 Tauri 窗口与管道子进程 · 合成身份和内存缓存</p></header>
+<section><h2>原生宿主</h2><p>状态：<strong id="state">STOPPED</strong></p><div class="actions"><button id="start">启动合成 Sidecar</button><button id="stop">停止</button><button id="reconcile">只读核对</button><button id="close">清理并关闭窗口</button></div><p id="native-note">仅启动本应用内置合成模式，不连接业务服务。</p></section>
+<section><h2>离线只读验证</h2><label>测试身份 <select id="identity"><option>alice</option><option>bob</option></select></label><label>有效期（秒） <input id="ttl" type="number" min="1" max="300" value="30"></label><div class="actions"><button id="login">使用测试身份</button><button id="logout">注销</button><button id="network">模拟断网</button><button id="read">读取合成摘要</button></div><p id="identity-status">未认证</p><p id="connection">在线合成数据</p><output id="result" hidden></output><p id="empty">尚无缓存正文</p></section>
+<p id="error" role="alert"></p><footer id="scope-note">测试身份不授予正式业务权限。缓存仅在内存中；切换、失效、注销、关闭和重载时清空。正式 Runtime、OIDC、安装签名与自动更新尚未验收。</footer></main><script type="module" src="entry.mjs"></script></html>

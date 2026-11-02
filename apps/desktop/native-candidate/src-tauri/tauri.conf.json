@@ -7,14 +7,7 @@
     "frontendDist": "../ui"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "F8 未验证原生候选",
-        "width": 900,
-        "height": 700
-      }
-    ],
+    "windows": [],
     "security": {
       "capabilities": [
         "main-candidate"

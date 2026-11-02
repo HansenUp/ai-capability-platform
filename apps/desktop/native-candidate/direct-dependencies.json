@@ -1,6 +1,5 @@
 {
-  "status": "G0-resolved-not-downloaded",
-  "downloaded": false,
+  "status": "pinned-local-development",
   "transitive_lock_complete": true,
   "dependencies": [
     {
@@ -26,7 +25,23 @@
       "metadata": "https://docs.rs/serde/1.0.229/serde/",
       "source": "https://crates.io/api/v1/crates/serde/1.0.229/download",
       "checksum": "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
+    },
+    {
+      "name": "serde_json",
+      "version": "1.0.154",
+      "registry": "crates.io",
+      "metadata": "https://docs.rs/serde_json/1.0.154/serde_json/",
+      "source": "https://static.crates.io/crates/serde_json/serde_json-1.0.154.crate",
+      "checksum": "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
+    },
+    {
+      "name": "sha2",
+      "version": "0.10.9",
+      "registry": "crates.io",
+      "metadata": "https://docs.rs/sha2/0.10.9/sha2/",
+      "source": "https://static.crates.io/crates/sha2/sha2-0.10.9.crate",
+      "checksum": "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
     }
   ],
-  "scope": "Cargo.lock full registry resolution; no build verification"
+  "scope": "Pinned direct dependencies; public archive inventory and reviewed build inputs are in build-inputs. Local cache/build results are not source artifacts."
 }
