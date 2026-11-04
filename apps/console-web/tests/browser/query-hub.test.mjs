@@ -7,7 +7,7 @@ test('统一查询入口：能力导航、四类评估、候选与执行隔离',
  const calls=[];for(const pattern of ['**/console/**','**/v1/**'])await page.route(pattern,async r=>{calls.push(r.request().url());await r.abort();});
  try{
   await page.goto(profile.url+'/manage/queries');
-  const table=page.getByRole('table',{name:'受限查询能力表',exact:true});await table.waitFor();assert.equal(await table.locator('tbody tr').count(),3);
+  const table=page.getByRole('table',{name:'受限查询能力表',exact:true});await table.waitFor();assert.equal(await table.locator('tbody tr').count(),4);
   const input=page.getByLabel('统一查询描述',{exact:true}),button=page.getByRole('button',{name:'评估问法并生成候选',exact:true});
   const result=page.getByRole('region',{name:'统一问法评估',exact:true});
   for(const [text,status] of [['查一下商品a1的订单，最多10条','已支持（待授权候选）'],['统计今天订单数量','需补充信息'],['统计退款金额','待开发或尚未支持'],['统计所有租户订单数量','权限范围拒绝']]){

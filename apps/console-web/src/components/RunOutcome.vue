@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import OrderCompare from "./OrderCompare.vue";
 import OrderGroups from "./OrderGroups.vue";
 import OrderCounts from "./OrderCounts.vue";
 import OrderMetrics from "./OrderMetrics.vue";
@@ -28,6 +29,7 @@ const failures = computed(() => failureDetails(props.events));
     <OrderMetrics :events="events" />
     <OrderCounts :events="events" />
     <OrderGroups :events="events" />
+    <OrderCompare :events="events" />
     <section v-for="table in tables" :key="table.seq" aria-label="受限查询结果">
       <h4>受限查询结果 · {{ table.version }}</h4><p>{{ table.rows.length }} 行；{{ table.truncated ? '已截断，不代表全量' : '本次限行内未截断' }}。仅来自同 Run 工具回执，签名下载暂缓。</p>
       <table><thead><tr><th v-for="column in table.columns" :key="column">{{ column }}</th></tr></thead><tbody><tr v-for="(row, index) in table.rows" :key="index"><td v-for="(cell, j) in row" :key="j">{{ cell === null ? 'NULL' : cell }}</td></tr></tbody></table>

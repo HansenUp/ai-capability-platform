@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import {ref,watch} from "vue";
 import {assessQuery,queryCapabilities,type QueryAssessment} from "../query-assessment";
+import {proposeOrderCompare,compareCapability} from "../order-compare-query";
+const capabilities=[...queryCapabilities,compareCapability];
+function assess(text:string,version:string):QueryAssessment{
+  try{return {status:"supported",reason:"当前合成契约能够生成候选；尚未授权或执行。",missing:[],target:compareCapability.name,route:compareCapability.route,request:proposeOrderCompare(text).request};}
+  catch{return assessQuery(text,version);}
+}
 const text=ref(""),version=ref("v1"),assessment=ref<QueryAssessment|null>(null);
 watch([text,version],()=>{assessment.value=null;},{flush:"sync"});
 const labels={supported:"已支持（待授权候选）",needs_clarification:"需补充信息",not_supported:"待开发或尚未支持",scope_rejected:"权限范围拒绝"};
@@ -8,9 +14,9 @@ const labels={supported:"已支持（待授权候选）",needs_clarification:"�
 <template>
   <h2>受限查询统一入口</h2>
   <p>先核对能力和参数，再进入对应查询页。这里只生成本机候选，不调用模型或业务接口，不创建Run，不传递身份或授权。</p>
-  <table aria-label="受限查询能力表"><thead><tr><th>能力</th><th>当前范围</th><th>入口</th></tr></thead><tbody><tr v-for="c in queryCapabilities" :key="c.id"><td>{{c.name}}</td><td>{{c.scope}}</td><td><router-link :to="c.route">{{c.name}}入口</router-link> <button @click="text=c.example">填入{{c.name}}示例</button></td></tr></tbody></table>
+  <table aria-label="受限查询能力表"><thead><tr><th>能力</th><th>当前范围</th><th>入口</th></tr></thead><tbody><tr v-for="c in capabilities" :key="c.id"><td>{{c.name}}</td><td>{{c.scope}}</td><td><router-link :to="c.route">{{c.name}}入口</router-link> <button @click="text=c.example">填入{{c.name}}示例</button></td></tr></tbody></table>
   <p>商品字段明细与独立经营统计使用不同视图和工具。只有专用合成环境可执行经营统计；页面可见不代表有read_data许可。</p>
-  <form @submit.prevent="assessment=assessQuery(text,version)">
+  <form @submit.prevent="assessment=assess(text,version)">
     <label>统一查询描述<textarea v-model="text" maxlength="512" /></label>
     <label>商品视图版本<input v-model="version" maxlength="64" /></label>
     <button>评估问法并生成候选</button>

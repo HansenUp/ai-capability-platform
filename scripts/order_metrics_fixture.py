@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
 
 
-def install(provider, temporary, *, group_demo=False, source_over_limit=False, daily_demo=False):
+def install(provider, temporary, *, group_demo=False, source_over_limit=False, daily_demo=False, compare_demo=False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/data-hub/src"))
     from capability_gateway import act, auth, config, connectors, main, policy, state
     from capability_gateway.registry import Capability
@@ -34,6 +34,8 @@ def install(provider, temporary, *, group_demo=False, source_over_limit=False, d
     path = temporary / "f63-synthetic.sqlite"
     if path.exists():
         raise RuntimeError("fresh F6.3 database required")
+    from data_hub.order_compare import arguments as compare_arguments
+    from data_hub.order_compare import collect_compare
     from data_hub.order_count import arguments as count_arguments
     from data_hub.order_count import collect_counts
     from data_hub.order_groups import arguments as group_arguments
@@ -148,6 +150,8 @@ def install(provider, temporary, *, group_demo=False, source_over_limit=False, d
         async def by_name(self, name, tenant):
             if tenant != cap.tenant:
                 return None
+            if compare_demo and name == "analytics.order_compare":
+                return cap.model_copy(update={"id": "cap.analytics.order_compare", "name": name})
             if name == "analytics.order_groups":
                 return cap.model_copy(update={"id": "cap.analytics.order_groups", "name": "analytics.order_groups"})
             if name == "analytics.order_count":
@@ -210,6 +214,22 @@ def install(provider, temporary, *, group_demo=False, source_over_limit=False, d
             "additionalProperties": False,
         },
     )
+
+    if compare_demo:
+        keys = ["baseline_since", "baseline_until", "current_since", "current_until", "status"]
+        LOCAL_TOOLS["analytics.order_compare"] = ToolSpec(
+            name="analytics.order_compare",
+            description="两个等长不重叠创建窗口的订单数量对比",
+            capability_id="cap.analytics.order_compare",
+            data_class="confidential",
+            input_schema={
+                "type": "object",
+                "properties": {k: {"type": "string"} for k in keys}
+                | {"status": {"type": "string", "enum": ["all", "pending", "completed", "cancelled"]}},
+                "required": keys,
+                "additionalProperties": False,
+            },
+        )
 
     async def invoke_policy(*args, **kwargs):
         return policy.Decision("allow")  # Synthetic capability gate; read_data below is independent and exact.
@@ -286,7 +306,10 @@ def install(provider, temporary, *, group_demo=False, source_over_limit=False, d
             arguments = json.loads(request.content)
             count_only = tool_name == "analytics.order_count"
             grouped_query = tool_name == "analytics.order_groups"
-            (group_arguments if grouped_query else count_arguments if count_only else window)(arguments)
+            comparison = compare_demo and tool_name == "analytics.order_compare"
+            (compare_arguments if comparison else group_arguments if grouped_query else count_arguments if count_only else window)(
+                arguments
+            )
 
             async def binding_provider(user, query):
                 return authority["binding"]
@@ -306,7 +329,7 @@ def install(provider, temporary, *, group_demo=False, source_over_limit=False, d
                     dict(view_id="synthetic_orders", version="v1", columns=list(FIELDS), filters=[], limit=100)
                 )
 
-            collector = collect_groups if grouped_query else collect_counts if count_only else collect
+            collector = collect_compare if comparison else collect_groups if grouped_query else collect_counts if count_only else collect
             output = await collector(reader, arguments, lambda: authority["revision"])
             output.update(policy_version="f63-policy-v1", data_class="confidential")
             print("F63_VERIFIED " + json.dumps({"run_id": run_id, "call_id": call_id, "verified": True}), flush=True)
@@ -319,7 +342,10 @@ def install(provider, temporary, *, group_demo=False, source_over_limit=False, d
     previous = toolbroker.execute_tool
 
     async def execute(tool, tool_input, dry_run=False, rc=None, call_id=None, idempotency_key=None):
-        if tool.name not in {"analytics.orders", "analytics.order_count", "analytics.order_groups"}:
+        allowed_tools = {"analytics.orders", "analytics.order_count", "analytics.order_groups"}
+        if compare_demo:
+            allowed_tools.add("analytics.order_compare")
+        if tool.name not in allowed_tools:
             return await previous(tool, tool_input, dry_run, rc, call_id, idempotency_key)
         if dry_run or rc is None or not rc.credential or not call_id:
             raise toolbroker.GatewayToolError("isolated query denied")

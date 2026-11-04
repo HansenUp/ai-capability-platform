@@ -28,7 +28,10 @@ def main() -> None:
     parser.add_argument("--order-groups-demo", action="store_true")
     parser.add_argument("--order-source-over-limit-demo", action="store_true")
     parser.add_argument("--order-daily-demo", action="store_true")
+    parser.add_argument("--order-compare-demo", action="store_true")
     args = parser.parse_args()
+    if args.order_compare_demo and not args.order_groups_demo:
+        parser.error("comparison requires isolated grouping profile")
     if args.order_daily_demo and not args.order_groups_demo:
         parser.error("daily source requires isolated grouping profile")
     if args.order_source_over_limit_demo and not args.order_groups_demo:
@@ -386,6 +389,7 @@ def main() -> None:
             group_demo=args.order_groups_demo,
             source_over_limit=args.order_source_over_limit_demo,
             daily_demo=args.order_daily_demo,
+            compare_demo=args.order_compare_demo,
         )
     selected_port = port()
     allowed_ports.add(selected_port)
@@ -618,6 +622,22 @@ def main() -> None:
                     == 201
                 )
                 assert seed.post("/admin/agents/f10-order-groups/versions/1/publish", json={"eval_passed": True}).status_code == 200
+                if args.order_compare_demo:
+                    assert (
+                        seed.post(
+                            "/admin/agents",
+                            json={
+                                "agent_id": "f10-order-compare",
+                                "version": "1",
+                                "harness": "mock",
+                                "model_alias": "synthetic-analytics",
+                                "config": {"tools": ["analytics.order_compare"]},
+                            },
+                        ).status_code
+                        == 201
+                    )
+                    assert seed.post("/admin/agents/f10-order-compare/versions/1/publish", json={"eval_passed": True}).status_code == 200
+
         if args.ticket_readonly_demo:
             args.browser_info.write_text(json.dumps({"runtime": base, "console": console_base, "tokens": str(token_file)}))
             args.browser_info.chmod(0o600)
