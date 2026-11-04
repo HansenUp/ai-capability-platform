@@ -24,6 +24,7 @@ function build(natural = false) {
     <p>创建时间使用[起点,终点)，最多31天；不猜测“今天”或业务时区。按订单ID去重，订单ID冲突、无效创建时间/状态或来源超过100行时数量未知，不从截断样本推算总量。</p>
     <p>只交付数量与状态分布，不交付原始ID、时间明细、金额或敏感字段。合成测试仅Alice获精确read_data；Bob、管理员、跨租户、服务身份不能获得隐式放行。真实身份、正式业务数据和模型未接入。</p>
   </section>
+  <p><a href="/manage/order-groups">订单金额与受限分组查询（独立工具）</a></p>
   <form @submit.prevent="build()">
     <label>创建起点（含时区）<input v-model="form.since" /></label>
     <label>创建终点（不含，含时区）<input v-model="form.until" /></label>

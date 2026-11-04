@@ -13,6 +13,7 @@ export const router = createRouter({
     { path: "/manage/skills", component: () => import("./views/Skills.vue") }, // Skill 审核：扫描 / 评测结果、审批、吊销（S9）
     { path: "/manage/directory", component: () => import("./views/Directory.vue") },
     { path: "/manage/runs", component: () => import("./views/Runs.vue") },
+    { path: "/manage/order-groups", component: () => import("./views/OrderGroups.vue") },
     { path: "/manage/order-counts", component: () => import("./views/OrderCounts.vue") },
     { path: "/manage/data-views", component: () => import("./views/DataViews.vue") },
     { path: "/manage/alerts", component: () => import("./views/Alerts.vue") },

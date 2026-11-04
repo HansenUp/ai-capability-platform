@@ -25,7 +25,10 @@ def main() -> None:
     parser.add_argument("--ticket-readonly-demo", action="store_true")
     parser.add_argument("--b3-read-demo", action="store_true")
     parser.add_argument("--analytics-readonly-demo", action="store_true")
+    parser.add_argument("--order-groups-demo", action="store_true")
     args = parser.parse_args()
+    if args.order_groups_demo and not args.analytics_readonly_demo:
+        parser.error("order groups requires isolated analytics demo")
     if args.analytics_readonly_demo and not args.ticket_readonly_demo:
         parser.error("analytics requires isolated readonly demo")
     if args.b3_read_demo and not args.ticket_readonly_demo:
@@ -371,7 +374,7 @@ def main() -> None:
     if args.analytics_readonly_demo:
         import order_metrics_fixture
 
-        order_metrics_fixture.install(provider, temporary)
+        order_metrics_fixture.install(provider, temporary, group_demo=args.order_groups_demo)
     selected_port = port()
     allowed_ports.add(selected_port)
     if args.demo_no_migrations:
@@ -589,6 +592,20 @@ def main() -> None:
                     == 201
                 )
                 assert seed.post("/admin/agents/f10-order-count/versions/1/publish", json={"eval_passed": True}).status_code == 200
+                assert (
+                    seed.post(
+                        "/admin/agents",
+                        json={
+                            "agent_id": "f10-order-groups",
+                            "version": "1",
+                            "harness": "mock",
+                            "model_alias": "synthetic-analytics",
+                            "config": {"tools": ["analytics.order_groups"]},
+                        },
+                    ).status_code
+                    == 201
+                )
+                assert seed.post("/admin/agents/f10-order-groups/versions/1/publish", json={"eval_passed": True}).status_code == 200
         if args.ticket_readonly_demo:
             args.browser_info.write_text(json.dumps({"runtime": base, "console": console_base, "tokens": str(token_file)}))
             args.browser_info.chmod(0o600)

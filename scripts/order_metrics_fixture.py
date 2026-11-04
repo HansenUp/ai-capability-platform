@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
 
 
-def install(provider, temporary):
+def install(provider, temporary, *, group_demo=False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/data-hub/src"))
     from capability_gateway import act, auth, config, connectors, main, policy, state
     from capability_gateway.registry import Capability
@@ -36,6 +36,8 @@ def install(provider, temporary):
         raise RuntimeError("fresh F6.3 database required")
     from data_hub.order_count import arguments as count_arguments
     from data_hub.order_count import collect_counts
+    from data_hub.order_groups import arguments as group_arguments
+    from data_hub.order_groups import collect_groups
     from data_hub.order_metrics import FIELDS, collect, window
 
     view_sql = canonical_view_sql("report", "synthetic", "tenant", FIELDS)
@@ -54,6 +56,14 @@ def install(provider, temporary):
                 ("foreign", "NEVER-MODEL", "2026-10-01T00:00:00Z", "completed", 999999, "CNY", "invalid"),
             ],
         )
+        if group_demo:
+            connection.executemany(
+                "INSERT INTO synthetic VALUES (?,?,?,?,?,?,?)",
+                [
+                    ("default", "ZERO", "2026-10-05T00:00:00Z", "completed", 0, "CNY", "2026-10-05T00:00:00Z"),
+                    ("default", "BAD-CURRENCY", "2026-10-06T00:00:00Z", "completed", 42, "EUR", "2026-10-06T00:00:00Z"),
+                ],
+            )
         connection.execute(view_sql)
         source_sql = connection.execute("SELECT sql FROM sqlite_master WHERE name='synthetic'").fetchone()[0]
     rule = ViewRule("default", "synthetic_orders", "v1", "report", "tenant", FIELDS, frozenset(), frozenset({"alice"}), frozenset())
@@ -120,6 +130,8 @@ def install(provider, temporary):
         async def by_name(self, name, tenant):
             if tenant != cap.tenant:
                 return None
+            if name == "analytics.order_groups":
+                return cap.model_copy(update={"id": "cap.analytics.order_groups", "name": "analytics.order_groups"})
             if name == "analytics.order_count":
                 return cap.model_copy(update={"id": "cap.analytics.order_count", "name": "analytics.order_count"})
             return cap if name == cap.name else None
@@ -157,6 +169,25 @@ def install(provider, temporary):
                 "status": {"type": "string", "enum": ["all", "pending", "completed", "cancelled"]},
             },
             "required": ["since", "until", "status"],
+            "additionalProperties": False,
+        },
+    )
+
+    LOCAL_TOOLS["analytics.order_groups"] = ToolSpec(
+        name="analytics.order_groups",
+        description="合成订单受限金额与分组",
+        capability_id="cap.analytics.order_groups",
+        data_class="confidential",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "since": {"type": "string"},
+                "until": {"type": "string"},
+                "status": {"type": "string", "enum": ["all", "pending", "completed", "cancelled"]},
+                "metric": {"type": "string", "enum": ["order_count", "completed_amount"]},
+                "group_by": {"type": "string", "enum": ["status", "currency", "status_currency"]},
+            },
+            "required": ["since", "until", "status", "metric", "group_by"],
             "additionalProperties": False,
         },
     )
@@ -235,7 +266,8 @@ def install(provider, temporary):
         try:
             arguments = json.loads(request.content)
             count_only = tool_name == "analytics.order_count"
-            (count_arguments if count_only else window)(arguments)
+            grouped_query = tool_name == "analytics.order_groups"
+            (group_arguments if grouped_query else count_arguments if count_only else window)(arguments)
 
             async def binding_provider(user, query):
                 return authority["binding"]
@@ -255,7 +287,8 @@ def install(provider, temporary):
                     dict(view_id="synthetic_orders", version="v1", columns=list(FIELDS), filters=[], limit=100)
                 )
 
-            output = await (collect_counts if count_only else collect)(reader, arguments, lambda: authority["revision"])
+            collector = collect_groups if grouped_query else collect_counts if count_only else collect
+            output = await collector(reader, arguments, lambda: authority["revision"])
             output.update(policy_version="f63-policy-v1", data_class="confidential")
             print("F63_VERIFIED " + json.dumps({"run_id": run_id, "call_id": call_id, "verified": True}), flush=True)
             return httpx.Response(200, json=output)
@@ -267,7 +300,7 @@ def install(provider, temporary):
     previous = toolbroker.execute_tool
 
     async def execute(tool, tool_input, dry_run=False, rc=None, call_id=None, idempotency_key=None):
-        if tool.name not in {"analytics.orders", "analytics.order_count"}:
+        if tool.name not in {"analytics.orders", "analytics.order_count", "analytics.order_groups"}:
             return await previous(tool, tool_input, dry_run, rc, call_id, idempotency_key)
         if dry_run or rc is None or not rc.credential or not call_id:
             raise toolbroker.GatewayToolError("isolated query denied")
