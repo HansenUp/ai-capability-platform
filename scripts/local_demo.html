@@ -30,6 +30,7 @@
 <p>使用普通隔离演示的已分配数据集管理员身份，在<a href="/manage/agents">Agent管理</a>选择已冻结数据集；工单测试Agent为<code>f11-dataset-demo</code>，Runtime明确版本为<code>1</code>。这与普通工作台Alice／Bob身份不同，不能混用权限。</p>
 <ol><li>只读恢复评测账本，确认没有其他未决写；登记本次合成评测。</li><li>核对登记后，显式执行一次；丢响应先只读恢复，不再次执行。</li><li>核对终结回执和用例结果，由本人独立ACK。ACK不代表评测通过，也不授予发布资格。</li><li>读取本人评测历史，按状态筛选、翻页或返回首页；ACK后仍可查看明细。</li><li>有两条记录时，按左、右顺序选择并只读对照。查看同一case的判定、原因与变化；条件不一致或证据不足时保留不可比／未知。</li></ol>
 <p>历史每次重查Agent管理权限；撤权后拒绝历史浏览，但保留原未决恢复与本人ACK。页面不展示提示词或输出正文。冻结数据集本身不执行评测；合成结果仅作本机诊断，不自动发布、不代表真实模型质量。</p></section>
+<section aria-label="钉钉单聊体验"><h2>钉钉单聊隔离入口</h2><p><a href="/im-inbox">打开合成单聊接收</a>：加载测试身份→显式应用→填写唯一事件ID→模拟接收一次→本人只读核对→进入工作台重新认证、输入内容并登记任务。重载后仅核对原事件，不自动重发；接收不等于Run执行，没有真实消息发送。</p></section>
 <section aria-label="启动与失败处理"><h2>启动前检与失败处理</h2>
 <ol><li>在项目根目录使用已有依赖，先运行<code>node scripts/start_local_demo.mjs --preflight-only</code>；PLAYWRIGHT_MODULE如有需要指向已有本机入口，不自动下载。</li>
 <li>前检仅确认入口可读，不代表浏览器可启动。运行<code>node scripts/start_local_demo.mjs</code>，等待主链路验证通过及终端<code>DEMO_READY</code>，再使用其Console与Portal新地址。只做验证可使用<code>--verify-only</code>，结束后地址不可用。</li>

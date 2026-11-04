@@ -120,6 +120,9 @@ def main() -> None:
                     from runtime.api import isolated_observe
 
                     await connection.run_sync(isolated_observe.Metadata.metadata.create_all)
+                    from runtime.api import isolated_im
+
+                    await connection.run_sync(isolated_im.Metadata.metadata.create_all)
             if module is db and args.browser_info:
                 import hashlib
                 from datetime import UTC, datetime
@@ -412,11 +415,27 @@ def main() -> None:
         app.state.isolated_observe = isolated_observe.ENABLED
         app.state.isolated_observe_bindings = {(auth_settings.jwt_issuer, "observe-test", "reporter"): ("default", "s12-workbench")}
         app.include_router(isolated_observe.router)
+        import secrets
+
+        from runtime.api import isolated_im
+
+        app.state.isolated_im = isolated_im.ENABLED
+        app.state.isolated_im_sources = {(auth_settings.jwt_issuer, "im-test", "im-source"): ("demo-app", "demo-org", "default")}
+        app.state.isolated_im_bindings = {
+            ("dingtalk", "demo-app", "demo-org", name): ("default", f"human:{name}", 1) for name in ("alice", "bob")
+        }
+        app.state.isolated_im_digest_key = secrets.token_bytes(32)
+        app.include_router(isolated_im.router)
 
     tokens = {
         name: provider.token({"sub": name, "exp": int(time.time()) + 1800})
         for name in ["alice", "bob", "pagination", "dataset_admin", "dataset_unassigned"]
     }
+    tokens["im_source"] = provider.token({"sub": "im-source", "client_id": "im-test", "exp": int(time.time()) + 1800})
+    # Browser expiry acceptance must precede the demo context's 28-minute reset.
+    # These remain the same signed fixture subjects and permissions.
+    tokens["im_source_short_lived"] = provider.token({"sub": "im-source", "client_id": "im-test", "exp": int(time.time()) + 120})
+    tokens["alice_short_lived"] = provider.token({"sub": "alice", "exp": int(time.time()) + 120})
     for name, roles in [
         ("policy_maintainer", ["data-policy-maintainer"]),
         ("policy_reviewer_a", ["data-policy-reviewer"]),
@@ -540,8 +559,19 @@ def main() -> None:
 
                 f11_evaluation_fixture.install(app)
                 with httpx.Client(base_url=base, headers={"Authorization": f"Bearer {admin}"}, trust_env=False) as seed:
-                    assert seed.post("/admin/agents", json={"agent_id": "f11-dataset-demo", "version": "1",
-                        "harness": "mock", "model_alias": "default-chat", "config": {"tools": ["ticket.get"]}}).status_code == 201
+                    assert (
+                        seed.post(
+                            "/admin/agents",
+                            json={
+                                "agent_id": "f11-dataset-demo",
+                                "version": "1",
+                                "harness": "mock",
+                                "model_alias": "default-chat",
+                                "config": {"tools": ["ticket.get"]},
+                            },
+                        ).status_code
+                        == 201
+                    )
                     assert seed.post("/admin/agents/f11-dataset-demo/versions/1/publish", json={"eval_passed": True}).status_code == 200
         if args.ticket_readonly_demo:
             args.browser_info.write_text(json.dumps({"runtime": base, "console": console_base, "tokens": str(token_file)}))
@@ -829,6 +859,7 @@ def main() -> None:
                             "runtime": base,
                             "console": console_base,
                             "tokens": str(token_file),
+                            "jwt_leeway_s": auth.settings.jwt_leeway_s,
                             "credential_runs": credential_runs,
                             "feedback": feedback_info,
                         }

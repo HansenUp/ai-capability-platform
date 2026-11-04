@@ -177,10 +177,16 @@ Precedence: database config > environment variables > code defaults; secrets com
 
 ```bash
 make test                        # all Python tests (including snapshot replay)
+make typecheck                   # shared strict type gate for local development and CI
+make verify-web-unit             # Console / SDK permission, receipt, and identity lifecycle logic
+make verify-demo-unit            # preflight and owned-process cleanup, without a browser
+make verify-local-tools          # disposable SQLite recovery and offline bundle input guards
 make lint                        # Ruff + mypy
 pnpm -r build                    # build frontend packages
 make security                    # Bandit, dependency audit, egress audit, security tests
 ```
+
+`verify-local-tools` uses fresh temporary databases and public fixtures to check checkpoint recovery, unresolved locks, events, and results. It accepts no existing business database and does not prove MySQL / Redis recovery or production backup readiness. Bundle tests cover input and path guards; they do not qualify a standalone installer.
 
 ---
 

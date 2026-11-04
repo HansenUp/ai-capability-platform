@@ -17,6 +17,7 @@ export const router = createRouter({
     { path: "/manage/alerts", component: () => import("./views/Alerts.vue") },
     { path: "/manage/operations", component: () => import("./views/Operations.vue") },
     { path: "/manage/owner-operations", component: () => import("./views/OwnerOperations.vue") },
+    { path: "/im-inbox", component: () => import("./views/DingTalkInbox.vue") },
     { path: "/observe-inbox", component: () => import("./views/ObservationInbox.vue") },
     { path: "/mcp-host", component: () => import("./views/A2AHost.vue"), props: { mcp: true } },
     { path: "/a2a-host", component: () => import("./views/A2AHost.vue") },

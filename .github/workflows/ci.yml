@@ -13,6 +13,8 @@ jobs:
         with: { workspaces: "services/policy/cedar-engine -> target" }
       - run: make setup CLAUDE_SDK_EXTRAS=dev,sdk GATEWAY_EXTRAS=dev,mysql,s3   # 一次性安装全部本地包；test_probe_gate 要求 claude-sdk 探针工厂可导入（需 SDK）
       - run: .venv/bin/ruff check .
+      - run: make typecheck                 # 与本机共用严格类型门禁，防止隔离适配器积累未检查代码
+      - run: make verify-local-tools        # 临时 SQLite 恢复及离线打包输入边界，不接真实资源
       - run: make openapi-check             # docs/api 下的 OpenAPI 必须与代码一致
       - run: make cedar-build CEDAR_CARGO=cargo
       - run: cargo test --release --locked --manifest-path services/policy/cedar-engine/Cargo.toml
@@ -67,6 +69,8 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
+      - run: make verify-demo-unit          # 无需真实服务，覆盖启动前检和故障清理
+      - run: make verify-web-unit           # Console/SDK 权限、回执与身份生命周期逻辑
   images:                                 # 镜像：5 个服务逐个构建（不推送）并用 Trivy 扫描 CRITICAL / HIGH 漏洞
     runs-on: ubuntu-latest
     strategy:

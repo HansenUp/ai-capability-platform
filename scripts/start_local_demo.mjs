@@ -1,4 +1,5 @@
 import { preflight } from "./demo-preflight.mjs";
+import { cleanupDemo } from "./demo-cleanup.mjs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { mkdtemp, readFile, writeFile, access, rm, mkdir } from "node:fs/promises";
@@ -61,7 +62,7 @@ try {
         response.setHeader("Cache-Control", "no-store"); response.setHeader("Referrer-Policy", "no-referrer");
         response.setHeader("Content-Type", path === "/demo" ? "text/html; charset=utf-8" : "application/json");
         response.end(path === "/demo" ? await readFile(join(root, ticketReadonly ? "scripts/local_demo_ticket_readonly.html" : "scripts/local_demo.html"), "utf8")
-          : JSON.stringify({ tokens: { alice: tokens.alice, bob: tokens.bob }, dataset_tokens: ticketReadonly ? undefined : { dataset_admin: tokens.dataset_admin, dataset_unassigned: tokens.dataset_unassigned }, alert_tokens: { alice: tokens.alert_alice, bob: tokens.alert_bob }, policy_tokens: { policy_maintainer: tokens.policy_maintainer, policy_reviewer_a: tokens.policy_reviewer_a, policy_reviewer_b: tokens.policy_reviewer_b }, view_tokens: { view_maintainer: tokens.view_maintainer, view_reviewer_a: tokens.view_reviewer_a, view_reviewer_b: tokens.view_reviewer_b }, expires_at: new Date(expiresAt).toISOString(), verified, portal: info.portal, b3_read: b3Read, f6: f6Readonly, scenarios: ticketReadonly ? ["ticket", "sales", ...(analyticsReadonly ? ["orders"] : [])] : [] }));
+          : JSON.stringify({ tokens: { alice: tokens.alice, bob: tokens.bob }, im_source: ticketReadonly ? undefined : tokens.im_source, dataset_tokens: ticketReadonly ? undefined : { dataset_admin: tokens.dataset_admin, dataset_unassigned: tokens.dataset_unassigned }, alert_tokens: { alice: tokens.alert_alice, bob: tokens.alert_bob }, policy_tokens: { policy_maintainer: tokens.policy_maintainer, policy_reviewer_a: tokens.policy_reviewer_a, policy_reviewer_b: tokens.policy_reviewer_b }, view_tokens: { view_maintainer: tokens.view_maintainer, view_reviewer_a: tokens.view_reviewer_a, view_reviewer_b: tokens.view_reviewer_b }, expires_at: new Date(expiresAt).toISOString(), verified, portal: info.portal, b3_read: b3Read, f6: f6Readonly, scenarios: ticketReadonly ? ["ticket", "sales", ...(analyticsReadonly ? ["orders"] : [])] : [] }));
       });
     },
   }], define: { "import.meta.env.VITE_ISOLATED_DEMO": JSON.stringify("1"), "import.meta.env.VITE_LANGFUSE_HOST": JSON.stringify("http://127.0.0.1:1"), "import.meta.env.VITE_LANGFUSE_PROJECT_ID": JSON.stringify("") },
@@ -90,7 +91,7 @@ try {
   info.portal = portalUrl;
   checkInterrupted();
   console.log("DEMO_PHASE: browser-validation");
-  tests = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-timeout=30000", ...(f6Readonly ? ["apps/console-web/tests/browser/order-metrics-demo.test.mjs", "apps/console-web/tests/browser/sales-readonly-demo.test.mjs", "apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ticketReadonly ? [analyticsReadonly ? "apps/console-web/tests/browser/order-metrics-demo.test.mjs" : salesReadonly ? "apps/console-web/tests/browser/sales-readonly-demo.test.mjs" : "apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ["apps/console-web/tests/browser/demo-alerts.test.mjs", "apps/console-web/tests/browser/a-demo-navigation.test.mjs", "apps/console-web/tests/browser/e2e.test.mjs", "apps/console-web/tests/browser/local-demo-trace.test.mjs"])],
+  tests = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-timeout=30000", ...(f6Readonly ? ["apps/console-web/tests/browser/order-metrics-demo.test.mjs", "apps/console-web/tests/browser/sales-readonly-demo.test.mjs", "apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ticketReadonly ? [analyticsReadonly ? "apps/console-web/tests/browser/order-metrics-demo.test.mjs" : salesReadonly ? "apps/console-web/tests/browser/sales-readonly-demo.test.mjs" : "apps/console-web/tests/browser/ticket-readonly-demo.test.mjs"] : ["apps/console-web/tests/browser/dingtalk-inbox.test.mjs", "apps/console-web/tests/browser/demo-alerts.test.mjs", "apps/console-web/tests/browser/a-demo-navigation.test.mjs", "apps/console-web/tests/browser/e2e.test.mjs", "apps/console-web/tests/browser/local-demo-trace.test.mjs"])],
     { cwd: root, env: { ...safeEnv, S12_BROWSER_URL: base, S12_RUNTIME_URL: info.runtime, S12_TEST_TOKEN_FILE: info.tokens,
       S12_BROWSER_EVIDENCE: evidence, B3_READ_DEMO: b3Read ? "1" : "", F6_READONLY: f6Readonly ? "1" : "", PLAYWRIGHT_MODULE: config.playwright }, stdio: "inherit" });
   const [code] = await once(tests, "exit"); if (code !== 0) throw new Error("Demo main-chain browser validation failed");
@@ -113,19 +114,22 @@ try {
   while (!verifyOnly && !interrupted && Date.now() < expiresAt && fixture.exitCode === null) await sleep(500);
 } catch (error) { console.error(error.message); process.exitCode = 1; }
 finally {
-  if (tests?.exitCode === null && tests.signalCode === null) { tests.kill("SIGTERM"); await once(tests, "exit"); }
-  await portal?.close();
-  await server?.close();
-  if (fixture?.pid && fixture.exitCode === null && fixture.signalCode === null) { fixture.kill("SIGINT"); await once(fixture, "exit"); }
-  await mkdir(evidence, { recursive: true });
-  await writeFile(join(evidence, "fixture.log"), fixtureLog);
-  // Every child temporary file is under this invocation's private TMPDIR.
-  // Remove it only after the owned processes have exited.
-  await rm(temporary, { recursive: true, force: false });
-  if (info) {
+  const cleanup = await cleanupDemo({ tests, portal, server, fixture,
+    writeEvidence: async () => {
+      await mkdir(evidence, { recursive: true });
+      await writeFile(join(evidence, "fixture.log"), fixtureLog);
+    },
+    removeTemporary: () => rm(temporary, { recursive: true, force: false }),
+  });
+  for (const error of cleanup.errors) {
+    console.error("DEMO_CLEANUP_FAILED:", error.message, error.cause?.message || "");
+    process.exitCode = 1;
+  }
+  if (info && cleanup.removed) {
     try { await access(info.tokens); console.error("Demo test token file remains"); process.exitCode = 1; }
     catch { console.log("CLEANUP: demo stopped; ephemeral test token file removed; original databases untouched"); }
   }
-  console.log("CLEANUP: owned demo temporary root removed");
+  if (cleanup.removed) console.log("CLEANUP: owned demo temporary root removed");
+  else console.error("DEMO_CLEANUP_UNCONFIRMED: owned temporary root retained:", temporary);
   process.off("SIGINT", stop); process.off("SIGTERM", stop);
 }

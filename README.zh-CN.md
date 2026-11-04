@@ -177,10 +177,16 @@ make compose-down
 
 ```bash
 make test                        # 全部 Python 测试（含快照回放）
+make typecheck                   # 本机和 CI 共用的严格类型门禁
+make verify-web-unit             # Console / SDK 权限、回执与身份生命周期逻辑
+make verify-demo-unit            # 无浏览器的启动前检、自有进程与故障清理
+make verify-local-tools          # 临时 SQLite 恢复及离线打包输入守卫
 make lint                        # Ruff + mypy
 pnpm -r build                    # 构建前端包
 make security                    # Bandit、依赖审计、出网审计、安全测试
 ```
+
+`verify-local-tools` 只使用新建临时数据库和公开测试数据，核验检查点、未决锁、事件与结果的恢复；不接受现有业务库作为输入，也不证明 MySQL / Redis 联合恢复或生产备份验收。离线打包测试只检查输入和路径边界，不代表独立安装包已完成。
 
 ---
 

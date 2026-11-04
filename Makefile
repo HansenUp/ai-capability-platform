@@ -110,9 +110,25 @@ migrate:
 migrate-new:
 	cd services/runtime && $(abspath $(VENV))/bin/alembic revision --autogenerate -m "$(m)"
 
-# 静态检查：Ruff 全仓（经 scripts/lint_ruff.py，兼容本机透明加密）+ mypy 严格检查契约、Runtime、claude-sdk / stdio 适配器与契约探针包
+# 本机和 CI 共用同一个严格类型检查范围。
+.PHONY: typecheck verify-demo-unit verify-web-unit verify-local-tools
+typecheck:
+	$(VENV)/bin/mypy packages/contract/src services/runtime/src harness-adapters/claude-sdk/src harness-adapters/probe/src harness-adapters/stdio/src scripts/verify_local_restore.py apps/desktop/runtime-bundle/build_local_bundle.py
+
+# 无浏览器、无 Docker 的启动前检与自有进程清理回归。
+verify-demo-unit:
+	node --test scripts/tests/demo-preflight.test.mjs scripts/tests/demo-cleanup.test.mjs scripts/tests/owned-browser.test.mjs
+
+verify-web-unit:
+	node --test apps/console-web/tests/*.test.mjs packages/sdk-web/examples/*.test.mjs
+
+verify-local-tools:
+	$(PYTHON) -m pytest scripts/tests/test_local_restore.py scripts/tests/test_runtime_bundle_inputs.py -q
+
+# 静态检查：Ruff 全仓（经 scripts/lint_ruff.py，兼容本机透明加密）+ 严格类型检查
 lint:
-	$(PYTHON) scripts/lint_ruff.py && $(PYTHON) scripts/lint_ruff.py --format && $(VENV)/bin/mypy packages/contract/src services/runtime/src harness-adapters/claude-sdk/src harness-adapters/probe/src harness-adapters/stdio/src
+	$(PYTHON) scripts/lint_ruff.py && $(PYTHON) scripts/lint_ruff.py --format
+	$(MAKE) typecheck
 
 # 契约探针上架门禁（S5 / D86）：对 runtime.harness.registry.KNOWN 中每个 harness 跑五项探针，任一不通过即失败；
 # 报告写到 probe-report.json。claude-sdk 的进程内探针需要 SDK：make setup CLAUDE_SDK_EXTRAS=dev,sdk
