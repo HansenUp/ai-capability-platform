@@ -4,18 +4,31 @@ import Chat from "./Chat.vue";
 import DataPolicyRegistry from "../components/DataPolicyRegistry.vue";
 import DataViewRegistry from "../components/DataViewRegistry.vue";
 import DataViewDraft from "../components/DataViewDraft.vue";
+import { previewRestrictedQuery, type QueryPreview } from "../restricted-query-preview";
+import { proposeRestrictedQuery } from "../restricted-query-language";
+const language = ref("");
 const selected = ref<string | null>(null);
 const form = reactive({ version: "v1", columns: ["item"], filter: "", limit: 10 });
 const preview = ref(""), error = ref("");
-watch(form, () => { preview.value = ""; error.value = ""; }, { deep: true, flush: "sync" });
+const queryPlan = ref<QueryPreview | null>(null);
+watch(form, () => { preview.value = ""; queryPlan.value = null; error.value = ""; }, { deep: true, flush: "sync" });
+watch(language, () => { preview.value = ""; queryPlan.value = null; error.value = ""; });
+function propose() {
+  preview.value = ""; queryPlan.value = null; error.value = "";
+  try {
+    const plan = proposeRestrictedQuery(language.value, form.version);
+    queryPlan.value = plan; preview.value = JSON.stringify(plan.request, null, 2);
+  } catch (failure) { error.value = failure instanceof Error ? failure.message : "无法生成查询候选。"; }
+}
 function build() {
-  preview.value = ""; error.value = "";
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(form.version) || !form.columns.length || form.columns.some(c => !["item", "secret"].includes(c))
-    || !Number.isInteger(form.limit) || form.limit < 1 || form.limit > 100 || form.filter.length > 128) {
-    error.value = "请选择有效合成视图版本、至少一列和1–100整数限行；等值条件最多128字符。"; return;
+  preview.value = ""; queryPlan.value = null; error.value = "";
+  try {
+    const plan = previewRestrictedQuery(form);
+    queryPlan.value = plan;
+    preview.value = JSON.stringify(plan.request, null, 2);
+  } catch (failure) {
+    error.value = failure instanceof Error ? failure.message : "无法生成受限请求预览。";
   }
-  preview.value = JSON.stringify({ view_id: "orders", version: form.version, columns: [...form.columns],
-    filters: form.filter === "" ? [] : [{ column: "item", value: form.filter }], limit: form.limit }, null, 2);
 }
 </script>
 <template>
@@ -47,6 +60,14 @@ function build() {
   <DataViewDraft />
   <div id="f4-registration"><DataViewRegistry /></div>
   <div id="f4-policy"><DataPolicyRegistry /></div>
+  <section class="panel" aria-label="自然语言受限查询">
+    <h3>自然语言查询候选</h3>
+    <p>本机规则解析，仅支持下列句式；使用下方视图版本，不调用模型。候选不代表授权，确认后仍需本人登记并执行。</p>
+    <p>示例：查询订单，商品等于“a1”，显示商品和遮盖信息，最多10行</p>
+    <p>不筛选示例：查询订单，显示商品，最多10行</p>
+    <label>查询描述<textarea v-model="language" maxlength="512" /></label>
+    <button @click="propose">生成自然语言查询候选</button>
+  </section>
   <form id="f4-query" @submit.prevent="build">
     <fieldset><legend>仅合成参数，无SQL输入</legend>
       <label>视图版本 <input v-model="form.version" aria-label="视图版本" maxlength="64" /></label>
@@ -59,6 +80,17 @@ function build() {
   </form>
   <p v-if="error" role="alert">{{ error }}</p>
   <section v-if="preview" aria-label="受限请求草稿"><h3>待授权的请求草稿</h3><pre>{{ preview }}</pre><button @click="selected = '!tool data.query ' + preview">选择草稿进入隔离查询</button><p>已生成草稿，不代表查询成功。修改参数会清空；页面重载不保存条件。</p></section>
+  <section v-if="queryPlan" class="panel" aria-label="受限查询解释">
+    <h3>查询预览与解释</h3>
+    <p>下面使用逻辑视图和逻辑租户列；执行服务会重新解析已登记的实际对象并核验身份与策略。</p>
+    <ol><li v-for="line in queryPlan.explanation" :key="line">{{ line }}</li></ol>
+    <h4>参数化逻辑模板（不可直接执行）</h4>
+    <pre aria-label="参数化逻辑模板">{{ queryPlan.template }}</pre>
+    <table aria-label="查询参数来源"><thead><tr><th>参数</th><th>来源</th><th>草稿值</th></tr></thead>
+      <tbody><tr v-for="binding in queryPlan.bindings" :key="binding.name"><td>{{ binding.name }}</td><td>{{ binding.source }}</td><td>{{ binding.value === undefined ? "执行服务提供" : binding.value }}</td></tr></tbody>
+    </table>
+    <p>自然语言候选仅支持明确示例句式。请核对上方请求和参数后选择草稿；真实模型与数据库 EXPLAIN 尚未接入。</p>
+  </section>
   <section aria-label="执行与下载待确认"><h3>执行与剩余边界</h3>
     <p>已接入Runtime→网关的既有身份委托和read_data核验链，不把Console开发身份头或告警管理员角色作为数据授权。每次查询新建独立Run，仅原发起人读取；由后端从持久事件构造委托上下文。终结回执需本人显式确认，不自动重试。</p>
     <p>签名下载仍需确认对象/主体/租户绑定、有效期、撤权、重放和审计；当前没有下载接口。</p>

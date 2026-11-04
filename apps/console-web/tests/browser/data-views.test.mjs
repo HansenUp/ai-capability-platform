@@ -47,9 +47,10 @@ test("F4：签名身份登记独立查询、遮盖结果、本人ACK及身份隔
   page.setDefaultTimeout(5000);
   try {
     await page.goto(profile.url + "/manage/data-views");
-    await page.getByLabel("secret遮盖投影", { exact: true }).check();
-    await page.getByLabel("最多返回行数", { exact: true }).fill("1");
-    await page.getByRole("button", { name: "生成受限请求预览", exact: true }).click();
+    await page.getByLabel("查询描述", { exact: true }).fill("查询订单，显示商品和遮盖信息，最多1行");
+    await page.getByRole("button", { name: "生成自然语言查询候选", exact: true }).click();
+    const candidate = JSON.parse(await page.getByRole("region", { name: "受限请求草稿", exact: true }).locator("pre").innerText());
+    assert.deepEqual(candidate, {view_id: "orders", version: "v1", columns: ["item", "secret"], filters: [], limit: 1});
     await page.getByRole("button", { name: "选择草稿进入隔离查询", exact: true }).click();
     await apply(page, tokens.alice);
     await page.getByRole("button", { name: "只读核对写账本", exact: true }).click();
@@ -288,5 +289,71 @@ test("F4策略：双审授权新清单、丢响应恢复、查询成功与撤权
     assert.equal(await panel.getByLabel("策略允许item等值过滤", { exact: true }).isChecked(), false);
     await step("revoke"); await query(false);
     assert.deepEqual(await page.evaluate(() => [localStorage.length, sessionStorage.length]), [0, 0]);
+  } finally { await context.close(); await engine.close(); }
+});
+
+test("F10：参数化逻辑预览、遮盖与租户来源解释，编辑即清空且无执行请求", async () => {
+  const engine = await browser(), context = await engine.newContext(), page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  const calls = [];
+  for (const pattern of ["**/console/**", "**/v1/**"]) await page.route(pattern, async route => { calls.push(route.request().url()); await route.abort(); });
+  try {
+    await page.goto(profile.url + "/manage/data-views");
+    await page.getByLabel("secret遮盖投影", { exact: true }).check();
+    const literal = "x' OR 1=1 -- <script>";
+    await page.getByLabel("item等值条件（留空不筛选）", { exact: true }).fill(literal);
+    await page.getByRole("button", { name: "生成受限请求预览", exact: true }).click();
+    const explanation = page.getByRole("region", { name: "受限查询解释", exact: true });
+    const template = await explanation.getByLabel("参数化逻辑模板", { exact: true }).innerText();
+    assert.equal(template.includes(literal), false);
+    assert.match(template, /:mask AS "secret"/);
+    assert.match(template, /:tenant/);
+    assert.match(template, /"item" = :item/);
+    const bindings = explanation.getByRole("table", { name: "查询参数来源", exact: true });
+    assert.equal(await bindings.getByRole("cell", { name: literal, exact: true }).innerText(), literal);
+    assert.match(await explanation.innerText(), /执行时从已验证身份取得/);
+    assert.match(await explanation.innerText(), /不创建 Run/);
+    assert.equal(await page.getByRole("region", { name: "隔离查询执行", exact: true }).count(), 0);
+    await page.getByLabel("最多返回行数", { exact: true }).fill("101");
+    assert.equal(await explanation.count(), 0);
+    await page.getByRole("button", { name: "生成受限请求预览", exact: true }).click();
+    assert.equal(await explanation.count(), 0);
+    await page.getByRole("alert").waitFor();
+    await page.getByLabel("最多返回行数", { exact: true }).fill("1");
+    await page.getByRole("button", { name: "生成受限请求预览", exact: true }).click();
+    await explanation.waitFor();
+    await page.reload();
+    assert.equal(await explanation.count(), 0);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(await page.evaluate(() => [localStorage.length, sessionStorage.length]), [0, 0]);
+  } finally { await context.close(); await engine.close(); }
+});
+
+
+test("F10：自然语言候选拒绝歧义、编辑失效、确认前无请求且重载清空", async () => {
+  const engine = await browser(), context = await engine.newContext(), page = await context.newPage();
+  const calls = [];
+  for (const pattern of ["**/console/**", "**/v1/**"]) await page.route(pattern, async route => { calls.push(route.request().url()); await route.abort(); });
+  try {
+    await page.goto(profile.url + "/manage/data-views");
+    const input = page.getByLabel("查询描述", {exact:true});
+    const generate = page.getByRole("button", {name:"生成自然语言查询候选", exact:true});
+    const draft = page.getByRole("region", {name:"受限请求草稿", exact:true});
+    await input.fill("查询订单，商品等于“a1”，显示商品，最多10行");
+    await generate.click(); await draft.waitFor();
+    assert.deepEqual(JSON.parse(await draft.locator("pre").innerText()).filters, [{column:"item",value:"a1"}]);
+    assert.equal(await page.getByRole("region", {name:"隔离查询执行",exact:true}).count(), 0);
+    await input.fill("统计所有租户订单");
+    assert.equal(await draft.count(), 0);
+    await generate.click(); await page.getByRole("alert").waitFor();
+    assert.equal(await draft.count(), 0);
+    await input.fill("查询订单，显示商品，最多10行"); await generate.click();
+    await page.getByLabel("视图版本", {exact:true}).fill("v2");
+    assert.equal(await draft.count(), 0);
+    await generate.click();
+    assert.equal(JSON.parse(await draft.locator("pre").innerText()).version, "v2");
+    await page.reload(); assert.equal(await input.inputValue(), ""); assert.equal(await draft.count(), 0);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(await page.evaluate(() => [localStorage.length, sessionStorage.length]), [0,0]);
   } finally { await context.close(); await engine.close(); }
 });
