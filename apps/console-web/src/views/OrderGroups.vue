@@ -14,6 +14,7 @@ function build(natural=false){clear();try{plan.value=natural?proposeOrderGroups(
   <p>独立经营视图synthetic_orders/v1，仅专用合成环境可执行。<a href="/manage/order-counts">返回日期状态数量查询</a></p>
   <section aria-label="金额与分组口径"><h3>字段、业务口径与权限</h3>
     <p>金额使用amount_minor及currency；CNY/USD均100最小单位=1主单位。只统计当前已完成订单，按币种分别列示；不是实收、收入、利润或GMV，不含退款/税费/换汇。</p>
+    <p>状态占比仅按全部状态/状态分组：分子为各当前状态数量，分母为同窗口全部去重订单数；空窗口占比未知，异常来源不提供占比。</p>
     <p>平均金额仅在金额完整时以总额最小单位/完成订单数显示精确分数；不作子样本平均或舍入。</p>
     <p>数量可按状态、币种或状态＋币种分组。只列实际存在的组；无效币种阻止依赖币种的分组，不开放客户、员工、日期分桶、排行或任意字段。</p>
     <p>按创建时间左闭右开、最长31天，按订单ID去重；来源截断/冲突或无效创建时间/状态时未知。缺失金额使正式总额未知，保留已知小计与有效金额条数/完成订单数；有效零金额保留0。</p>
@@ -23,11 +24,11 @@ function build(natural=false){clear();try{plan.value=natural?proposeOrderGroups(
     <label>分组创建起点（含时区）<input v-model="form.since" /></label>
     <label>分组创建终点（不含，含时区）<input v-model="form.until" /></label>
     <label>分组当前状态<select v-model="form.status" aria-label="分组当前状态"><option value="all">全部</option><option value="completed">已完成</option><option value="pending">待完成</option><option value="cancelled">已取消</option></select></label>
-    <label>统计指标<select v-model="form.metric" aria-label="统计指标"><option value="completed_amount">已完成订单金额</option><option value="completed_average">已完成订单平均金额</option><option value="order_count">订单数量</option></select></label>
+    <label>统计指标<select v-model="form.metric" aria-label="统计指标"><option value="completed_amount">已完成订单金额</option><option value="completed_average">已完成订单平均金额</option><option value="order_count">订单数量</option><option value="status_share">订单状态占比</option></select></label>
     <label>分组维度<select v-model="form.group_by" aria-label="分组维度"><option value="currency">币种</option><option value="status">状态</option><option value="status_currency">状态＋币种</option></select></label>
     <button>预览订单分组查询</button>
   </form>
-  <section aria-label="订单分组自然语言"><p>句式：统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的已完成订单金额，按币种分组</p>
+  <section aria-label="订单分组自然语言"><p>占比句式：统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的订单状态占比</p><p>句式：统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的已完成订单金额，按币种分组</p>
     <label>订单分组描述<textarea v-model="language" maxlength="512" /></label><button @click="build(true)">生成订单分组候选</button>
   </section>
   <p v-if="error" role="alert">{{error}}</p>

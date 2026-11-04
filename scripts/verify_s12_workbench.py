@@ -26,7 +26,10 @@ def main() -> None:
     parser.add_argument("--b3-read-demo", action="store_true")
     parser.add_argument("--analytics-readonly-demo", action="store_true")
     parser.add_argument("--order-groups-demo", action="store_true")
+    parser.add_argument("--order-source-over-limit-demo", action="store_true")
     args = parser.parse_args()
+    if args.order_source_over_limit_demo and not args.order_groups_demo:
+        parser.error("over-limit source requires isolated grouping profile")
     if args.order_groups_demo and not args.analytics_readonly_demo:
         parser.error("order groups requires isolated analytics demo")
     if args.analytics_readonly_demo and not args.ticket_readonly_demo:
@@ -374,7 +377,9 @@ def main() -> None:
     if args.analytics_readonly_demo:
         import order_metrics_fixture
 
-        order_metrics_fixture.install(provider, temporary, group_demo=args.order_groups_demo)
+        order_metrics_fixture.install(
+            provider, temporary, group_demo=args.order_groups_demo, source_over_limit=args.order_source_over_limit_demo
+        )
     selected_port = port()
     allowed_ports.add(selected_port)
     if args.demo_no_migrations:

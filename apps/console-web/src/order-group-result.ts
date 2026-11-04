@@ -1,7 +1,7 @@
 import {previewOrderGroups, type GroupRequest} from "./order-group-query";
 type Event={seq:number;type:string;payload:Record<string,unknown>};
-export interface GroupRow {key:{status?:string;currency?:string};order_count:number;valid_amount_count?:number;known_minor?:string|null;total_minor?:string|null;amount_coverage?:number;amount_complete?:boolean;average_numerator_minor?:string|null;average_denominator?:number|null}
-export interface GroupResult {profile:string;since:string;until:string;status_filter:string;metric:string;group_by:string;view_version:string;policy_version:string;read_started:string;read_finished:string;snapshot_guaranteed:boolean;complete:boolean;reason:string|null;groups:GroupRow[]}
+export interface GroupRow {key:{status?:string;currency?:string};order_count:number;valid_amount_count?:number;known_minor?:string|null;total_minor?:string|null;amount_coverage?:number;amount_complete?:boolean;average_numerator_minor?:string|null;average_denominator?:number|null;share_numerator?:number|null;share_denominator?:number|null}
+export interface GroupResult {profile:string;since:string;until:string;status_filter:string;metric:string;group_by:string;view_version:string;policy_version:string;read_started:string;read_finished:string;snapshot_guaranteed:boolean;complete:boolean;reason:string|null;total_order_count?:number|null;groups:GroupRow[]}
 const integer=(x:unknown):x is number=>Number.isInteger(x)&&Number(x)>=0&&Number(x)<=100;
 const money=(x:unknown):x is string=>typeof x==="string"&&/^(0|[1-9][0-9]*)$/.test(x)&&x.length<=128;
 export function orderGroupResults(events:Event[]):{seq:number;value:GroupResult}[] {
@@ -16,18 +16,23 @@ export function orderGroupResults(events:Event[]):{seq:number;value:GroupResult}
       const received=previewOrderGroups({since:v.since,until:v.until,status:v.status_filter,metric:v.metric,group_by:v.group_by}).request;
       if(JSON.stringify(expected)!==JSON.stringify(received))return [];
     } catch{return [];}
-    if(!v.complete)return v.groups.length===0&&typeof v.reason==="string"&&!!v.reason?[{seq:e.seq,value:v}]:[];
+    if(!v.complete)return (v.metric!=="status_share"||v.total_order_count===null)&&v.groups.length===0&&typeof v.reason==="string"&&!!v.reason?[{seq:e.seq,value:v}]:[];
     if(v.reason!==null)return [];
+    if(v.metric==="status_share"&&(!integer(v.total_order_count)||v.groups.length!==3))return [];
     const keys=new Set<string>();let total=0;
     for(const g of v.groups){
-      if(!g||!g.key||typeof g.key!=="object"||!integer(g.order_count)||g.order_count===0)return [];
+      if(!g||!g.key||typeof g.key!=="object"||!integer(g.order_count)||(g.order_count===0&&v.metric!=="status_share"))return [];
       const fields=Object.keys(g.key).sort().join();
       if(fields!==(v.group_by==="status_currency"?"currency,status":v.group_by))return [];
       if(g.key.status!==undefined&&(!["pending","completed","cancelled"].includes(g.key.status)||(v.status_filter!=="all"&&g.key.status!==v.status_filter)))return [];
       if(g.key.currency!==undefined&&!["CNY","USD"].includes(g.key.currency))return [];
       const key=JSON.stringify([g.key.status??null,g.key.currency??null]);if(keys.has(key))return [];keys.add(key);
       total+=g.order_count;if(total>100)return [];
-      if(v.metric!=="order_count"){
+      if(v.metric==="status_share"){
+        if(Object.keys(g).sort().join()!=="key,order_count,share_denominator,share_numerator"
+          ||(v.total_order_count===0?g.share_numerator!==null||g.share_denominator!==null
+            :g.share_numerator!==g.order_count||g.share_denominator!==v.total_order_count))return [];
+      }else if(v.metric!=="order_count"){
         const n=g.valid_amount_count;
         if(!integer(n)||n>g.order_count||g.amount_complete!==(n===g.order_count)||g.amount_coverage!==n/g.order_count
           ||(n===0?g.known_minor!==null:!money(g.known_minor))
@@ -37,6 +42,7 @@ export function orderGroupResults(events:Event[]):{seq:number;value:GroupResult}
           :g.average_numerator_minor!==null||g.average_denominator!==null))return [];
       }else if(Object.keys(g).sort().join()!=="key,order_count")return [];
     }
+    if(v.metric==="status_share"&&total!==v.total_order_count)return [];
     return [{seq:e.seq,value:v}];
   });
 }

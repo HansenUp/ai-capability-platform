@@ -13,6 +13,9 @@ def arguments(value):
     if value["metric"] == "order_count":
         if value["group_by"] not in ("status", "currency", "status_currency"):
             raise ValueError("unsupported count grouping")
+    elif value["metric"] == "status_share":
+        if value["status"] != "all" or value["group_by"] != "status":
+            raise ValueError("status shares require all statuses and status grouping")
     elif value["metric"] in ("completed_amount", "completed_average"):
         if value["status"] != "completed" or value["group_by"] != "currency":
             raise ValueError("completed amounts require completed status and currency grouping")
@@ -37,8 +40,26 @@ def grouped(result, value):
         "reason": summary["reason"],
         "groups": [],
     }
+    if value["metric"] == "status_share":
+        base["total_order_count"] = None
     if not summary["complete"]:
         return base
+    if value["metric"] == "status_share":
+        total = summary["order_count"]
+        return base | {
+            "complete": True,
+            "reason": None,
+            "total_order_count": total,
+            "groups": [
+                {
+                    "key": {"status": status},
+                    "order_count": summary["statuses"][status],
+                    "share_numerator": summary["statuses"][status] if total else None,
+                    "share_denominator": total if total else None,
+                }
+                for status in ("pending", "completed", "cancelled")
+            ],
+        }
     # aggregate validated every source row and typed duplicate before selection.
     unique = {row[0]: dict(zip(FIELDS, row, strict=True)) for row in result["rows"]}
     groups = {}
