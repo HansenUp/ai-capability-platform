@@ -47,7 +47,7 @@ test("F4：签名身份登记独立查询、遮盖结果、本人ACK及身份隔
   page.setDefaultTimeout(5000);
   try {
     await page.goto(profile.url + "/manage/data-views");
-    await page.getByLabel("查询描述", { exact: true }).fill("查询订单，显示商品和遮盖信息，最多1行");
+    await page.getByLabel("查询描述", { exact: true }).fill("查一下订单，包含遮盖信息，最多1条");
     await page.getByRole("button", { name: "生成自然语言查询候选", exact: true }).click();
     const candidate = JSON.parse(await page.getByRole("region", { name: "受限请求草稿", exact: true }).locator("pre").innerText());
     assert.deepEqual(candidate, {view_id: "orders", version: "v1", columns: ["item", "secret"], filters: [], limit: 1});
@@ -103,6 +103,41 @@ test("F4：签名身份登记独立查询、遮盖结果、本人ACK及身份隔
     await page.waitForFunction(() => { const button = [...document.querySelectorAll("button")].find(b => b.textContent?.trim() === "登记新 Run（尚未创建）"); return !!button && !button.matches(":disabled"); });
     const settled = await (await page.request.get(`${profile.runtime}/v1/workbench/attempts`, { headers: { Authorization: `Bearer ${tokens.bob}` } })).json();
     assert.equal(settled.active, null);
+  } finally { await context.close(); await engine.close(); }
+});
+
+test("F10：常见业务问法精确过滤、空结果与本人收口", async () => {
+  const tokens = JSON.parse(await readFile(profile.tokens, "utf8"));
+  const engine = await browser(), context = await engine.newContext(), page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  try {
+    for (const [item, rows] of [["a1", 1], ["no-such-item", 0]]) {
+      await page.goto(profile.url + "/manage/data-views");
+      await page.getByLabel("查询描述", {exact:true}).fill(`查一下商品${item}的订单，最多10条`);
+      await page.getByRole("button", {name:"生成自然语言查询候选",exact:true}).click();
+      const draft = JSON.parse(await page.getByRole("region", {name:"受限请求草稿",exact:true}).locator("pre").innerText());
+      assert.deepEqual(draft.filters, [{column:"item",value:item}]);
+      await page.getByRole("button", {name:"选择草稿进入隔离查询",exact:true}).click();
+      await apply(page, tokens.alice);
+      await page.getByRole("button", {name:"只读核对写账本",exact:true}).click();
+      await page.getByRole("button", {name:"填入受限查询草稿（不创建）",exact:true}).click();
+      const response = page.waitForResponse(r => r.url().endsWith("/v1/workbench/create-attempts") && r.request().method() === "POST");
+      await page.getByRole("button", {name:"登记新 Run（尚未创建）",exact:true}).click();
+      const prepared = await (await response).json(); assert.equal(prepared.status, "PREPARED");
+      await page.getByRole("button", {name:"确认执行已登记创建一次",exact:true}).click();
+      await page.getByRole("button", {name:"预览本人确认收口",exact:true}).waitFor();
+      await page.getByLabel("Run ID", {exact:true}).fill(prepared.run_id);
+      await phase(page, prepared.run_id, "completed", tokens.alice);
+      const result = page.getByRole("region", {name:"受限查询结果",exact:true}); await result.waitFor();
+      assert.match(await result.innerText(), new RegExp(`${rows} 行；本次限行内未截断`));
+      assert.equal(await result.locator("tbody tr").count(), rows);
+      if (rows) assert.equal(await result.getByRole("cell", {name:item,exact:true}).count(), 1);
+      const events = await (await page.request.get(`${profile.runtime}/v1/runs/${prepared.run_id}/events`, {headers:{Authorization:`Bearer ${tokens.alice}`}})).json();
+      assert.equal(events.filter(e => e.type === "tool.result" && e.payload.status === "ok").length, 1);
+      await page.getByRole("button", {name:"预览本人确认收口",exact:true}).click();
+      await page.getByRole("button", {name:"确认收口此回执",exact:true}).click();
+      await page.waitForFunction(() => { const b = [...document.querySelectorAll("button")].find(b => b.textContent?.trim() === "登记新 Run（尚未创建）"); return b && !b.matches(":disabled"); });
+    }
   } finally { await context.close(); await engine.close(); }
 });
 
@@ -346,6 +381,7 @@ test("F10：自然语言候选拒绝歧义、编辑失效、确认前无请求�
     await input.fill("统计所有租户订单");
     assert.equal(await draft.count(), 0);
     await generate.click(); await page.getByRole("alert").waitFor();
+    assert.match(await page.getByRole("alert").innerText(), /不支持自行指定租户/);
     assert.equal(await draft.count(), 0);
     await input.fill("查询订单，显示商品，最多10行"); await generate.click();
     await page.getByLabel("视图版本", {exact:true}).fill("v2");

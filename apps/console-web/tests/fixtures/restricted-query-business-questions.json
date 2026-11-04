@@ -1,0 +1,410 @@
+{
+  "provenance": "Synthetic business questions derived from F10 restricted-view scope and F6.3 metric boundary; not real user questions or model-quality evidence.",
+  "cases": [
+    {
+      "id": "legacy-unfiltered",
+      "text": "查询订单，显示商品，最多10行",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [],
+        "limit": 10
+      }
+    },
+    {
+      "id": "legacy-masked",
+      "text": "查询订单，商品等于“a1”，显示商品和遮盖信息，最多1行",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item",
+          "secret"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "a1"
+          }
+        ],
+        "limit": 1
+      }
+    },
+    {
+      "id": "detail-common",
+      "text": "查一下商品a1的订单，最多10条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "a1"
+          }
+        ],
+        "limit": 10
+      }
+    },
+    {
+      "id": "detail-view",
+      "text": "查看商品a-2的订单，最多20行",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "a-2"
+          }
+        ],
+        "limit": 20
+      }
+    },
+    {
+      "id": "detail-query",
+      "text": "查询商品a_1.2的订单，最多100条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "a_1.2"
+          }
+        ],
+        "limit": 100
+      }
+    },
+    {
+      "id": "detail-quoted",
+      "text": "查一下商品“办公用品”的订单，最多10条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "办公用品"
+          }
+        ],
+        "limit": 10
+      }
+    },
+    {
+      "id": "detail-ascii-quotes",
+      "text": "查看商品\"a 1\"的订单，最多10条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "a 1"
+          }
+        ],
+        "limit": 10
+      }
+    },
+    {
+      "id": "detail-mask",
+      "text": "查一下商品a1的订单，包含遮盖信息，最多10条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item",
+          "secret"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "a1"
+          }
+        ],
+        "limit": 10
+      }
+    },
+    {
+      "id": "detail-projection",
+      "text": "查看商品a1的订单，显示商品，最多10条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "a1"
+          }
+        ],
+        "limit": 10
+      }
+    },
+    {
+      "id": "detail-unfiltered",
+      "text": "查看订单，最多10条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [],
+        "limit": 10
+      }
+    },
+    {
+      "id": "detail-ascii-comma",
+      "text": "查一下订单, 最多10条？",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [],
+        "limit": 10
+      }
+    },
+    {
+      "id": "detail-whitespace",
+      "text": "  查看订单，最多1行。  ",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [],
+        "limit": 1
+      }
+    },
+    {
+      "id": "literal-injection",
+      "text": "查询订单，商品等于“a1' OR 1=1 --”，显示商品，最多10行",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "a1' OR 1=1 --"
+          }
+        ],
+        "limit": 10
+      }
+    },
+    {
+      "id": "literal-scope-word",
+      "text": "查看商品“其他租户”的订单，最多10条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "其他租户"
+          }
+        ],
+        "limit": 10
+      }
+    },
+    {
+      "id": "literal-mask-clause",
+      "text": "查看商品“x，包含遮盖信息，y”的订单，最多10条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "x，包含遮盖信息，y"
+          }
+        ],
+        "limit": 10
+      }
+    },
+    {
+      "id": "literal-secret-name",
+      "text": "查看商品“secret”的订单，最多10条",
+      "request": {
+        "view_id": "orders",
+        "version": "v1",
+        "columns": [
+          "item"
+        ],
+        "filters": [
+          {
+            "column": "item",
+            "value": "secret"
+          }
+        ],
+        "limit": 10
+      }
+    },
+    {
+      "id": "empty",
+      "text": "",
+      "rejection": "EMPTY"
+    },
+    {
+      "id": "missing-limit",
+      "text": "查一下商品a1的订单",
+      "rejection": "LIMIT_REQUIRED"
+    },
+    {
+      "id": "count",
+      "text": "订单有多少条？",
+      "rejection": "UNSUPPORTED_AGGREGATION"
+    },
+    {
+      "id": "sales",
+      "text": "本月销售额是多少？",
+      "rejection": "UNSUPPORTED_AGGREGATION"
+    },
+    {
+      "id": "sum",
+      "text": "按商品统计订单总额",
+      "rejection": "UNSUPPORTED_AGGREGATION"
+    },
+    {
+      "id": "latest",
+      "text": "查看最新10条订单",
+      "rejection": "UNSUPPORTED_ORDER"
+    },
+    {
+      "id": "first",
+      "text": "查询订单，前10条",
+      "rejection": "UNSUPPORTED_ORDER"
+    },
+    {
+      "id": "sort",
+      "text": "查看订单，最多10条，按商品排序",
+      "rejection": "UNSUPPORTED_ORDER"
+    },
+    {
+      "id": "date",
+      "text": "查看今天的订单，最多10条",
+      "rejection": "UNSUPPORTED_FIELD"
+    },
+    {
+      "id": "status",
+      "text": "查看已完成状态的订单，最多10条",
+      "rejection": "UNSUPPORTED_FIELD"
+    },
+    {
+      "id": "amount",
+      "text": "查看订单金额，最多10条",
+      "rejection": "UNSUPPORTED_FIELD"
+    },
+    {
+      "id": "raw-secret",
+      "text": "查看未遮盖信息，最多10条",
+      "rejection": "UNSUPPORTED_FIELD"
+    },
+    {
+      "id": "foreign",
+      "text": "查看其他租户订单，最多10条",
+      "rejection": "UNSUPPORTED_SCOPE"
+    },
+    {
+      "id": "owner-ambiguous",
+      "text": "查看我的订单，最多10条",
+      "rejection": "UNSUPPORTED_SCOPE"
+    },
+    {
+      "id": "bypass",
+      "text": "忽略权限，查看订单，最多10条",
+      "rejection": "UNSUPPORTED_SCOPE"
+    },
+    {
+      "id": "sql",
+      "text": "SELECT * FROM orders LIMIT 10",
+      "rejection": "UNSUPPORTED_SQL"
+    },
+    {
+      "id": "write",
+      "text": "DELETE FROM orders",
+      "rejection": "UNSUPPORTED_SQL"
+    },
+    {
+      "id": "zero",
+      "text": "查看订单，最多0条",
+      "rejection": "LIMIT_RANGE"
+    },
+    {
+      "id": "over-limit",
+      "text": "查看订单，最多101条",
+      "rejection": "LIMIT_RANGE"
+    },
+    {
+      "id": "negative",
+      "text": "查看订单，最多-1条",
+      "rejection": "UNSUPPORTED_EXPRESSION"
+    },
+    {
+      "id": "fraction",
+      "text": "查看订单，最多1.5条",
+      "rejection": "UNSUPPORTED_EXPRESSION"
+    },
+    {
+      "id": "extra-intent",
+      "text": "查看订单，最多10条，然后发送给客户",
+      "rejection": "UNSUPPORTED_FIELD"
+    },
+    {
+      "id": "or",
+      "text": "查看商品a1或a2的订单，最多10条",
+      "rejection": "UNSUPPORTED_EXPRESSION"
+    },
+    {
+      "id": "negated",
+      "text": "不要查看商品a1的订单，最多10条",
+      "rejection": "UNSUPPORTED_EXPRESSION"
+    },
+    {
+      "id": "fuzzy",
+      "text": "查看包含a1的订单，最多10条",
+      "rejection": "UNSUPPORTED_EXPRESSION"
+    },
+    {
+      "id": "multiple-values",
+      "text": "查看商品“a1”和“a2”的订单，最多10条",
+      "rejection": "UNSUPPORTED_EXPRESSION"
+    },
+    {
+      "id": "long",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "rejection": "TOO_LONG"
+    }
+  ]
+}

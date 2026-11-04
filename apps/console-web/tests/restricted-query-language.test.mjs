@@ -27,3 +27,11 @@ for (const text of ['', '查询订单', '统计订单总额', '查询所有租�
   test(`unsupported language rejected: ${text.slice(0,60)}`, () => assert.throws(() => proposeRestrictedQuery(text, 'v1')));
 }
 test('version validation is shared with structured preview', () => assert.throws(() => proposeRestrictedQuery('查询订单，显示商品，最多10行', 'v1;drop')));
+
+const {cases} = JSON.parse(readFileSync(new URL('./fixtures/restricted-query-business-questions.json', import.meta.url), 'utf8'));
+for (const sample of cases) {
+  test(`business evaluation ${sample.id}`, () => {
+    if (sample.request) assert.deepEqual(proposeRestrictedQuery(sample.text, 'v1').request, sample.request);
+    else assert.throws(() => proposeRestrictedQuery(sample.text, 'v1'), error => error.code === sample.rejection && !!error.suggestion);
+  });
+}
