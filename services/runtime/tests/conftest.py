@@ -66,16 +66,19 @@ os.environ["CONFIDENTIAL_MODEL_ALIASES"] = (
     "default-chat"  # 测试默认允许 demo 的别名接收机密数据；阻断场景在用例中单独覆盖  # 调小阈值，便于测试触发工具结果外置逻辑
 )
 
-if _external_db:
-    # 以下导入会触发 runtime.config 读取环境变量，必须放在全部 os.environ 设置之后。
-    # asyncmy 连接绑定创建它的事件循环；测试里多个 TestClient / async 用例各有各的循环，连接池复用跨循环连接
-    # 会报 "attached to a different loop"。测试期改用 NullPool（每次借用新建连接），只影响测试进程。
+
+def _configure_test_engine():
+    # Delayed import: settings must see the isolated environment above first.
     from sqlalchemy.pool import NullPool
 
-    from runtime.state import db as _db
+    from runtime.state import db
 
-    _db.engine = create_async_engine(_db.normalize_database_url(_external_db), poolclass=NullPool)
-    _db.SessionLocal.configure(bind=_db.engine)
+    # TestClient portals and per-test loops must not share retained connections.
+    db.engine = db.make_engine(os.environ["DATABASE_URL"], poolclass=NullPool)
+    db.SessionLocal.configure(bind=db.engine)
+
+
+_configure_test_engine()
 
 
 @pytest.fixture(scope="session", autouse=True)

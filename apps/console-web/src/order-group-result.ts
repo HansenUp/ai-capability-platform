@@ -19,7 +19,9 @@ export function orderGroupResults(events:Event[]):{seq:number;value:GroupResult}
     } catch{return [];}
     if(!v.complete)return (v.metric!=="status_share"||v.total_order_count===null)&&v.groups.length===0&&typeof v.reason==="string"&&!!v.reason?[{seq:e.seq,value:v}]:[];
     if(v.reason!==null)return [];
-    if(v.metric==="status_share"&&(!integer(v.total_order_count)||v.groups.length!==3))return [];
+    const dailyShare=v.metric==="status_share"&&v.group_by==="day_status";
+    if(v.metric==="status_share"&&(!integer(v.total_order_count)||(!dailyShare&&v.groups.length!==3)))return [];
+    const days=new Map<string,{count:number;denominator:number;statuses:Set<string>}>();
     const daily=v.group_by==="day"||v.group_by==="day_currency"||v.group_by==="day_status";
     const keys=new Set<string>();let total=0;
     for(const g of v.groups){
@@ -36,9 +38,12 @@ export function orderGroupResults(events:Event[]):{seq:number;value:GroupResult}
       const key=JSON.stringify([g.key.day??null,g.key.status??null,g.key.currency??null]);if(keys.has(key))return [];keys.add(key);
       total+=g.order_count;if(total>100)return [];
       if(v.metric==="status_share"){
-        if(Object.keys(g).sort().join()!=="key,order_count,share_denominator,share_numerator"
-          ||(v.total_order_count===0?g.share_numerator!==null||g.share_denominator!==null
-            :g.share_numerator!==g.order_count||g.share_denominator!==v.total_order_count))return [];
+        if(Object.keys(g).sort().join()!==(dailyShare?"bucket_since,bucket_until,key,order_count,partial_bucket,share_denominator,share_numerator":"key,order_count,share_denominator,share_numerator")
+          ||(!dailyShare&&v.total_order_count===0?g.share_numerator!==null||g.share_denominator!==null
+            :g.share_numerator!==g.order_count||(dailyShare?!integer(g.share_denominator)||g.share_denominator===0:g.share_denominator!==v.total_order_count)))return [];
+        if(dailyShare){const day=g.key.day!,d=days.get(day)??{count:0,denominator:g.share_denominator!,statuses:new Set<string>()};
+          if(d.denominator!==g.share_denominator)return [];d.count+=g.order_count;d.statuses.add(g.key.status!);days.set(day,d);
+        }
       }else if(v.metric!=="order_count"){
         const n=g.valid_amount_count;
         if(!integer(n)||n>g.order_count||g.amount_complete!==(n===g.order_count)||g.amount_coverage!==n/g.order_count
@@ -50,6 +55,7 @@ export function orderGroupResults(events:Event[]):{seq:number;value:GroupResult}
       }else if(Object.keys(g).sort().join()!==(daily?"bucket_since,bucket_until,key,order_count,partial_bucket":"key,order_count"))return [];
     }
     if(v.metric==="status_share"&&total!==v.total_order_count)return [];
+    if(dailyShare&&[...days.values()].some(d=>d.statuses.size!==3||d.count!==d.denominator))return [];
     return [{seq:e.seq,value:v}];
   });
 }

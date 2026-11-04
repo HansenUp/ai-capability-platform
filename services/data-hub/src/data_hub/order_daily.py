@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, time, timedelta, timezone
 
 from data_hub.order_count import arguments as count_arguments
-from data_hub.order_metrics import FIELDS, instant
+from data_hub.order_metrics import FIELDS, STATUSES, instant
 
 ZONES = {"UTC": UTC, "UTC+08:00": timezone(timedelta(hours=8))}
 
@@ -17,6 +17,9 @@ def arguments(value):
     if value["metric"] == "order_count":
         if value["group_by"] not in ("day", "day_status"):
             raise ValueError("daily count requires day or day/status grouping")
+    elif value["metric"] == "status_share":
+        if value["status"] != "all" or value["group_by"] != "day_status":
+            raise ValueError("daily status shares require all statuses and day/status grouping")
     elif value["metric"] in ("completed_amount", "completed_average"):
         if value["status"] != "completed" or value["group_by"] != "day_currency":
             raise ValueError("daily money requires completed status and day/currency grouping")
@@ -58,16 +61,33 @@ def groups(result, value, base, since, until):
             },
         )
         bucket["order_count"] += 1
-        if value["metric"] != "order_count":
+        if value["metric"] in ("completed_amount", "completed_average"):
             bucket.setdefault("valid_amount_count", 0)
             bucket.setdefault("known", 0)
             amount = row["amount_minor"]
             if type(amount) is int and amount >= 0:
                 bucket["valid_amount_count"] += 1
                 bucket["known"] += amount
+    if value["metric"] == "status_share":
+        days = {}
+        for bucket in buckets.values():
+            days.setdefault(bucket["key"]["day"], []).append(bucket)
+        output = []
+        total = 0
+        for day, present in sorted(days.items()):
+            n = sum(bucket["order_count"] for bucket in present)
+            total += n
+            counts = {bucket["key"]["status"]: bucket["order_count"] for bucket in present}
+            bounds = {k: present[0][k] for k in ("bucket_since", "bucket_until", "partial_bucket")}
+            for status in STATUSES:
+                count = counts.get(status, 0)
+                output.append(
+                    bounds | {"key": {"day": day, "status": status}, "order_count": count, "share_numerator": count, "share_denominator": n}
+                )
+        return base | {"complete": True, "reason": None, "total_order_count": total, "groups": output}
     output = []
     for _, bucket in sorted(buckets.items()):
-        if value["metric"] != "order_count":
+        if value["metric"] in ("completed_amount", "completed_average"):
             known = bucket.pop("known")
             n, valid = bucket["order_count"], bucket["valid_amount_count"]
             bucket.update(

@@ -38,6 +38,7 @@ from sqlalchemy.dialects import mysql
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.pool import Pool
 from sqlalchemy.types import TypeDecorator, TypeEngine
 
 from runtime.config import settings
@@ -347,12 +348,14 @@ class _SQLiteConnection(sqlite3.Connection):
         self._closed = True
 
 
-def make_engine(url: str) -> AsyncEngine:
+def make_engine(url: str, *, poolclass: type[Pool] | None = None) -> AsyncEngine:
     """按连接串创建异步引擎。MySQL 额外开启 pool_pre_ping 与 pool_recycle=3600，
     避免连接池拿到被服务端 wait_timeout 断开的陈旧连接。SQLite 关闭连接前显式回收游标，
     防止取消读取留下的活跃语句继续持锁。供本模块与 Alembic env.py 共用。"""
     u = normalize_database_url(url)
     kwargs: dict[str, Any] = {}
+    if poolclass is not None:
+        kwargs["poolclass"] = poolclass
     if u.get_backend_name() == "mysql":
         kwargs.update(pool_pre_ping=True, pool_recycle=3600)
     elif u.get_backend_name() == "sqlite":

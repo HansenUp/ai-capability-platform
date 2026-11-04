@@ -19,6 +19,7 @@ from runtime.harness import registry
 from runtime.node import agent as node_agent_mod
 from runtime.node.lifecycle import AdmissionMiddleware, NodeLifecycle
 from runtime.observe import tracing
+from runtime.state import db
 from runtime.state.db import init_db
 from runtime.state.eventlog import RunNotFound, StaleWriter
 from runtime.worker import settings as worker_settings_mod
@@ -45,12 +46,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        if node_agent is not None:
-            await node_agent.stop()
-        await bg.stop()
-        if getattr(app.state, "node_restart_requested", False):
-            await registry.shutdown_pools()
-        tracing.force_flush()
+        try:
+            if node_agent is not None:
+                await node_agent.stop()
+            await bg.stop()
+            if getattr(app.state, "node_restart_requested", False):
+                await registry.shutdown_pools()
+            tracing.force_flush()
+        finally:
+            # Release checked-in connections while their event loop is still alive.
+            # Checked-out work must finish through the background shutdown above.
+            await db.engine.dispose()
         app.state.node_shutdown_complete = True
 
 

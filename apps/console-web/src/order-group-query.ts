@@ -36,6 +36,8 @@ export function proposeOrderGroups(text:string) {
     const states:Record<string,OrderStatus>={全部:"all",待完成:"pending",已完成:"completed",已取消:"cancelled"};
     return previewOrderGroups({since:daily[1]!,until:daily[2]!,status:states[daily[3]!]!,metric:daily[4]==="数量"?"order_count":daily[4]==="平均金额"?"completed_average":"completed_amount",group_by:daily[5]==="日"?"day":daily[5]==="日和状态"?"day_status":"day_currency",bucket_timezone:daily[6]!});
   }
+  const dailyShare=/^统计创建时间从“([^“”]+)”到“([^“”]+)”的订单按日状态占比，时区(UTC|UTC\+08:00)[。?？]?$/.exec(text.trim());
+  if(dailyShare)return previewOrderGroups({since:dailyShare[1]!,until:dailyShare[2]!,status:"all",metric:"status_share",group_by:"day_status",bucket_timezone:dailyShare[3]!});
   const share=/^统计创建时间从“([^“”]+)”到“([^“”]+)”的订单状态占比[。?？]?$/.exec(text.trim());
   if (share) return previewOrderGroups({since:share[1]!,until:share[2]!,status:"all",metric:"status_share",group_by:"status"});
   const m=/^统计创建时间从“([^“”]+)”到“([^“”]+)”的(全部|待完成|已完成|已取消)订单(数量|金额|平均金额)，按(状态|币种|状态和币种)分组[。?？]?$/.exec(text.trim());

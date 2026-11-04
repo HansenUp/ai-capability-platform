@@ -80,7 +80,7 @@ def test_whole_source_fault_never_returns_partial_date_status_groups(fault):
     [
         {"metric": "completed_amount", "status": "completed"},
         {"metric": "completed_average", "status": "completed"},
-        {"metric": "status_share"},
+        {"metric": "status_share", "status": "completed"},
         {"group_by": "day_status_currency"},
         {"bucket_timezone": "Asia/Shanghai"},
         {"status": "paid"},
