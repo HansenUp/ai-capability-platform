@@ -20,12 +20,12 @@ export function orderGroupResults(events:Event[]):{seq:number;value:GroupResult}
     if(!v.complete)return (v.metric!=="status_share"||v.total_order_count===null)&&v.groups.length===0&&typeof v.reason==="string"&&!!v.reason?[{seq:e.seq,value:v}]:[];
     if(v.reason!==null)return [];
     if(v.metric==="status_share"&&(!integer(v.total_order_count)||v.groups.length!==3))return [];
-    const daily=v.group_by==="day"||v.group_by==="day_currency";
+    const daily=v.group_by==="day"||v.group_by==="day_currency"||v.group_by==="day_status";
     const keys=new Set<string>();let total=0;
     for(const g of v.groups){
       if(!g||!g.key||typeof g.key!=="object"||!integer(g.order_count)||(g.order_count===0&&v.metric!=="status_share"))return [];
       const fields=Object.keys(g.key).sort().join();
-      if(fields!==(v.group_by==="status_currency"?"currency,status":v.group_by==="day_currency"?"currency,day":v.group_by))return [];
+      if(fields!==(v.group_by==="status_currency"?"currency,status":v.group_by==="day_currency"?"currency,day":v.group_by==="day_status"?"day,status":v.group_by))return [];
       if(g.key.status!==undefined&&(!["pending","completed","cancelled"].includes(g.key.status)||(v.status_filter!=="all"&&g.key.status!==v.status_filter)))return [];
       if(g.key.currency!==undefined&&!["CNY","USD"].includes(g.key.currency))return [];
       if(daily){

@@ -7,7 +7,7 @@ from data_hub.order_metrics import FIELDS, aggregate, instant
 
 
 def arguments(value):
-    if type(value) is dict and value.get("group_by") in ("day", "day_currency"):
+    if type(value) is dict and value.get("group_by") in ("day", "day_currency", "day_status"):
         from data_hub.order_daily import arguments as daily_arguments
 
         return daily_arguments(value)
@@ -44,13 +44,13 @@ def grouped(result, value):
         "reason": summary["reason"],
         "groups": [],
     }
-    if value["group_by"] in ("day", "day_currency"):
+    if value["group_by"] in ("day", "day_currency", "day_status"):
         base["bucket_timezone"] = value["bucket_timezone"]
     if value["metric"] == "status_share":
         base["total_order_count"] = None
     if not summary["complete"]:
         return base
-    if value["group_by"] in ("day", "day_currency"):
+    if value["group_by"] in ("day", "day_currency", "day_status"):
         from data_hub.order_daily import groups as daily_groups
 
         return daily_groups(result, value, base, since, until)

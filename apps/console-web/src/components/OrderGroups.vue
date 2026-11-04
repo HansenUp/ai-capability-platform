@@ -12,6 +12,7 @@ const status=(s:string|undefined)=>s?({pending:"待完成",completed:"已完成"
     <p v-if="row.value.bucket_timezone">分桶时区：{{row.value.bucket_timezone}}，固定偏移日历日；仅返回有订单的桶，不补空日。</p>
     <p v-if="!row.value.complete" role="alert">统计不可用：{{row.value.reason}}；不补0。</p>
     <template v-else>
+      <p v-if="row.value.group_by==='day_status'">日＋状态仅数量，状态为读取时当前状态；只列实际存在的日期/状态组合，不补空日期或零行。完整来源下未列出的组合无匹配订单。</p>
       <p v-if="row.value.metric==='status_share'">当前窗口全部去重订单数：{{row.value.total_order_count}}；占比以精确分子/分母显示，不作百分比舍入。</p>
       <p v-if="row.value.metric==='status_share'&&row.value.total_order_count===0">空窗口占比未知，不补0%。</p>
       <p v-if="!row.value.groups.length">所选范围无分组；没有可用金额组不等于0金额。</p>

@@ -203,7 +203,7 @@ def install(provider, temporary, *, group_demo=False, source_over_limit=False, d
                 "until": {"type": "string"},
                 "status": {"type": "string", "enum": ["all", "pending", "completed", "cancelled"]},
                 "metric": {"type": "string", "enum": ["order_count", "completed_amount", "completed_average", "status_share"]},
-                "group_by": {"type": "string", "enum": ["status", "currency", "status_currency", "day", "day_currency"]},
+                "group_by": {"type": "string", "enum": ["status", "currency", "status_currency", "day", "day_currency", "day_status"]},
                 "bucket_timezone": {"type": "string", "enum": ["UTC", "UTC+08:00"]},
             },
             "required": ["since", "until", "status", "metric", "group_by"],

@@ -1,10 +1,10 @@
 import {previewDailyGroups, type BucketTimezone} from "./order-daily-query";
 import {previewOrderCount, type OrderStatus} from "./order-count-query";
 export type GroupMetric = "order_count" | "completed_amount" | "completed_average" | "status_share";
-export type GroupDimension = "status" | "currency" | "status_currency" | "day" | "day_currency";
+export type GroupDimension = "status" | "currency" | "status_currency" | "day" | "day_currency" | "day_status";
 export interface GroupRequest { since:string; until:string; status:OrderStatus; metric:GroupMetric; group_by:GroupDimension; bucket_timezone?:BucketTimezone }
 export function previewOrderGroups(input:{since:string;until:string;status:string;metric:string;group_by:string;bucket_timezone?:string}):{request:GroupRequest;explanation:string[]} {
-  if(input.group_by==="day"||input.group_by==="day_currency")return previewDailyGroups(input);
+  if(input.group_by==="day"||input.group_by==="day_currency"||input.group_by==="day_status")return previewDailyGroups(input);
   if(input.bucket_timezone!==undefined)throw new Error("非日分组不接受分桶时区参数。");
   const base = previewOrderCount(input).request;
   if (input.metric === "status_share" && (input.status !== "all" || input.group_by !== "status")) throw new Error("状态占比必须使用全部状态并按状态分组，分母为同窗口全部去重订单数。");
@@ -31,10 +31,10 @@ export function previewOrderGroups(input:{since:string;until:string;status:strin
 }
 export function proposeOrderGroups(text:string) {
   if (text.length > 512) throw new Error("统计描述最多512字符。");
-  const daily=/^统计创建时间从“([^“”]+)”到“([^“”]+)”的(全部|待完成|已完成|已取消)订单(数量|金额|平均金额)，按(日|日和币种)分组，时区(UTC|UTC\+08:00)[。?？]?$/.exec(text.trim());
+  const daily=/^统计创建时间从“([^“”]+)”到“([^“”]+)”的(全部|待完成|已完成|已取消)订单(数量|金额|平均金额)，按(日|日和币种|日和状态)分组，时区(UTC|UTC\+08:00)[。?？]?$/.exec(text.trim());
   if(daily){
     const states:Record<string,OrderStatus>={全部:"all",待完成:"pending",已完成:"completed",已取消:"cancelled"};
-    return previewOrderGroups({since:daily[1]!,until:daily[2]!,status:states[daily[3]!]!,metric:daily[4]==="数量"?"order_count":daily[4]==="平均金额"?"completed_average":"completed_amount",group_by:daily[5]==="日"?"day":"day_currency",bucket_timezone:daily[6]!});
+    return previewOrderGroups({since:daily[1]!,until:daily[2]!,status:states[daily[3]!]!,metric:daily[4]==="数量"?"order_count":daily[4]==="平均金额"?"completed_average":"completed_amount",group_by:daily[5]==="日"?"day":daily[5]==="日和状态"?"day_status":"day_currency",bucket_timezone:daily[6]!});
   }
   const share=/^统计创建时间从“([^“”]+)”到“([^“”]+)”的订单状态占比[。?？]?$/.exec(text.trim());
   if (share) return previewOrderGroups({since:share[1]!,until:share[2]!,status:"all",metric:"status_share",group_by:"status"});

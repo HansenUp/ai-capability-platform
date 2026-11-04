@@ -15,8 +15,8 @@ def arguments(value):
     if value["bucket_timezone"] not in ("UTC", "UTC+08:00"):
         raise ValueError("only UTC and fixed UTC+08:00 supported")
     if value["metric"] == "order_count":
-        if value["group_by"] != "day":
-            raise ValueError("daily count requires day grouping")
+        if value["group_by"] not in ("day", "day_status"):
+            raise ValueError("daily count requires day or day/status grouping")
     elif value["metric"] in ("completed_amount", "completed_average"):
         if value["status"] != "completed" or value["group_by"] != "day_currency":
             raise ValueError("daily money requires completed status and day/currency grouping")
@@ -44,7 +44,9 @@ def groups(result, value, base, since, until):
             if row["currency"] not in ("CNY", "USD"):
                 return base | {"reason": "所选范围币种无效，无法保证日分组完整", "groups": []}
             key["currency"] = row["currency"]
-        identifier = (key["day"], key.get("currency", ""))
+        if value["group_by"] == "day_status":
+            key["status"] = row["status"]
+        identifier = (key["day"], key.get("currency", ""), key.get("status", ""))
         bucket = buckets.setdefault(
             identifier,
             {
