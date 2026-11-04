@@ -34,3 +34,12 @@ test('comparison rejects invented zero-baseline percentage and more than 100 uni
  const e=structuredClone(events);Object.assign(e[1].payload.output,{baseline_count:0,current_count:1,delta_count:1,relative_numerator:0,relative_denominator:1});assert.deepEqual(orderCompareResults(e),[]);
  Object.assign(e[1].payload.output,{baseline_count:60,current_count:60,delta_count:0,relative_numerator:0,relative_denominator:60});assert.deepEqual(orderCompareResults(e),[]);
 });
+
+test('accepted millisecond request and canonical backend echo roundtrip into a visible result',()=>{
+ const e=structuredClone(events);
+ for(const key of ['baseline_since','baseline_until','current_since','current_until']){
+  e[0].payload.input[key]=args[key].replace('00:00:00Z','00:00:00.001Z');
+  e[1].payload.output[key]=e[0].payload.input[key].replace('Z','+00:00');
+ }
+ assert.equal(orderCompareResults(e)[0].value.baseline_since,'2026-10-01T00:00:00.001+00:00');
+});

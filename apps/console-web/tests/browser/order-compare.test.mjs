@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {apply,browser,phase,profile} from './support.mjs';
 const question='对比基准创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”与当前创建时间从“2026-10-02T00:00:00Z”到“2026-10-03T00:00:00Z”的全部订单数量';
-async function preview(page,{baseline='01',current='02',status='all'}={}){
+async function preview(page,{baseline='01',current='02',status='all',millis=false}={}){
  await page.goto(profile.url+'/manage/order-compare');
  for(const [name,value] of [['基准创建起点（含时区）',`2026-10-${baseline}T00:00:00Z`],['基准创建终点（不含，含时区）',`2026-10-${String(Number(baseline)+1).padStart(2,'0')}T00:00:00Z`],['当前创建起点（含时区）',`2026-10-${current}T00:00:00Z`],['当前创建终点（不含，含时区）',`2026-10-${String(Number(current)+1).padStart(2,'0')}T00:00:00Z`]])await page.getByLabel(name,{exact:true}).fill(value);
+ if(millis)for(const name of ['基准创建起点（含时区）','基准创建终点（不含，含时区）','当前创建起点（含时区）','当前创建终点（不含，含时区）']){const input=page.getByLabel(name,{exact:true});await input.fill((await input.inputValue()).replace('00:00:00Z','00:00:00.001Z'));}
  await page.getByLabel('对比共同状态',{exact:true}).selectOption(status);await page.getByRole('button',{name:'预览订单双窗对比',exact:true}).click();
 }
 test('双窗对比预览：明确角色、等长不重叠、自然语言与统一入口零业务请求',async()=>{
@@ -23,7 +24,7 @@ test('双窗对比预览：明确角色、等长不重叠、自然语言与统�
 for(const suite of ['counts','denials'])test(`双窗对比实际闭环 ${suite}：精确差值、零基数、权限、恢复与ACK`,async()=>{
  const tokens=JSON.parse(await readFile(profile.tokens,'utf8'));const engine=await browser(),context=await engine.newContext(),page=await context.newPage();page.setDefaultTimeout(5000);
  const samples=suite==='counts'?[
-  {b:3,c:1,recover:true},{status:'completed',b:2,c:1},{status:'pending',b:1,c:0},{status:'cancelled',b:0,c:0},
+  {b:3,c:1,recover:true},{millis:true,b:2,c:1},{status:'completed',b:2,c:1},{status:'pending',b:1,c:0},{status:'cancelled',b:0,c:0},
   {baseline:'03',current:'05',b:0,c:1},{baseline:'05',current:'06',b:1,c:1},
  ]:[{denied:true,token:tokens.bob},{denied:true,token:tokens.feedback_admin},{denied:true,invalid:'overlap'},{denied:true,invalid:'extra'}];
  try{for(const sample of samples){

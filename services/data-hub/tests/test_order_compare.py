@@ -149,3 +149,12 @@ def test_unrepresentable_utc_arguments_and_source_fail_closed():
     rows[-1][1] = "0001-01-01T00:00:00+14:00"
     out = compared(source(rows), ARGS)
     assert not out["complete"] and out["baseline_count"] is None and out["current_count"] is None and out["reason"]
+
+
+def test_accepted_millisecond_bounds_have_frontend_compatible_exact_echo():
+    args = {k: v.replace("00:00:00Z", "00:00:00.001Z") if k != "status" else v for k, v in ARGS.items()}
+    out = compared(source(ROWS), args)
+    assert out["complete"] and out["baseline_count"] == 2 and out["current_count"] == 1
+    for key in ("baseline_since", "baseline_until", "current_since", "current_until"):
+        assert out[key] == args[key].replace("Z", "+00:00")
+    assert out["delta_count"] == -1 and out["relative_denominator"] == 2

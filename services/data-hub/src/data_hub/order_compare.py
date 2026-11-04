@@ -30,10 +30,10 @@ def compared(result, value):
     bs, bu, cs, cu = arguments(value)
     output = dict(
         profile="synthetic-order-compare-v1",
-        baseline_since=bs.isoformat(),
-        baseline_until=bu.isoformat(),
-        current_since=cs.isoformat(),
-        current_until=cu.isoformat(),
+        baseline_since=bs.isoformat(timespec="milliseconds"),
+        baseline_until=bu.isoformat(timespec="milliseconds"),
+        current_since=cs.isoformat(timespec="milliseconds"),
+        current_until=cu.isoformat(timespec="milliseconds"),
         status_filter=value["status"],
         view_version=result.get("view_version"),
         snapshot_guaranteed=False,
