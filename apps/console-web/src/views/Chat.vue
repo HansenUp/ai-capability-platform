@@ -9,7 +9,7 @@ import { answerValue, RuntimeRequestError, RuntimeRunClient, workbenchCards, typ
 
 function navigateSection(id: string) { const section = document.getElementById(id); section?.scrollIntoView({ block: "start" }); section?.focus({ preventScroll: true }); }
 
-const props = defineProps<{ isolatedQueryText?: string; portalAgent?: string; portalTokenProvider?: () => Promise<string> }>();
+const props = defineProps<{ isolatedQueryText?: string; isolatedCountText?: string; portalAgent?: string; portalTokenProvider?: () => Promise<string> }>();
 const route = useRoute();
 const linkedAgent = computed(() => agentHint(route?.query.agent));
 const linkedRun = computed(() => runHint(route?.query.run));
@@ -346,8 +346,8 @@ async function perform(action: () => Promise<void>) {
 async function send() {
   if (writeBlocked.value || !attachmentsReady.value) return;
   if (!agent.value.trim() || !text.value.trim()) return;
-  const selectedAgent = props.isolatedQueryText !== undefined ? "f4-data-query" : agent.value.trim(), original = text.value;
-  if (props.isolatedQueryText !== undefined) clearConversations();
+  const selectedAgent = props.isolatedCountText !== undefined ? "f10-order-count" : props.isolatedQueryText !== undefined ? "f4-data-query" : agent.value.trim(), original = text.value;
+  if (props.isolatedQueryText !== undefined || props.isolatedCountText !== undefined) clearConversations();
   await ledgerAction(async () => {
     await preflight();
     const current = generation; clear();
@@ -455,7 +455,7 @@ onBeforeUnmount(() => { clearConversations(); generation++; readController?.abor
   </section>
   <h3 id="workbench-compose" tabindex="-1">发起新任务</h3>
   <p>每次创建独立 Run；已有任务请使用下方定位入口继续读取。</p>
-  <section v-if="props.isolatedQueryText === undefined" class="panel" aria-label="隔离会话">
+  <section v-if="props.isolatedQueryText === undefined && props.isolatedCountText === undefined" class="panel" aria-label="隔离会话">
       <h3>隔离会话 · 每轮独立任务</h3>
       <p>仅本机试用启用。会话列表限定当前 Agent，重载后请重新核对 Agent 并读取本人会话。显式选择历史后登记下一轮；不自动重发，原始问题与历史快照由服务端绑定。</p>
       <fieldset :disabled="busy || checking || !verified || writeBlocked">
@@ -496,8 +496,9 @@ onBeforeUnmount(() => { clearConversations(); generation++; readController?.abor
     <form @submit.prevent="send"><fieldset :disabled="busy || checking || !applied || writeBlocked"><legend>发送消息</legend>
     <p v-if="linkedAgent && !props.portalTokenProvider">发布页推荐 Agent：{{ linkedAgent }}。仅填入标识，不固定版本、不转移管理权限；执行时由 Runtime 重新验权。</p>
     <button v-if="linkedAgent && !props.portalTokenProvider" type="button" @click="agent = linkedAgent">使用发布页 Agent（不创建任务）</button>
+    <button v-if="props.isolatedCountText !== undefined" type="button" @click="agent = 'f10-order-count'; text = props.isolatedCountText; clearConversations()">填入订单统计草稿（不创建）</button>
     <button v-if="props.isolatedQueryText !== undefined" type="button" @click="agent = 'f4-data-query'; text = props.isolatedQueryText; clearConversations()">填入受限查询草稿（不创建）</button>
-    <label>Agent ID <input v-model="agent" :readonly="!!props.portalTokenProvider || props.isolatedQueryText !== undefined" required maxlength="64" /></label><label>消息 <textarea v-model="text" required /></label><button :disabled="!attachmentsReady">登记新 Run（尚未创建）</button>
+    <label>Agent ID <input v-model="agent" :readonly="!!props.portalTokenProvider || props.isolatedQueryText !== undefined || props.isolatedCountText !== undefined" required maxlength="64" /></label><label>消息 <textarea v-model="text" required /></label><button :disabled="!attachmentsReady">登记新 Run（尚未创建）</button>
   </fieldset></form>
   <section v-if="props.portalTokenProvider && verified" aria-label="本人 Run 记录">
     <h3>当前 Agent · 本人 Run 记录</h3>

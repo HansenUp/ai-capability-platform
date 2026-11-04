@@ -573,6 +573,22 @@ def main() -> None:
                         == 201
                     )
                     assert seed.post("/admin/agents/f11-dataset-demo/versions/1/publish", json={"eval_passed": True}).status_code == 200
+        if args.analytics_readonly_demo:
+            with httpx.Client(base_url=base, headers={"Authorization": f"Bearer {admin}"}, trust_env=False) as seed:
+                assert (
+                    seed.post(
+                        "/admin/agents",
+                        json={
+                            "agent_id": "f10-order-count",
+                            "version": "1",
+                            "harness": "mock",
+                            "model_alias": "synthetic-analytics",
+                            "config": {"tools": ["analytics.order_count"]},
+                        },
+                    ).status_code
+                    == 201
+                )
+                assert seed.post("/admin/agents/f10-order-count/versions/1/publish", json={"eval_passed": True}).status_code == 200
         if args.ticket_readonly_demo:
             args.browser_info.write_text(json.dumps({"runtime": base, "console": console_base, "tokens": str(token_file)}))
             args.browser_info.chmod(0o600)

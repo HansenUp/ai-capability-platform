@@ -61,6 +61,7 @@ function build() {
       <li>撤权阻止后续查询，但不追回已交付结果；签名下载、真实数据及正式身份接入仍未验收。</li>
     </ul></details>
   </section>
+  <p><a href="/manage/order-counts">订单日期、状态与数量查询（独立合成经营profile）</a>：需专用隔离环境，不扩大本页商品视图权限。</p>
   <DataViewDraft />
   <div id="f4-registration"><DataViewRegistry /></div>
   <div id="f4-policy"><DataPolicyRegistry /></div>

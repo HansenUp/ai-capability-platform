@@ -34,6 +34,8 @@ def install(provider, temporary):
     path = temporary / "f63-synthetic.sqlite"
     if path.exists():
         raise RuntimeError("fresh F6.3 database required")
+    from data_hub.order_count import arguments as count_arguments
+    from data_hub.order_count import collect_counts
     from data_hub.order_metrics import FIELDS, collect, window
 
     view_sql = canonical_view_sql("report", "synthetic", "tenant", FIELDS)
@@ -116,7 +118,11 @@ def install(provider, temporary):
 
     class Catalog:
         async def by_name(self, name, tenant):
-            return cap if name == cap.name and tenant == cap.tenant else None
+            if tenant != cap.tenant:
+                return None
+            if name == "analytics.order_count":
+                return cap.model_copy(update={"id": "cap.analytics.order_count", "name": "analytics.order_count"})
+            return cap if name == cap.name else None
 
         async def connector_for(self, capability):
             return SimpleNamespace(name="data-hub", endpoint="http://data-hub.test", protocol="rest", health="up")
@@ -134,6 +140,23 @@ def install(provider, temporary):
             "type": "object",
             "properties": {"since": {"type": "string"}, "until": {"type": "string"}},
             "required": ["since", "until"],
+            "additionalProperties": False,
+        },
+    )
+
+    LOCAL_TOOLS["analytics.order_count"] = ToolSpec(
+        name="analytics.order_count",
+        description="合成订单创建窗口与当前状态数量",
+        capability_id="cap.analytics.order_count",
+        data_class="confidential",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "since": {"type": "string"},
+                "until": {"type": "string"},
+                "status": {"type": "string", "enum": ["all", "pending", "completed", "cancelled"]},
+            },
+            "required": ["since", "until", "status"],
             "additionalProperties": False,
         },
     )
@@ -170,7 +193,7 @@ def install(provider, temporary):
             return provider._jwks(request)
         if request.url.host != "data-hub.test" or request.method != "POST":
             raise AssertionError("unexpected F4 upstream")
-        run_id, call_id, _ = expected.get()
+        run_id, call_id, _, tool_name = expected.get()
         async with db.SessionLocal() as session:
             stored = await session.get(db.Run, run_id)
             agent_id, agent_version = stored.agent_id, stored.agent_version
@@ -211,7 +234,8 @@ def install(provider, temporary):
 
         try:
             arguments = json.loads(request.content)
-            window(arguments)
+            count_only = tool_name == "analytics.order_count"
+            (count_arguments if count_only else window)(arguments)
 
             async def binding_provider(user, query):
                 return authority["binding"]
@@ -231,7 +255,7 @@ def install(provider, temporary):
                     dict(view_id="synthetic_orders", version="v1", columns=list(FIELDS), filters=[], limit=100)
                 )
 
-            output = await collect(reader, arguments, lambda: authority["revision"])
+            output = await (collect_counts if count_only else collect)(reader, arguments, lambda: authority["revision"])
             output.update(policy_version="f63-policy-v1", data_class="confidential")
             print("F63_VERIFIED " + json.dumps({"run_id": run_id, "call_id": call_id, "verified": True}), flush=True)
             return httpx.Response(200, json=output)
@@ -243,7 +267,7 @@ def install(provider, temporary):
     previous = toolbroker.execute_tool
 
     async def execute(tool, tool_input, dry_run=False, rc=None, call_id=None, idempotency_key=None):
-        if tool.name != "analytics.orders":
+        if tool.name not in {"analytics.orders", "analytics.order_count"}:
             return await previous(tool, tool_input, dry_run, rc, call_id, idempotency_key)
         if dry_run or rc is None or not rc.credential or not call_id:
             raise toolbroker.GatewayToolError("isolated query denied")
@@ -253,7 +277,7 @@ def install(provider, temporary):
         principal = principal_from_claims(claims)
         if "act" in claims or principal.auth_method != "user" or claims.get("principal_type", "user") != "user":
             return {"error": "direct user required"}
-        context = expected.set((rc.run_id, call_id, rc.credential))
+        context = expected.set((rc.run_id, call_id, rc.credential, tool.name))
         try:
             service = provider.token({"sub": "sa-runtime", "azp": "ai-runtime-svc", "aud": "capability-gateway"})
             async with db.SessionLocal() as session:
