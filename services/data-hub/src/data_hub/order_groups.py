@@ -13,7 +13,7 @@ def arguments(value):
     if value["metric"] == "order_count":
         if value["group_by"] not in ("status", "currency", "status_currency"):
             raise ValueError("unsupported count grouping")
-    elif value["metric"] == "completed_amount":
+    elif value["metric"] in ("completed_amount", "completed_average"):
         if value["status"] != "completed" or value["group_by"] != "currency":
             raise ValueError("completed amounts require completed status and currency grouping")
     else:
@@ -51,7 +51,7 @@ def grouped(result, value):
         key = tuple(row[field] for field in dimensions)
         group = groups.setdefault(key, {"key": dict(zip(dimensions, key, strict=True)), "order_count": 0})
         group["order_count"] += 1
-        if value["metric"] == "completed_amount":
+        if value["metric"] in ("completed_amount", "completed_average"):
             group.setdefault("valid_amount_count", 0)
             group.setdefault("known", 0)
             amount = row["amount_minor"]
@@ -60,7 +60,7 @@ def grouped(result, value):
                 group["known"] += amount
     output = []
     for _, group in sorted(groups.items()):
-        if value["metric"] == "completed_amount":
+        if value["metric"] in ("completed_amount", "completed_average"):
             subtotal = group.pop("known")
             n, valid = group["order_count"], group["valid_amount_count"]
             group.update(
@@ -69,6 +69,8 @@ def grouped(result, value):
                 amount_coverage=valid / n,
                 amount_complete=valid == n,
             )
+            if value["metric"] == "completed_average":
+                group.update(average_numerator_minor=str(subtotal) if valid == n else None, average_denominator=n if valid == n else None)
         output.append(group)
     return base | {"complete": True, "reason": None, "groups": output}
 

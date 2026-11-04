@@ -31,6 +31,10 @@ test('F10金额分组：分币种、缺失/零/空/拒绝与分组数量，本�
   const engine=await browser(),context=await engine.newContext(),page=await context.newPage();page.setDefaultTimeout(5000);
   const cases=[
     {id:'money',day:1,until:2,metric:'completed_amount',status:'completed',group:'currency',n:2},
+    {id:'average',day:1,until:2,metric:'completed_average',status:'completed',group:'currency',n:2},
+    {id:'average-partial',day:1,until:3,metric:'completed_average',status:'completed',group:'currency',n:2},
+    {id:'average-zero',day:5,until:6,metric:'completed_average',status:'completed',group:'currency',n:1},
+    {id:'average-empty',day:3,until:4,metric:'completed_average',status:'completed',group:'currency',n:0},
     {id:'partial',day:1,until:3,metric:'completed_amount',status:'completed',group:'currency',n:2},
     {id:'missing',day:2,until:3,metric:'completed_amount',status:'completed',group:'currency',n:1},
     {id:'zero',day:5,until:6,metric:'completed_amount',status:'completed',group:'currency',n:1},
@@ -69,6 +73,10 @@ test('F10金额分组：分币种、缺失/零/空/拒绝与分组数量，本�
         assert.equal(results[0].payload.status,'ok');const output=results[0].payload.output;assert.equal(output.groups.length,sample.n);await panel.waitFor();
         assert.equal(JSON.stringify(output).includes('NEVER-MODEL'),false);assert.equal(JSON.stringify(output).includes('order_id'),false);assert.equal(Object.hasOwn(output,'total_minor'),false);
         if(sample.id==='money')assert.deepEqual(output.groups.map(g=>g.total_minor),['12000','500']);
+        if(sample.id==='average'){assert.equal(output.groups[0].average_numerator_minor,'12000');assert.equal(output.groups[0].average_denominator,1);assert.match(await panel.innerText(),/平均金额/);}
+        if(sample.id==='average-partial'){assert.equal(output.groups[0].average_numerator_minor,null);assert.equal(output.groups[0].average_denominator,null);assert.match(await panel.innerText(),/均值以完整金额/);}
+        if(sample.id==='average-zero')assert.equal(output.groups[0].average_numerator_minor,'0');
+        if(sample.id==='average-empty')assert.match(await panel.innerText(),/无分组/);
         if(sample.id==='partial'){assert.equal(output.groups[0].total_minor,null);assert.equal(output.groups[0].known_minor,'12000');assert.equal(output.groups[0].amount_coverage,0.5);assert.match(await panel.innerText(),/正式总额未知/);}
         if(sample.id==='missing'){assert.equal(output.groups[0].total_minor,null);assert.equal(output.groups[0].known_minor,null);}
         if(sample.id==='zero')assert.equal(output.groups[0].total_minor,'0');

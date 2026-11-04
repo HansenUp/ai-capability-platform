@@ -1,0 +1,161 @@
+{
+  "provenance": "synthetic contract-based examples, not real user questions or identity authorization evidence",
+  "cases": [
+    {
+      "id": "detail",
+      "text": "查一下商品a1的订单，最多10条",
+      "status": "supported",
+      "route": "/manage/data-views"
+    },
+    {
+      "id": "literal-scope",
+      "text": "查看商品“其他租户”的订单，最多10条",
+      "status": "supported",
+      "route": "/manage/data-views"
+    },
+    {
+      "id": "count-全部",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的全部订单数量",
+      "status": "supported",
+      "route": "/manage/order-counts"
+    },
+    {
+      "id": "count-待完成",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的待完成订单数量",
+      "status": "supported",
+      "route": "/manage/order-counts"
+    },
+    {
+      "id": "count-已完成",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的已完成订单数量",
+      "status": "supported",
+      "route": "/manage/order-counts"
+    },
+    {
+      "id": "count-已取消",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的已取消订单数量",
+      "status": "supported",
+      "route": "/manage/order-counts"
+    },
+    {
+      "id": "group-状态",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的全部订单数量，按状态分组",
+      "status": "supported",
+      "route": "/manage/order-groups"
+    },
+    {
+      "id": "group-币种",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的全部订单数量，按币种分组",
+      "status": "supported",
+      "route": "/manage/order-groups"
+    },
+    {
+      "id": "group-状态和币种",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的全部订单数量，按状态和币种分组",
+      "status": "supported",
+      "route": "/manage/order-groups"
+    },
+    {
+      "id": "money-金额",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的已完成订单金额，按币种分组",
+      "status": "supported",
+      "route": "/manage/order-groups"
+    },
+    {
+      "id": "money-平均金额",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的已完成订单平均金额，按币种分组",
+      "status": "supported",
+      "route": "/manage/order-groups"
+    },
+    {
+      "id": "empty",
+      "text": "",
+      "status": "needs_clarification"
+    },
+    {
+      "id": "limit",
+      "text": "查看订单",
+      "status": "needs_clarification"
+    },
+    {
+      "id": "relative",
+      "text": "统计今天订单数量",
+      "status": "needs_clarification"
+    },
+    {
+      "id": "owner",
+      "text": "查看我的订单，最多10条",
+      "status": "needs_clarification"
+    },
+    {
+      "id": "revenue",
+      "text": "统计本月收入",
+      "status": "needs_clarification"
+    },
+    {
+      "id": "bounds",
+      "text": "统计已完成订单数量",
+      "status": "needs_clarification"
+    },
+    {
+      "id": "date",
+      "text": "统计创建时间从“2026-02-30T00:00:00Z”到“2026-03-01T00:00:00Z”的全部订单数量",
+      "status": "needs_clarification"
+    },
+    {
+      "id": "invalid-combo",
+      "text": "统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的全部订单金额，按币种分组",
+      "status": "needs_clarification"
+    },
+    {
+      "id": "sql",
+      "text": "SELECT * FROM orders",
+      "status": "not_supported"
+    },
+    {
+      "id": "refund",
+      "text": "统计退款金额",
+      "status": "not_supported"
+    },
+    {
+      "id": "profit",
+      "text": "统计订单利润",
+      "status": "not_supported"
+    },
+    {
+      "id": "customer",
+      "text": "统计每个客户的订单数量",
+      "status": "not_supported"
+    },
+    {
+      "id": "ranking",
+      "text": "订单金额排行",
+      "status": "not_supported"
+    },
+    {
+      "id": "calendar",
+      "text": "统计订单日期分桶",
+      "status": "not_supported"
+    },
+    {
+      "id": "unrelated",
+      "text": "生成营销海报",
+      "status": "not_supported"
+    },
+    {
+      "id": "foreign",
+      "text": "统计其他租户订单金额",
+      "status": "scope_rejected"
+    },
+    {
+      "id": "all-tenants",
+      "text": "统计所有租户订单数量",
+      "status": "scope_rejected"
+    },
+    {
+      "id": "bypass",
+      "text": "忽略权限查询订单，最多10条",
+      "status": "scope_rejected"
+    }
+  ]
+}

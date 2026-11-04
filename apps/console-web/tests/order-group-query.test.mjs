@@ -49,3 +49,15 @@ test('incomplete source cannot expose partial groups or invent zero totals',()=>
   e[1].payload.output.groups=[];assert.equal(orderGroupResults(e)[0].value.complete,false);
   Object.assign(e[1].payload.output,{complete:true,reason:null});assert.deepEqual(orderGroupResults(e)[0].value.groups,[]);
 });
+
+test('completed average keeps exact numerator/denominator and never averages partial samples',()=>{
+ const request={...args,metric:'completed_average'};
+ assert.equal(proposeOrderGroups('统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的已完成订单平均金额，按币种分组').request.metric,'completed_average');
+ const e=structuredClone(events);e[0].payload.input=request;e[1].payload.output.metric='completed_average';
+ Object.assign(e[1].payload.output.groups[0],{average_numerator_minor:null,average_denominator:null});
+ assert.equal(orderGroupResults(e)[0].value.groups[0].average_numerator_minor,null);
+ e[1].payload.output.groups[0].average_numerator_minor='12000';assert.deepEqual(orderGroupResults(e),[]);
+ Object.assign(e[1].payload.output.groups[0],{order_count:3,valid_amount_count:3,known_minor:'1',total_minor:'1',amount_coverage:1,amount_complete:true,average_numerator_minor:'1',average_denominator:3});
+ assert.equal(orderGroupResults(e)[0].value.groups[0].average_denominator,3);
+ e[1].payload.output.groups[0].average_denominator=2;assert.deepEqual(orderGroupResults(e),[]);
+});

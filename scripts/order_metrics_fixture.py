@@ -184,7 +184,7 @@ def install(provider, temporary, *, group_demo=False):
                 "since": {"type": "string"},
                 "until": {"type": "string"},
                 "status": {"type": "string", "enum": ["all", "pending", "completed", "cancelled"]},
-                "metric": {"type": "string", "enum": ["order_count", "completed_amount"]},
+                "metric": {"type": "string", "enum": ["order_count", "completed_amount", "completed_average"]},
                 "group_by": {"type": "string", "enum": ["status", "currency", "status_currency"]},
             },
             "required": ["since", "until", "status", "metric", "group_by"],

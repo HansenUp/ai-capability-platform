@@ -36,6 +36,7 @@ function build() {
 }
 </script>
 <template>
+  <p><router-link to="/manage/queries">受限查询统一入口与能力说明</router-link></p>
   <h2>受限视图 · 合成请求预览</h2>
   <p>先生成草稿，再显式登记和执行隔离查询；仅合成数据，不调用真实模型。合成清单不构成授权。</p>
   <section aria-label="合成视图权限说明">

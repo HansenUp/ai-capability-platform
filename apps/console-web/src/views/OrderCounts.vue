@@ -16,6 +16,7 @@ function build(natural = false) {
 }
 </script>
 <template>
+  <p><router-link to="/manage/queries">受限查询统一入口与能力说明</router-link></p>
   <h2>订单日期、状态与数量 · 合成隔离查询</h2>
   <p>独立经营视图 synthetic_orders/v1，不复用旧orders商品字段权限。仅专用隔离经营环境可执行；普通演示不会自动启用。<a href="/manage/data-views">返回商品明细查询</a></p>
   <section aria-label="订单统计字段与口径">

@@ -1,6 +1,6 @@
 import {previewOrderGroups, type GroupRequest} from "./order-group-query";
 type Event={seq:number;type:string;payload:Record<string,unknown>};
-export interface GroupRow {key:{status?:string;currency?:string};order_count:number;valid_amount_count?:number;known_minor?:string|null;total_minor?:string|null;amount_coverage?:number;amount_complete?:boolean}
+export interface GroupRow {key:{status?:string;currency?:string};order_count:number;valid_amount_count?:number;known_minor?:string|null;total_minor?:string|null;amount_coverage?:number;amount_complete?:boolean;average_numerator_minor?:string|null;average_denominator?:number|null}
 export interface GroupResult {profile:string;since:string;until:string;status_filter:string;metric:string;group_by:string;view_version:string;policy_version:string;read_started:string;read_finished:string;snapshot_guaranteed:boolean;complete:boolean;reason:string|null;groups:GroupRow[]}
 const integer=(x:unknown):x is number=>Number.isInteger(x)&&Number(x)>=0&&Number(x)<=100;
 const money=(x:unknown):x is string=>typeof x==="string"&&/^(0|[1-9][0-9]*)$/.test(x)&&x.length<=128;
@@ -27,11 +27,14 @@ export function orderGroupResults(events:Event[]):{seq:number;value:GroupResult}
       if(g.key.currency!==undefined&&!["CNY","USD"].includes(g.key.currency))return [];
       const key=JSON.stringify([g.key.status??null,g.key.currency??null]);if(keys.has(key))return [];keys.add(key);
       total+=g.order_count;if(total>100)return [];
-      if(v.metric==="completed_amount"){
+      if(v.metric!=="order_count"){
         const n=g.valid_amount_count;
         if(!integer(n)||n>g.order_count||g.amount_complete!==(n===g.order_count)||g.amount_coverage!==n/g.order_count
           ||(n===0?g.known_minor!==null:!money(g.known_minor))
           ||(n===g.order_count?g.total_minor!==g.known_minor:g.total_minor!==null))return [];
+        if(v.metric==="completed_average"&&(g.amount_complete
+          ?g.average_numerator_minor!==g.total_minor||g.average_denominator!==g.order_count
+          :g.average_numerator_minor!==null||g.average_denominator!==null))return [];
       }else if(Object.keys(g).sort().join()!=="key,order_count")return [];
     }
     return [{seq:e.seq,value:v}];

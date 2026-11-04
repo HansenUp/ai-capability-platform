@@ -129,3 +129,26 @@ async def test_delivery_rechecks_do_not_release_old_groups(change):
     with pytest.raises(ValueError):
         await collect_groups(reader, ARGS, lambda: state["revision"])
     assert state["calls"] == 2
+
+
+def test_completed_average_is_exact_and_requires_complete_amounts():
+    args = ARGS | {"metric": "completed_average"}
+    rows = [ROWS[0].copy(), ROWS[0].copy(), ROWS[0].copy()]
+    for n, row in enumerate(rows):
+        row[0] = str(n)
+        row[3] = 0
+    rows[0][3] = 1
+    group = grouped(source(rows), args)["groups"][0]
+    assert group["average_numerator_minor"] == "1" and group["average_denominator"] == 3
+    rows[0][3] = 10**20 + 1
+    assert grouped(source(rows), args)["groups"][0]["average_numerator_minor"] == str(10**20 + 1)
+    rows[0][3] = 0
+    assert grouped(source(rows), args)["groups"][0]["average_numerator_minor"] == "0"
+    rows[1][3] = None
+    group = grouped(source(rows), args)["groups"][0]
+    assert group["average_numerator_minor"] is None and group["average_denominator"] is None
+    assert grouped(source([]), args)["groups"] == []
+    with pytest.raises(ValueError):
+        arguments(args | {"status": "all"})
+    with pytest.raises(ValueError):
+        arguments(args | {"group_by": "status"})
