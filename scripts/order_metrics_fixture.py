@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
 
 
-def install(provider, temporary, *, group_demo=False, source_over_limit=False):
+def install(provider, temporary, *, group_demo=False, source_over_limit=False, daily_demo=False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/data-hub/src"))
     from capability_gateway import act, auth, config, connectors, main, policy, state
     from capability_gateway.registry import Capability
@@ -62,6 +62,17 @@ def install(provider, temporary, *, group_demo=False, source_over_limit=False):
                 [
                     ("default", "ZERO", "2026-10-05T00:00:00Z", "completed", 0, "CNY", "2026-10-05T00:00:00Z"),
                     ("default", "BAD-CURRENCY", "2026-10-06T00:00:00Z", "completed", 42, "EUR", "2026-10-06T00:00:00Z"),
+                ],
+            )
+        if daily_demo:
+            if not group_demo:
+                raise ValueError("daily source requires isolated grouping profile")
+            connection.executemany(
+                "INSERT INTO synthetic VALUES (?,?,?,?,?,?,?)",
+                [
+                    ("default", "DAY-BEFORE", "2026-10-01T15:59:59.999Z", "completed", 100, "CNY", "invalid"),
+                    ("default", "DAY-AT", "2026-10-01T16:00:00Z", "completed", 200, "CNY", "invalid"),
+                    ("default", "DAY-AFTER", "2026-10-01T16:00:00.001Z", "pending", None, "CNY", "invalid"),
                 ],
             )
         if source_over_limit:
@@ -192,7 +203,8 @@ def install(provider, temporary, *, group_demo=False, source_over_limit=False):
                 "until": {"type": "string"},
                 "status": {"type": "string", "enum": ["all", "pending", "completed", "cancelled"]},
                 "metric": {"type": "string", "enum": ["order_count", "completed_amount", "completed_average", "status_share"]},
-                "group_by": {"type": "string", "enum": ["status", "currency", "status_currency"]},
+                "group_by": {"type": "string", "enum": ["status", "currency", "status_currency", "day", "day_currency"]},
+                "bucket_timezone": {"type": "string", "enum": ["UTC", "UTC+08:00"]},
             },
             "required": ["since", "until", "status", "metric", "group_by"],
             "additionalProperties": False,

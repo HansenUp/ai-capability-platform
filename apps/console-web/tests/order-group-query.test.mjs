@@ -1,13 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-import ts from 'typescript';
-const compile=file=>ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
-const url=s=>`data:text/javascript;base64,${Buffer.from(s).toString('base64')}`;
-const base=url(compile('../src/order-count-query.ts'));
-const query=url(compile('../src/order-group-query.ts').replace('"./order-count-query"',JSON.stringify(base)));
-const {previewOrderGroups,proposeOrderGroups}=await import(query);
-const {orderGroupResults}=await import(url(compile('../src/order-group-result.ts').replace('"./order-group-query"',JSON.stringify(query))));
+import {moduleUrl} from './support/compile-query-modules.mjs';
+const {previewOrderGroups,proposeOrderGroups}=await import(moduleUrl(new URL('../src/order-group-query.ts',import.meta.url)));
+const {orderGroupResults}=await import(moduleUrl(new URL('../src/order-group-result.ts',import.meta.url)));
 const args={since:'2026-10-01T00:00:00Z',until:'2026-10-02T00:00:00Z',status:'completed',metric:'completed_amount',group_by:'currency'};
 test('money query keeps currencies separate and explicit natural language preserves scope',()=>{
   const p=previewOrderGroups({...args,since:'2026-10-01T08:00:00+08:00'});

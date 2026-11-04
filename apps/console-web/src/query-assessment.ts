@@ -5,7 +5,7 @@ import {proposeOrderGroups} from "./order-group-query";
 export const queryCapabilities = [
   {id:"detail",name:"商品字段明细",route:"/manage/data-views",scope:"商品精确匹配、固定遮盖、1–100行",example:"查一下商品a1的订单，最多10条"},
   {id:"count",name:"日期、状态与数量",route:"/manage/order-counts",scope:"显式带时区创建窗口、当前状态、去重数量",example:"统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的全部订单数量"},
-  {id:"groups",name:"金额与受限分组",route:"/manage/order-groups",scope:"数量及状态占比；已完成金额及均值分币种",example:"统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的已完成订单金额，按币种分组"},
+  {id:"groups",name:"金额与受限分组",route:"/manage/order-groups",scope:"数量/状态占比；显式时区按日；金额及均值分币种",example:"统计创建时间从“2026-10-01T00:00:00Z”到“2026-10-02T00:00:00Z”的已完成订单金额，按币种分组"},
 ] as const;
 export type AssessmentStatus="supported"|"needs_clarification"|"not_supported"|"scope_rejected";
 export interface QueryAssessment {status:AssessmentStatus;reason:string;missing:string[];target?:string;route?:string;request?:unknown}

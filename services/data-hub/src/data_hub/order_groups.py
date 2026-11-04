@@ -7,6 +7,10 @@ from data_hub.order_metrics import FIELDS, aggregate, instant
 
 
 def arguments(value):
+    if type(value) is dict and value.get("group_by") in ("day", "day_currency"):
+        from data_hub.order_daily import arguments as daily_arguments
+
+        return daily_arguments(value)
     if type(value) is not dict or set(value) != {"since", "until", "status", "metric", "group_by"}:
         raise ValueError("only explicit window/status/metric/group_by accepted")
     bounds = count_arguments({k: value[k] for k in ("since", "until", "status")})
@@ -40,10 +44,16 @@ def grouped(result, value):
         "reason": summary["reason"],
         "groups": [],
     }
+    if value["group_by"] in ("day", "day_currency"):
+        base["bucket_timezone"] = value["bucket_timezone"]
     if value["metric"] == "status_share":
         base["total_order_count"] = None
     if not summary["complete"]:
         return base
+    if value["group_by"] in ("day", "day_currency"):
+        from data_hub.order_daily import groups as daily_groups
+
+        return daily_groups(result, value, base, since, until)
     if value["metric"] == "status_share":
         total = summary["order_count"]
         return base | {
