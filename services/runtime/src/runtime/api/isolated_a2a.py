@@ -13,12 +13,15 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Integer, String, UniqueConstraint, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from typing_extensions import TypedDict
 
 from ai_contract import RunEventType
 from runtime.api import isolated_discovery as discovery
 from runtime.api import workbench, workbench_create
 from runtime.api.auth import Principal, current_principal, verify_jwt
+from runtime.config import settings
 from runtime.loop.toolbroker import hmac_json
 from runtime.state import db
 
@@ -26,6 +29,14 @@ EXTENSION = "urn:ai-platform:isolated:workbench:1"
 ENABLED = object()
 ACTION = "a2a_create"
 PREFIX = "/v1/isolated-a2a"
+
+
+class Receipt(TypedDict):
+    profile: str
+    receipt: dict[str, object]
+    messageId: str
+    contextId: str
+    taskId: str | None
 
 
 class Metadata(DeclarativeBase):
@@ -54,7 +65,7 @@ class Withdrawal(Metadata):
     revision: Mapped[int] = mapped_column(Integer)
 
 
-async def withdrawal_evidence(session, row, mapping):
+async def withdrawal_evidence(session: AsyncSession, row: db.WorkbenchAttempt, mapping: Mapping) -> None:
     evidence = await session.get(Withdrawal, row.attempt_id)
     if (
         evidence is None
@@ -69,12 +80,12 @@ async def withdrawal_evidence(session, row, mapping):
     await no_creation_effect(session, row)
 
 
-async def no_creation_effect(session, row):
+async def no_creation_effect(session: AsyncSession, row: db.WorkbenchAttempt) -> None:
     for model in (db.Run, db.RunInput, db.RunCredential):
         if await session.get(model, row.run_id) is not None:
             raise HTTPException(409, "creation evidence conflicts with withdrawal")
-    for model in (db.RunEventRow, db.ToolOperation, db.ContinuationInput):
-        if await session.scalar(select(model.run_id).where(model.run_id == row.run_id).limit(1)) is not None:
+    for event_model in (db.RunEventRow, db.ToolOperation, db.ContinuationInput):
+        if await session.scalar(select(event_model.run_id).where(event_model.run_id == row.run_id).limit(1)) is not None:
             raise HTTPException(409, "creation records conflict with withdrawal")
 
 
@@ -97,7 +108,7 @@ class Configuration(Strict):
 
     @field_validator("returnImmediately", mode="before")
     @classmethod
-    def explicit_true(cls, value):
+    def explicit_true(cls, value: object) -> Literal[True]:
         if value is not True:
             raise ValueError("only explicit true is supported")
         return value
@@ -120,18 +131,18 @@ class Evidence(Strict):
 
 
 class ExtensionMetadata(Strict):
-    receipt: Evidence = Field(alias=EXTENSION)
+    receipt: Evidence = Field(alias="urn:ai-platform:isolated:workbench:1")
 
 
 class Send(Envelope):
     metadata: ExtensionMetadata
 
 
-async def access(request: Request, response: Response, principal: Principal = Depends(current_principal)):
+async def access(request: Request, response: Response, principal: Principal = Depends(current_principal)) -> Principal:
     response.headers["Cache-Control"] = "no-store"
     if (
         getattr(request.app.state, "isolated_a2a", None) is not ENABLED
-        or discovery.settings.runtime_env != "dev"
+        or settings.runtime_env != "dev"
         or db.engine.url.get_backend_name() != "sqlite"
     ):
         raise HTTPException(503, "isolated A2A disabled")
@@ -140,6 +151,8 @@ async def access(request: Request, response: Response, principal: Principal = De
     if request.headers.get("A2A-Extensions") != EXTENSION:
         raise HTTPException(400, "ExtensionSupportRequired")
     workbench.user_scope(principal)
+    if not principal.token:
+        raise HTTPException(403, "signed direct user required")
     if "act" in await verify_jwt(principal.token, request):
         raise HTTPException(403, "direct user required")
     return principal
@@ -160,13 +173,13 @@ def digest(body: Envelope, scope: str, agent: str) -> str:
     )
 
 
-async def admit(request, principal, agent, version):
+async def admit(request: Request, principal: Principal, agent: str, version: str) -> None:
     catalog = await discovery.discover(request, Response(), principal)
     if not any(item.agent_id == agent and item.version == version for item in catalog.items):
         raise HTTPException(403, "agent unavailable")
 
 
-async def owned(session, attempt_id, principal):
+async def owned(session: AsyncSession, attempt_id: str, principal: Principal) -> tuple[db.WorkbenchAttempt, Mapping]:
     row = await workbench.owned(session, attempt_id, workbench.user_scope(principal))
     mapping = await session.get(Mapping, attempt_id)
     if row.action != ACTION or mapping is None or mapping.scope_id != row.scope_id or mapping.run_id != row.run_id:
@@ -174,7 +187,7 @@ async def owned(session, attempt_id, principal):
     return row, mapping
 
 
-def receipt(row, mapping):
+def receipt(row: db.WorkbenchAttempt, mapping: Mapping) -> Receipt:
     return {
         "profile": EXTENSION,
         "receipt": workbench.view(row),
@@ -184,7 +197,7 @@ def receipt(row, mapping):
     }
 
 
-async def committed_evidence(session, row, principal):
+async def committed_evidence(session: AsyncSession, row: db.WorkbenchAttempt, principal: Principal) -> db.Run:
     run = await session.get(db.Run, row.run_id)
     event = await session.get(db.RunEventRow, (row.run_id, row.evidence_seq)) if row.evidence_seq else None
     if (
@@ -211,7 +224,7 @@ async def committed_evidence(session, row, principal):
 
 
 @router.post("/prepare")
-async def prepare(body: Prepare, request: Request, principal: Principal = Depends(access)):
+async def prepare(body: Prepare, request: Request, principal: Principal = Depends(access)) -> Receipt:
     attempt_id = str(UUID(body.attempt_id))
     scope_id = workbench.user_scope(principal)
     bound = digest(body, scope_id, body.agent_id)
@@ -271,7 +284,7 @@ async def prepare(body: Prepare, request: Request, principal: Principal = Depend
 
 
 @router.get("/attempts/{attempt_id}")
-async def recover(attempt_id: UUID, principal: Principal = Depends(access)):
+async def recover(attempt_id: UUID, principal: Principal = Depends(access)) -> Receipt:
     async with db.SessionLocal() as session:
         row, mapping = await owned(session, str(attempt_id), principal)
         if row.status == "COMMITTED":
@@ -282,12 +295,15 @@ async def recover(attempt_id: UUID, principal: Principal = Depends(access)):
 
 
 @router.post("/message:send")
-async def send(body: Send, request: Request, principal: Principal = Depends(access)):
+async def send(body: Send, request: Request, principal: Principal = Depends(access)) -> dict[str, object]:
     async with db.SessionLocal() as session:
         scope = await workbench.lock_scope(session, workbench.user_scope(principal))
         row, mapping = await owned(session, body.metadata.receipt.attempt_id, principal)
+        agent_id, version = row.create_agent, row.create_version
+        if agent_id is None or version is None:
+            raise HTTPException(409, "creation snapshot unavailable")
         if body.metadata.receipt.fingerprint != row.fingerprint or not hmac.compare_digest(
-            mapping.envelope_hmac, digest(body, row.scope_id, row.create_agent)
+            mapping.envelope_hmac, digest(body, row.scope_id, agent_id)
         ):
             raise HTTPException(409, "message binding mismatch")
         # Replays are rejected even after ACK. Recovery is explicitly GET, never re-execution.
@@ -295,7 +311,7 @@ async def send(body: Send, request: Request, principal: Principal = Depends(acce
             raise HTTPException(409, "already executed or evidence changed; use read-only recovery")
         try:
             async with session.begin_nested():
-                await admit(request, principal, row.create_agent, row.create_version)
+                await admit(request, principal, agent_id, version)
                 await workbench_create.apply(session, row, body.message.parts[0].text, request, principal, independent_a2a=True)
                 event = await session.get(db.RunEventRow, (row.run_id, 1))
                 if event is None or event.payload.get("workbench_attempt_id") != row.attempt_id:
@@ -321,7 +337,7 @@ async def send(body: Send, request: Request, principal: Principal = Depends(acce
     raise HTTPException(409, "execution rejected without effect; read the original receipt")
 
 
-async def final_artifact(session, run):
+async def final_artifact(session: AsyncSession, run: db.Run) -> dict[str, object] | None:
     """Project only an explicitly linked final response; never infer from the last text."""
     if run.state != "completed" or run.last_seq < 3:
         return None
@@ -354,7 +370,7 @@ async def final_artifact(session, run):
 
 
 @router.get("/tasks/{task_id}")
-async def get_task(task_id: str, principal: Principal = Depends(access)):
+async def get_task(task_id: str, principal: Principal = Depends(access)) -> dict[str, object]:
     async with db.SessionLocal() as session:
         mapping = await session.scalar(
             select(Mapping).where(Mapping.run_id == task_id, Mapping.scope_id == workbench.user_scope(principal))
@@ -371,7 +387,7 @@ async def get_task(task_id: str, principal: Principal = Depends(access)):
         }
         if run.state not in states:
             raise HTTPException(409, "unknown task state")
-        result = {"id": run.run_id, "contextId": mapping.context_id, "status": {"state": states[run.state]}}
+        result: dict[str, object] = {"id": run.run_id, "contextId": mapping.context_id, "status": {"state": states[run.state]}}
         artifact = await final_artifact(session, run)
         if artifact is not None:
             result["artifacts"] = [artifact]
@@ -379,7 +395,7 @@ async def get_task(task_id: str, principal: Principal = Depends(access)):
 
 
 @router.post("/attempts/{attempt_id}/withdraw")
-async def withdraw(attempt_id: UUID, body: Evidence, principal: Principal = Depends(access)):
+async def withdraw(attempt_id: UUID, body: Evidence, principal: Principal = Depends(access)) -> Receipt:
     async with db.SessionLocal() as session:
         scope = await workbench.lock_scope(session, workbench.user_scope(principal))
         row, mapping = await owned(session, str(attempt_id), principal)
@@ -431,7 +447,7 @@ async def withdraw(attempt_id: UUID, body: Evidence, principal: Principal = Depe
 
 
 @router.post("/acknowledge")
-async def acknowledge(body: Evidence, principal: Principal = Depends(access)):
+async def acknowledge(body: Evidence, principal: Principal = Depends(access)) -> Receipt:
     async with db.SessionLocal() as session:
         scope = await workbench.lock_scope(session, workbench.user_scope(principal))
         row, mapping = await owned(session, body.attempt_id, principal)
@@ -467,7 +483,7 @@ async def acknowledge(body: Evidence, principal: Principal = Depends(access)):
 
 
 @router.get("/.well-known/agent-card.json")
-async def card(request: Request, principal: Principal = Depends(access)):
+async def card(request: Request, principal: Principal = Depends(access)) -> dict[str, object]:
     return {
         "name": "Isolated Runtime E2",
         "description": "Restricted independent Task profile; synthetic environments only",

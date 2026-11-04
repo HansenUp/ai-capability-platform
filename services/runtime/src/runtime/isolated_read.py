@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from runtime import net
 from runtime.api.auth import principal_from_claims, verify_jwt
+from runtime.config import settings
 from runtime.state.db import AgentVersion, Run, RunEventRow
 
 
@@ -113,7 +114,7 @@ async def invoke_read(
         "dry_run": False,
         "taint": ["confidential"],
     }
-    async with net.client(transport=gateway, base_url=net.settings.capability_gateway_url, follow_redirects=False) as client:
+    async with net.client(transport=gateway, base_url=settings.capability_gateway_url, follow_redirects=False) as client:
         response = await client.post(
             "/invoke",
             json=body,

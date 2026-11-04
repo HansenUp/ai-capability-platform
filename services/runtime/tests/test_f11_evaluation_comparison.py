@@ -1,4 +1,5 @@
 """Pure minimal-projection comparisons: no service or model execution."""
+
 from copy import deepcopy
 
 import pytest
@@ -8,15 +9,34 @@ from runtime.api.isolated_evaluation_rules import comparison
 
 def sample():
     return {
-        "binding": dict.fromkeys((
-            "tenant", "subject", "agent_id", "dataset_id", "dataset_version",
-            "dataset_revision", "dataset_digest", "catalog_revision",
-            "evaluator_version", "scenario", "cases", "profile_digest",
-        ), "fixed"),
-        "source": "isolated-synthetic", "publish_eligible": False,
-        "status": "COMMITTED", "receipt": {"result": {
-            "selected_count": 2, "verified_count": 2, "passed_count": 1, "pass_rate": .5,
-        }},
+        "binding": dict.fromkeys(
+            (
+                "tenant",
+                "subject",
+                "agent_id",
+                "dataset_id",
+                "dataset_version",
+                "dataset_revision",
+                "dataset_digest",
+                "catalog_revision",
+                "evaluator_version",
+                "scenario",
+                "cases",
+                "profile_digest",
+            ),
+            "fixed",
+        ),
+        "source": "isolated-synthetic",
+        "publish_eligible": False,
+        "status": "COMMITTED",
+        "receipt": {
+            "result": {
+                "selected_count": 2,
+                "verified_count": 2,
+                "passed_count": 1,
+                "pass_rate": 0.5,
+            }
+        },
     }
 
 
@@ -27,8 +47,11 @@ def test_versions_can_differ_without_granting_qualification():
     right["binding"].update(agent_version="2", agent_snapshot="new")
     right["receipt"]["result"].update(passed_count=2, pass_rate=1)
     assert comparison(left, right) == {
-        "comparable": True, "reasons": [], "pass_rate_delta": .5,
-        "source": "isolated-synthetic", "publish_eligible": False,
+        "comparable": True,
+        "reasons": [],
+        "pass_rate_delta": 0.5,
+        "source": "isolated-synthetic",
+        "publish_eligible": False,
     }
 
 
@@ -63,3 +86,17 @@ def test_incomplete_results_are_not_zero(change):
         right["source"] = "external"
     assert comparison(left, right)["pass_rate_delta"] is None
     assert "INCOMPLETE_RESULT" in comparison(left, right)["reasons"]
+
+
+@pytest.mark.parametrize("field", ["binding", "receipt", "result"])
+@pytest.mark.parametrize("malformed", ["not-an-object", [1], 1, True])
+def test_malformed_nested_evidence_cannot_produce_a_comparison(field, malformed):
+    left, right = sample(), sample()
+    if field == "result":
+        right["receipt"]["result"] = malformed
+    else:
+        right[field] = malformed
+    result = comparison(left, right)
+    assert result["comparable"] is False and result["pass_rate_delta"] is None
+    assert result["reasons"]
+    assert result["publish_eligible"] is False

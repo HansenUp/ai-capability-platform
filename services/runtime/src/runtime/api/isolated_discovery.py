@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -45,7 +45,16 @@ class Catalog(BaseModel):
     snapshot_guaranteed: bool = False
 
 
-async def candidates(tenant):
+@dataclass(frozen=True)
+class Candidate:
+    id: int
+    agent_id: str
+    version: str
+    rollout_percent: int
+    rollout_allowlist: list[str]
+
+
+async def candidates(tenant: str) -> list[Candidate]:
     async with db.SessionLocal() as session:
         rows = (
             await session.execute(
@@ -63,11 +72,11 @@ async def candidates(tenant):
         ).all()
         if len(rows) > 2000:
             raise ValueError("candidate bound exceeded")
-        return [dict(row._mapping) for row in rows]
+        return [Candidate(row.id, row.agent_id, row.version, row.rollout_percent, row.rollout_allowlist) for row in rows]
 
 
 @router.get("/agents", response_model=Catalog)
-async def discover(request: Request, response: Response, principal: Principal = Depends(current_principal)):
+async def discover(request: Request, response: Response, principal: Principal = Depends(current_principal)) -> Catalog:
     response.headers["Cache-Control"] = "no-store"
     if (
         getattr(request.app.state, "isolated_discovery", None) is not ENABLED
@@ -76,12 +85,16 @@ async def discover(request: Request, response: Response, principal: Principal = 
     ):
         raise HTTPException(503, "isolated discovery disabled", headers={"Cache-Control": "no-store"})
     workbench.user_scope(principal)  # Reject dev headers, services and delegation; no administrator bypass.
+    if not principal.token:
+        raise HTTPException(403, "signed direct user required", headers={"Cache-Control": "no-store"})
     claims = await verify_jwt(principal.token, request)
     if "act" in claims:
         raise HTTPException(403, "direct user required", headers={"Cache-Control": "no-store"})
     provider = getattr(request.app.state, "isolated_visibility_reader", None)
 
-    async def read_rules():
+    async def read_rules() -> Snapshot:
+        if not callable(provider):
+            raise ValueError("visibility reader unavailable")
         value = Snapshot.model_validate(await provider(principal.tenant_id))
         if value.tenant != principal.tenant_id or len({r.agent_id for r in value.rules}) != len(value.rules):
             raise ValueError("invalid visibility scope")
@@ -92,10 +105,10 @@ async def discover(request: Request, response: Response, principal: Principal = 
             before = await read_rules()
             rows = await candidates(principal.tenant_id)
             visible = {rule.agent_id for rule in before.rules if not rule.groups and not rule.roles and principal.subject in rule.allowlist}
-            grouped = {}
+            grouped: dict[str, list[Candidate]] = {}
             for row in rows:
-                if row["agent_id"] in visible:
-                    grouped.setdefault(row["agent_id"], []).append(SimpleNamespace(**row))
+                if row.agent_id in visible:
+                    grouped.setdefault(row.agent_id, []).append(row)
             items = []
             for agent_id in sorted(grouped):
                 chosen, _ = rollout.choose(grouped[agent_id], principal.subject)

@@ -173,7 +173,7 @@ def _usage_from(raw: Mapping[str, Any] | None, reasoning_text: str) -> LLMUsage:
         cost=float(cost) if isinstance(cost, int | float) else 0.0,
         input_reported=type(raw.get("prompt_tokens")) is int and raw["prompt_tokens"] >= 0,
         output_reported=type(raw.get("completion_tokens")) is int and raw["completion_tokens"] >= 0,
-        cost_reported=type(cost) in (int, float) and math.isfinite(cost) and cost >= 0,
+        cost_reported=isinstance(cost, int | float) and type(cost) in (int, float) and math.isfinite(cost) and cost >= 0,
     )
 
 

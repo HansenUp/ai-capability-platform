@@ -7,13 +7,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Literal
+from typing import Literal, Self
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import JSON, String, UniqueConstraint, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from typing_extensions import TypedDict
 
 from runtime.api import auth, workbench
 from runtime.api.auth import Principal, current_principal
@@ -30,6 +32,46 @@ CATALOG = {
 }
 
 
+class ProposalData(TypedDict):
+    schema_version: Literal[1]
+    catalog_revision: Literal["synthetic-catalog-1"]
+    scenario_id: str
+    case_ids: list[str]
+
+
+class CommandData(TypedDict):
+    attempt_id: str
+    action: Literal["draft", "edit", "freeze"]
+    agent_id: str
+    version: str
+    registration_id: str | None
+    expected_revision: int
+    proposal: ProposalData | None
+
+
+class RegistrationData(TypedDict):
+    id: str
+    tenant: str
+    agent_id: str
+    version: str
+    maintainer: str
+    state: Literal["draft", "frozen"]
+    revision: int
+    proposal: ProposalData
+
+
+class OperationEvidence(TypedDict):
+    attempt_id: str
+    scope_id: str
+    fingerprint: str
+    subject: str
+    tenant: str
+    action: Literal["draft", "edit", "freeze"]
+    registration_id: str
+    revision: int
+    snapshot: RegistrationData
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -40,15 +82,15 @@ class Registration(Base):
     tenant: Mapped[str] = mapped_column(String(128))
     agent: Mapped[str] = mapped_column(String(64))
     version: Mapped[str] = mapped_column(String(64))
-    body: Mapped[dict] = mapped_column(JSON)
+    body: Mapped[RegistrationData] = mapped_column(JSON)
     __table_args__ = (UniqueConstraint("tenant", "agent", "version"),)
 
 
 class Operation(Base):
     __tablename__ = "isolated_dataset_operation"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    command: Mapped[dict] = mapped_column(JSON)
-    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    command: Mapped[CommandData] = mapped_column(JSON)
+    evidence: Mapped[OperationEvidence | None] = mapped_column(JSON, nullable=True)
 
 
 class Proposal(BaseModel):
@@ -60,13 +102,13 @@ class Proposal(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def strict_schema(cls, value):
+    def strict_schema(cls, value: object) -> object:
         if isinstance(value, dict) and type(value.get("schema_version", 1)) is not int:
             raise ValueError("schema_version must be an integer")
         return value
 
     @model_validator(mode="after")
-    def valid(self):
+    def valid(self) -> Self:
         if self.scenario_id not in CATALOG or len(set(self.case_ids)) != len(self.case_ids):
             raise ValueError("unknown or duplicate synthetic case")
         if not set(self.case_ids) <= CATALOG[self.scenario_id]:
@@ -91,11 +133,11 @@ class Evidence(BaseModel):
     revision: int = Field(ge=1)
 
 
-def digest(value):
+def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def enabled(request):
+def enabled(request: Request) -> None:
     if (
         getattr(request.app.state, "isolated_datasets", None) is not ENABLED
         or settings.runtime_env != "dev"
@@ -104,7 +146,7 @@ def enabled(request):
         raise HTTPException(503, "isolated registration disabled")
 
 
-async def authorize(request, principal, agent_id):
+async def authorize(request: Request, principal: Principal, agent_id: str) -> None:
     workbench.user_scope(principal)
     bindings = getattr(request.app.state, "isolated_dataset_bindings", {})
     user = bindings.get((auth.settings.jwt_issuer, principal.tenant_id, principal.subject))
@@ -117,7 +159,7 @@ async def authorize(request, principal, agent_id):
     await adapter(principal.tenant_id, user, agent_id)
 
 
-def result(row, op):
+def result(row: db.WorkbenchAttempt, op: Operation) -> dict[str, object]:
     return {
         "scope_id": row.scope_id,
         "attempt_id": row.attempt_id,
@@ -131,22 +173,26 @@ def result(row, op):
     }
 
 
-async def registration(session, identifier, tenant):
+async def registration(session: AsyncSession, identifier: str | None, tenant: str) -> Registration:
     row = await session.get(Registration, identifier, populate_existing=True)
     if row is None or row.tenant != tenant:
         raise HTTPException(404, "registration not found")
     return row
 
 
-async def validate(session, command, principal, request):
+async def validate(session: AsyncSession, command: CommandData, principal: Principal, request: Request) -> Registration | None:
     await authorize(request, principal, command["agent_id"])
     proposal = command["proposal"]
     if command["action"] == "draft":
         if command["registration_id"] is not None or command["expected_revision"] != 0 or proposal is None:
             raise HTTPException(422, "draft binding invalid")
-        exists = await session.scalar(select(Registration.id).where(
-            Registration.tenant == principal.tenant_id, Registration.agent == command["agent_id"],
-            Registration.version == command["version"]))
+        exists = await session.scalar(
+            select(Registration.id).where(
+                Registration.tenant == principal.tenant_id,
+                Registration.agent == command["agent_id"],
+                Registration.version == command["version"],
+            )
+        )
         if exists:
             raise HTTPException(409, "version exists")
         return None
@@ -163,34 +209,58 @@ async def validate(session, command, principal, request):
 
 
 @router.get("")
-async def listing(request: Request, agent_id: str, principal: Principal = Depends(current_principal)):
+async def listing(request: Request, agent_id: str, principal: Principal = Depends(current_principal)) -> dict[str, object]:
     enabled(request)
     await authorize(request, principal, agent_id)
     async with db.SessionLocal() as session:
-        rows = list(await session.scalars(select(Registration).where(
-            Registration.tenant == principal.tenant_id, Registration.agent == agent_id
-        ).order_by(Registration.version).limit(201)))
+        rows = list(
+            await session.scalars(
+                select(Registration)
+                .where(Registration.tenant == principal.tenant_id, Registration.agent == agent_id)
+                .order_by(Registration.version)
+                .limit(201)
+            )
+        )
         if len(rows) > 200:
             raise HTTPException(409, "isolated list limit exceeded")
         return {"identity": workbench.binding(principal), "items": [r.body for r in rows]}
 
 
 @router.get("/ledger")
-async def ledger(request: Request, principal: Principal = Depends(current_principal)):
+async def ledger(request: Request, principal: Principal = Depends(current_principal)) -> dict[str, object]:
     enabled(request)
     scope_id = workbench.user_scope(principal)
     async with db.SessionLocal() as session:
         scope = await session.get(db.WorkbenchScope, scope_id)
         row = await workbench.owned(session, scope.active_attempt, scope_id) if scope and scope.active_attempt else None
         op = await session.get(Operation, row.attempt_id) if row and row.action == "dataset_write" else None
-        return {"scope_id": scope_id, "blocked_elsewhere": row is not None and op is None, "active": result(row, op) if op else None}
+        return {
+            "scope_id": scope_id,
+            "blocked_elsewhere": row is not None and op is None,
+            "active": result(row, op) if row is not None and op is not None else None,
+        }
 
 
 @router.post("/prepare")
-async def prepare(body: Command, request: Request, principal: Principal = Depends(current_principal)):
+async def prepare(body: Command, request: Request, principal: Principal = Depends(current_principal)) -> dict[str, object]:
     enabled(request)
     scope_id = workbench.user_scope(principal)
-    command = body.model_dump(mode="json")
+    command: CommandData = {
+        "attempt_id": str(body.attempt_id),
+        "action": body.action,
+        "agent_id": body.agent_id,
+        "version": body.version,
+        "registration_id": body.registration_id,
+        "expected_revision": body.expected_revision,
+        "proposal": {
+            "schema_version": body.proposal.schema_version,
+            "catalog_revision": body.proposal.catalog_revision,
+            "scenario_id": body.proposal.scenario_id,
+            "case_ids": body.proposal.case_ids.copy(),
+        }
+        if body.proposal
+        else None,
+    }
     async with db.SessionLocal() as session:
         scope = await workbench.lock_scope(session, scope_id)
         previous = await session.get(db.WorkbenchAttempt, str(body.attempt_id))
@@ -219,15 +289,25 @@ async def prepare(body: Command, request: Request, principal: Principal = Depend
         op = Operation(id=row.attempt_id, command=command)
         session.add_all([row, op])
         scope.active_attempt = row.attempt_id
-        session.add(db.Audit(actor=principal.subject, tenant_id=principal.tenant_id, auth_method=principal.auth_method,
-                             action="dataset.prepare", object=f"attempt:{row.attempt_id}", result="PREPARED",
-                             detail={"fingerprint": row.fingerprint}))
+        session.add(
+            db.Audit(
+                actor=principal.subject,
+                tenant_id=principal.tenant_id,
+                auth_method=principal.auth_method,
+                action="dataset.prepare",
+                object=f"attempt:{row.attempt_id}",
+                result="PREPARED",
+                detail={"fingerprint": row.fingerprint},
+            )
+        )
         await session.commit()
         return result(row, op)
 
 
 @router.post("/{attempt_id}/execute")
-async def execute(attempt_id: UUID, body: Evidence, request: Request, principal: Principal = Depends(current_principal)):
+async def execute(
+    attempt_id: UUID, body: Evidence, request: Request, principal: Principal = Depends(current_principal)
+) -> dict[str, object]:
     enabled(request)
     scope_id = workbench.user_scope(principal)
     async with db.SessionLocal() as session:
@@ -245,19 +325,31 @@ async def execute(attempt_id: UUID, body: Evidence, request: Request, principal:
             async with session.begin_nested():
                 target = await validate(session, op.command, principal, request)
                 if target is None:
-                    value = {
-                        "id": row.run_id, "tenant": principal.tenant_id, "agent_id": op.command["agent_id"],
-                        "version": op.command["version"], "maintainer": principal.subject,
-                        "state": "draft", "revision": 1, "proposal": op.command["proposal"],
+                    proposal = op.command["proposal"]
+                    if proposal is None:
+                        raise HTTPException(422, "draft proposal unavailable")
+                    value: RegistrationData = {
+                        "id": row.run_id,
+                        "tenant": principal.tenant_id,
+                        "agent_id": op.command["agent_id"],
+                        "version": op.command["version"],
+                        "maintainer": principal.subject,
+                        "state": "draft",
+                        "revision": 1,
+                        "proposal": proposal,
                     }
-                    target = Registration(id=row.run_id, tenant=principal.tenant_id, agent=op.command["agent_id"],
-                                          version=op.command["version"], body=value)
+                    target = Registration(
+                        id=row.run_id, tenant=principal.tenant_id, agent=op.command["agent_id"], version=op.command["version"], body=value
+                    )
                     session.add(target)
                 else:
-                    value = dict(target.body)
+                    value = target.body.copy()
                     value["revision"] += 1
                     if op.command["action"] == "edit":
-                        value["proposal"] = op.command["proposal"]
+                        proposal = op.command["proposal"]
+                        if proposal is None:
+                            raise HTTPException(422, "edit proposal unavailable")
+                        value["proposal"] = proposal
                     else:
                         value["state"] = "frozen"
                     target.body = value
@@ -295,7 +387,9 @@ async def execute(attempt_id: UUID, body: Evidence, request: Request, principal:
 
 
 @router.post("/{attempt_id}/acknowledge")
-async def acknowledge(attempt_id: UUID, body: Evidence, request: Request, principal: Principal = Depends(current_principal)):
+async def acknowledge(
+    attempt_id: UUID, body: Evidence, request: Request, principal: Principal = Depends(current_principal)
+) -> dict[str, object]:
     enabled(request)
     scope_id = workbench.user_scope(principal)
     async with db.SessionLocal() as session:

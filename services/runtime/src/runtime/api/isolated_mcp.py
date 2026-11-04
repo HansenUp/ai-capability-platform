@@ -11,12 +11,13 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from runtime.api import isolated_a2a as core
 from runtime.api import isolated_discovery as discovery
 from runtime.api import workbench
 from runtime.api.auth import Principal, current_principal, verify_jwt
+from runtime.config import settings
 from runtime.state import db
 
 PREFIX = "/v1/isolated-mcp"
@@ -27,7 +28,7 @@ router = APIRouter(prefix=PREFIX)
 
 
 class Attempt(core.Strict):
-    attempt_id: str = core.Field(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
+    attempt_id: str = Field(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
 
 
 class Task(core.Strict):
@@ -51,7 +52,7 @@ class RPC(BaseModel):
     params: dict[str, Any] = {}
 
 
-SCHEMAS = {
+SCHEMAS: dict[str, type[BaseModel]] = {
     "agents_discover": Empty,
     "agent_prepare": core.Prepare,
     "agent_execute": core.Send,
@@ -62,15 +63,17 @@ SCHEMAS = {
 }
 
 
-async def access(request: Request, principal: Principal = Depends(current_principal)):
+async def access(request: Request, principal: Principal = Depends(current_principal)) -> Principal:
     if (
         getattr(request.app.state, "isolated_mcp", None) is not ENABLED
         or getattr(request.app.state, "isolated_a2a", None) is not core.ENABLED
-        or discovery.settings.runtime_env != "dev"
+        or settings.runtime_env != "dev"
         or db.engine.url.get_backend_name() != "sqlite"
     ):
         raise HTTPException(503, "isolated MCP disabled")
     workbench.user_scope(principal)
+    if not principal.token:
+        raise HTTPException(403, "signed direct user required")
     if "act" in await verify_jwt(principal.token, request):
         raise HTTPException(403, "direct user required")
     # Browser clients must be same-origin; native signed test clients may omit Origin.
@@ -83,7 +86,7 @@ async def access(request: Request, principal: Principal = Depends(current_princi
 
 
 @router.post("")
-async def endpoint(request: Request, principal: Principal = Depends(access)):
+async def endpoint(request: Request, principal: Principal = Depends(access)) -> Response:
     headers = {"Cache-Control": "no-store"}
     raw = bytearray()
     async for chunk in request.stream():
@@ -108,10 +111,10 @@ async def endpoint(request: Request, principal: Principal = Depends(access)):
             headers=headers,
         )
 
-    def result(value):
+    def result(value: object) -> Response:
         return Response(json.dumps({"jsonrpc": "2.0", "id": message.id, "result": value}), media_type="application/json", headers=headers)
 
-    def error(code, text):
+    def error(code: int, text: str) -> Response:
         return Response(
             json.dumps({"jsonrpc": "2.0", "id": message.id, "error": {"code": code, "message": text}}),
             media_type="application/json",
@@ -126,8 +129,9 @@ async def endpoint(request: Request, principal: Principal = Depends(access)):
                 "protocolVersion": VERSION,
                 "capabilities": {"tools": {}, "experimental": {PROFILE: {}}},
                 "serverInfo": {"name": "isolated-agent-receipts", "version": "1"},
-                "instructions": ("Platform profile only: explicit prepare/execute/recover/withdraw/ACK. "
-                                 "Never retry writes. Shares E2 receipts."),
+                "instructions": (
+                    "Platform profile only: explicit prepare/execute/recover/withdraw/ACK. Never retry writes. Shares E2 receipts."
+                ),
             }
         )
     if request.headers.get("MCP-Protocol-Version") != VERSION:
@@ -156,22 +160,35 @@ async def endpoint(request: Request, principal: Principal = Depends(access)):
         body = SCHEMAS[call.name].model_validate(call.arguments)
     except ValidationError:
         return error(-32602, "invalid tool arguments")
+    value: object
     try:
         if call.name == "agents_discover":
             value = await discovery.discover(request, Response(), principal)
             if isinstance(value, BaseModel):
                 value = value.model_dump(mode="json")
         elif call.name == "agent_prepare":
+            if not isinstance(body, core.Prepare):
+                return error(-32602, "invalid prepare arguments")
             value = await core.prepare(body, request, principal)
         elif call.name == "agent_execute":
+            if not isinstance(body, core.Send):
+                return error(-32602, "invalid execution arguments")
             value = await core.send(body, request, principal)
         elif call.name == "attempt_recover":
+            if not isinstance(body, Attempt):
+                return error(-32602, "invalid recovery arguments")
             value = await core.recover(UUID(body.attempt_id), principal)
         elif call.name == "attempt_withdraw":
+            if not isinstance(body, core.Evidence):
+                return error(-32602, "invalid withdrawal arguments")
             value = await core.withdraw(UUID(body.attempt_id), body, principal)
         elif call.name == "attempt_ack":
+            if not isinstance(body, core.Evidence):
+                return error(-32602, "invalid receipt arguments")
             value = await core.acknowledge(body, principal)
         else:
+            if not isinstance(body, Task):
+                return error(-32602, "invalid task arguments")
             value = await core.get_task(body.task_id, principal)
     except HTTPException as exc:
         return result(

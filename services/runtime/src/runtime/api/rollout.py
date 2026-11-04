@@ -18,9 +18,23 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, Protocol, TypeVar
 
-from runtime.state.db import AgentVersion
+
+class RolloutVersion(Protocol):
+    @property
+    def id(self) -> int: ...
+    @property
+    def agent_id(self) -> str: ...
+    @property
+    def version(self) -> str: ...
+    @property
+    def rollout_percent(self) -> int: ...
+    @property
+    def rollout_allowlist(self) -> list[str]: ...
+
+
+Version = TypeVar("Version", bound=RolloutVersion)
 
 Reason = Literal["pinned", "stable", "canary", "allowlist", "only"]
 
@@ -31,12 +45,12 @@ def bucket(agent_id: str, subject: str) -> int:
     return int.from_bytes(digest[:8], "big") % 100
 
 
-def in_allowlist(version: AgentVersion, subject: str) -> bool:
+def in_allowlist(version: RolloutVersion, subject: str) -> bool:
     """主体是否在该版本的灰度白名单中（白名单存完整主体串，如 human:alice，精确匹配）。"""
     return subject in (version.rollout_allowlist or [])
 
 
-def choose(published: Sequence[AgentVersion], subject: str) -> tuple[AgentVersion | None, Reason]:
+def choose(published: Sequence[Version], subject: str) -> tuple[Version | None, Reason]:
     """从某 Agent 的已发布版本中为主体选版；published 不要求有序，按 id 新旧判断。"""
     ordered = sorted(published, key=lambda v: v.id, reverse=True)
     stable = next((v for v in ordered if v.rollout_percent >= 100), None)

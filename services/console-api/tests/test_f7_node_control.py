@@ -190,6 +190,34 @@ def test_application_response_loss_reconciles_without_reexecution(ledger):
         node.close()
 
 
+@pytest.mark.parametrize("corruption", ["unknown_field", "string_generation", "boolean_version", "missing_attempt"])
+def test_corrupt_local_journal_cannot_resolve_unknown_application(ledger, corruption):
+    from runtime.node.isolated_control import SyntheticNode
+
+    node = SyntheticNode("node")
+    try:
+        operation = ledger.execute("alice", prepare(ledger)["id"])
+        with ledger.transaction(write=False) as connection:
+            authority = ledger.read(connection, "nodes", "node")
+        evidence = node.apply(operation, authority)
+        if corruption == "unknown_field":
+            evidence["unreviewed"] = True
+        elif corruption == "string_generation":
+            evidence["generation"] = str(evidence["generation"])
+        elif corruption == "boolean_version":
+            evidence["version"] = True
+        else:
+            del evidence["attempt"]
+        with node.connection() as connection:
+            connection.execute("UPDATE effects SET body=? WHERE attempt=?", (json.dumps(evidence), operation["id"]))
+        with pytest.raises(ValueError):
+            node.read(operation["id"])
+        assert ledger.recover("alice")[0]["status"] == "EXECUTING"
+        assert node.applied_calls == 1 and not node.accepting
+    finally:
+        node.close()
+
+
 def test_crash_before_application_stays_unresolved(ledger):
     from runtime.node.isolated_control import SyntheticNode
 

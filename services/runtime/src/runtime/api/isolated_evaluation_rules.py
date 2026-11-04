@@ -7,8 +7,12 @@ parent/case/snapshot binding. This module never accepts caller-defined expectati
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeGuard
+
+from pydantic import JsonValue
+from typing_extensions import TypedDict
 
 VERSION = "synthetic-evaluator-1"
 TOOLS = {
@@ -30,6 +34,38 @@ TEXT = {
 INTERACTION = frozenset(("tool.approved", "input.provided", "input.requested", "approval.requested"))
 
 
+class EvidenceEvent(TypedDict):
+    seq: int
+    type: str
+    payload: dict[str, JsonValue]
+
+
+class ResultSummary(TypedDict):
+    source: Literal["isolated-synthetic"]
+    publish_eligible: Literal[False]
+    evaluator_version: str
+    selected_count: int
+    verified_count: int
+    passed_count: int
+    pass_rate: float | None
+
+
+class Comparison(TypedDict):
+    comparable: bool
+    reasons: list[str]
+    pass_rate_delta: float | int | None
+    source: Literal["isolated-synthetic"]
+    publish_eligible: Literal[False]
+
+
+def _records(value: JsonValue) -> TypeGuard[list[dict[str, JsonValue]]]:
+    return isinstance(value, list) and all(isinstance(item, dict) for item in value)
+
+
+def _object(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
 @dataclass(frozen=True)
 class Verdict:
     case_id: str
@@ -37,7 +73,7 @@ class Verdict:
     reasons: tuple[str, ...]
 
 
-def evaluate(scenario: str, case_id: str, state: str, events: list[dict]) -> Verdict:
+def evaluate(scenario: str, case_id: str, state: str, events: list[EvidenceEvent]) -> Verdict:
     """Judge fixed synthetic evidence; return codes only, never event contents.
 
     A failed/incomplete Runtime Run is not a successful expected tool failure.
@@ -63,8 +99,7 @@ def evaluate(scenario: str, case_id: str, state: str, events: list[dict]) -> Ver
         return Verdict(case_id, "not_verifiable", ("RUN_ERROR",))
     requests = [e["payload"] for e in events if e["type"] == "tool.requested"]
     results = [e["payload"] for e in events if e["type"] == "tool.result"]
-    answers = [e["payload"].get("text") for e in events if e["type"] == "model.response"]
-    answers = [text for text in answers if isinstance(text, str) and text]
+    answers = [text for e in events if e["type"] == "model.response" and isinstance(text := e["payload"].get("text"), str) and text]
     if not answers or not requests or not results:
         return Verdict(case_id, "not_verifiable", ("EXECUTION_EVIDENCE_MISSING",))
     reasons: list[str] = []
@@ -90,9 +125,9 @@ def evaluate(scenario: str, case_id: str, state: str, events: list[dict]) -> Ver
     if scenario == "sales-summary-readonly" and case_id == "success":
         items = output.get("items") if isinstance(output, dict) else None
         if (
-            not isinstance(items, list)
+            not isinstance(output, dict)
+            or not _records(items)
             or len(items) != 2
-            or not all(isinstance(item, dict) for item in items)
             or [item.get("id") for item in items] != ["S-1", "S-2"]
             or "amount" not in items[1]
             or items[1]["amount"] is not None
@@ -109,8 +144,7 @@ def evaluate(scenario: str, case_id: str, state: str, events: list[dict]) -> Ver
             or type(output.get("order_count")) is not int
             or output["order_count"] != count
             or output.get("complete") is not True
-            or not isinstance(groups, list)
-            or not all(isinstance(group, dict) for group in groups)
+            or not _records(groups)
         ):
             reasons.append("ORDER_METRICS_MISMATCH")
         elif case_id == "success" and [g.get("total_minor") for g in groups] != ["12000", "500"]:
@@ -126,7 +160,7 @@ def evaluate(scenario: str, case_id: str, state: str, events: list[dict]) -> Ver
     return Verdict(case_id, "not_passed" if reasons else "passed", tuple(reasons))
 
 
-def aggregate(selected: list[str], verdicts: list[Verdict]) -> dict:
+def aggregate(selected: list[str], verdicts: list[Verdict]) -> ResultSummary:
     """No partial rate, denominator exclusions or publication qualification."""
     if not 1 <= len(selected) <= 3 or len(set(selected)) != len(selected):
         raise ValueError("invalid selection")
@@ -146,27 +180,36 @@ def aggregate(selected: list[str], verdicts: list[Verdict]) -> dict:
     }
 
 
-def comparison(left: dict, right: dict) -> dict:
+def comparison(left: Mapping[str, object], right: Mapping[str, object]) -> Comparison:
     """Compare persisted minimal projections only; never grant release eligibility.
 
     Agent version/snapshot may differ; all evaluation conditions must be present
     and identical. Missing evidence is not a zero score.
     """
     conditions = (
-        "tenant", "subject", "agent_id", "dataset_id", "dataset_version",
-        "dataset_revision", "dataset_digest", "catalog_revision",
-        "evaluator_version", "scenario", "cases", "profile_digest",
+        "tenant",
+        "subject",
+        "agent_id",
+        "dataset_id",
+        "dataset_version",
+        "dataset_revision",
+        "dataset_digest",
+        "catalog_revision",
+        "evaluator_version",
+        "scenario",
+        "cases",
+        "profile_digest",
     )
     reasons = []
-    bindings = [item.get("binding") or {} for item in (left, right)]
+    bindings = [_object(item.get("binding")) for item in (left, right)]
     for key in conditions:
         if any(key not in binding or binding[key] is None for binding in bindings):
             reasons.append("MISSING_" + key.upper())
         elif bindings[0][key] != bindings[1][key]:
             reasons.append("DIFFERENT_" + key.upper())
-    rates = []
+    rates: list[float | int | None] = []
     for item in (left, right):
-        result = (item.get("receipt") or {}).get("result") or {}
+        result = _object(_object(item.get("receipt")).get("result"))
         rate = result.get("pass_rate")
         selected = result.get("selected_count")
         verified = result.get("verified_count")
@@ -175,16 +218,25 @@ def comparison(left: dict, right: dict) -> dict:
             item.get("source") == "isolated-synthetic"
             and item.get("publish_eligible") is False
             and item.get("status") == "COMMITTED"
-            and type(selected) is int and selected > 0
-            and type(verified) is int and verified == selected
-            and type(passed) is int and 0 <= passed <= selected
-            and type(rate) in (int, float) and rate == passed / selected
+            and isinstance(selected, int)
+            and type(selected) is int
+            and selected > 0
+            and type(verified) is int
+            and verified == selected
+            and isinstance(passed, int)
+            and type(passed) is int
+            and 0 <= passed <= selected
+            and isinstance(rate, int | float)
+            and type(rate) in (int, float)
+            and rate == passed / selected
         )
-        rates.append(rate if valid else None)
+        rates.append(rate if valid and isinstance(rate, int | float) else None)
     if any(rate is None for rate in rates):
         reasons.append("INCOMPLETE_RESULT")
     return {
-        "comparable": not reasons, "reasons": reasons,
-        "pass_rate_delta": rates[1] - rates[0] if not reasons else None,
-        "source": "isolated-synthetic", "publish_eligible": False,
+        "comparable": not reasons,
+        "reasons": reasons,
+        "pass_rate_delta": rates[1] - rates[0] if not reasons and rates[0] is not None and rates[1] is not None else None,
+        "source": "isolated-synthetic",
+        "publish_eligible": False,
     }

@@ -3,13 +3,68 @@
 import json
 import sqlite3
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NotRequired
 from uuid import uuid4
+
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
+
+from runtime.node.lifecycle import NodeLifecycle
+
+
+class NodeOperation(TypedDict):
+    id: str
+    node: str
+    actor: str
+    action: str
+    status: str
+    generation: int
+    expected: int
+    limit: NotRequired[int]
+
+
+class NodeAuthority(TypedDict):
+    id: str
+    generation: int
+    boot_id: str
+    desired: str
+    state: str
+    http_concurrency_limit: NotRequired[int | None]
+
+
+class NodeEvidence(TypedDict):
+    attempt: str
+    node: str
+    action: str
+    generation: int
+    boot_id: str
+    actor: str
+    version: int
+    outcome: str
+    limit: NotRequired[int]
+    active_requests: NotRequired[int]
+    active_workers: NotRequired[int]
+
+
+class BootChallenge(TypedDict):
+    node: str
+    previous_boot: str
+    generation: int
+    desired: str
+    version: int
+    nonce: str
+    expires_at: int
+    new_boot: NotRequired[str]
+
+
+EVIDENCE = TypeAdapter(NodeEvidence)
 
 
 class SyntheticNode:
-    def __init__(self, node_id):
+    def __init__(self, node_id: str) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="f7-synthetic-node-")
         self.path = Path(self.temporary.name) / "applied.sqlite"
         self.path.touch(exist_ok=False)
@@ -30,7 +85,7 @@ class SyntheticNode:
             )
 
     @contextmanager
-    def connection(self):
+    def connection(self) -> Iterator[sqlite3.Connection]:
         try:
             db = sqlite3.connect(f"file:{self.path}?mode=rw", uri=True, timeout=0)
         except sqlite3.Error:
@@ -47,7 +102,7 @@ class SyntheticNode:
         finally:
             db.close()
 
-    def startup(self, authority):
+    def startup(self, authority: NodeAuthority) -> None:
         self.accepting = False
         with self.connection() as db:
             generation, desired = db.execute("SELECT generation,desired FROM state WHERE id=1").fetchone()
@@ -60,7 +115,7 @@ class SyntheticNode:
                 raise ValueError("unreconciled concurrency configuration")
             self.accepting = desired == "OPEN" and authority["state"] == "SERVING"
 
-    def apply(self, operation, authority):
+    def apply(self, operation: NodeOperation, authority: NodeAuthority) -> NodeEvidence:
         if operation.get("action") == "configure_limit":
             return self.apply_limit(operation, authority)
         if operation.get("action") not in {"drain", "resume"}:
@@ -91,7 +146,7 @@ class SyntheticNode:
             # This synthetic boundary models atomic local application+journal. Real lifecycle adapter remains separate.
             self.accepting = not drain
             outcome = ("timeout" if self.active else "drained") if drain else "serving"
-            evidence = dict(
+            evidence: NodeEvidence = dict(
                 attempt=operation["id"],
                 node=self.node_id,
                 action=operation["action"],
@@ -106,11 +161,12 @@ class SyntheticNode:
         self.applied_calls += 1
         return evidence
 
-    def apply_limit(self, operation, authority):
+    def apply_limit(self, operation: NodeOperation, authority: NodeAuthority) -> NodeEvidence:
         """Persist configuration and its bound receipt without opening admission."""
         limit = operation.get("limit")
         if (
             operation.get("action") != "configure_limit"
+            or not isinstance(limit, int)
             or type(limit) is not int
             or limit <= 0
             or operation["node"] != self.node_id
@@ -124,7 +180,7 @@ class SyntheticNode:
             generation = db.execute("SELECT generation FROM state WHERE id=1").fetchone()[0]
             if generation != operation["expected"] or db.execute("SELECT 1 FROM effects WHERE attempt=?", (operation["id"],)).fetchone():
                 raise ValueError("stale or already applied configuration; read evidence")
-            evidence = dict(
+            evidence: NodeEvidence = dict(
                 attempt=operation["id"],
                 node=self.node_id,
                 action="configure_limit",
@@ -141,16 +197,21 @@ class SyntheticNode:
         self.applied_calls += 1
         return evidence
 
-    def read(self, attempt):
+    def read(self, attempt: str) -> NodeEvidence | None:
         # Pure journal read: never reapplies an unknown operation.
         db = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=0)
         try:
             row = db.execute("SELECT body FROM effects WHERE attempt=?", (attempt,)).fetchone()
-            return json.loads(row[0]) if row else None
+            if row is None:
+                return None
+            value = json.loads(row[0])
+            if not isinstance(value, dict) or not value.keys() <= NodeEvidence.__annotations__.keys():
+                raise ValueError("invalid node journal evidence")
+            return EVIDENCE.validate_python(value, strict=True)
         finally:
             db.close()
 
-    def observe_drained(self, attempt):
+    def observe_drained(self, attempt: str) -> NodeEvidence:
         original = self.read(attempt)
         if not original or original["action"] != "drain" or original["outcome"] != "timeout" or self.active or self.accepting:
             raise ValueError("no completed natural drain observation")
@@ -158,16 +219,18 @@ class SyntheticNode:
             generation, desired = db.execute("SELECT generation,desired FROM state WHERE id=1").fetchone()
             if generation != original["generation"] or desired != "CLOSED":
                 raise ValueError("stale drain observation")
-        return original | {"boot_id": self.boot_id, "outcome": "observed_drained", "active_requests": 0, "active_workers": 0}
+        observed = original.copy()
+        observed.update({"boot_id": self.boot_id, "outcome": "observed_drained", "active_requests": 0, "active_workers": 0})
+        return observed
 
-    def reboot(self):
+    def reboot(self) -> None:
         self.accepting = False
         with self.connection() as db:
             old = db.execute("SELECT current FROM boots WHERE id=1").fetchone()[0]
             self.boot_id = uuid4().hex
             db.execute("UPDATE boots SET current=?,previous=? WHERE id=1", (self.boot_id, old))
 
-    def boot_proof(self, challenge):
+    def boot_proof(self, challenge: BootChallenge) -> BootChallenge:
         self.accepting = False
         with self.connection() as db:
             current, previous = db.execute("SELECT current,previous FROM boots WHERE id=1").fetchone()
@@ -181,9 +244,11 @@ class SyntheticNode:
                 or self.boot_id != current
             ):
                 raise ValueError("boot challenge does not match durable node journal")
-            return challenge | {"new_boot": current}
+            proof = challenge.copy()
+            proof["new_boot"] = current
+            return proof
 
-    def close(self):
+    def close(self) -> None:
         self.temporary.cleanup()
 
 
@@ -194,12 +259,12 @@ class LifecycleNode(SyntheticNode):
     recovery reads the journal and never invokes this method a second time.
     """
 
-    def __init__(self, node_id, lifecycle):
+    def __init__(self, node_id: str, lifecycle: NodeLifecycle) -> None:
         super().__init__(node_id)
         self.lifecycle = lifecycle
         self.lifecycle.close_admission()
 
-    async def apply_lifecycle(self, operation, authority, timeout_s):
+    async def apply_lifecycle(self, operation: NodeOperation, authority: NodeAuthority, timeout_s: float) -> NodeEvidence:
         import asyncio
         import math
 
@@ -240,14 +305,14 @@ class LifecycleNode(SyntheticNode):
             self.lifecycle.close_admission()
             raise
 
-    def observe_drained(self, attempt):
+    def observe_drained(self, attempt: str) -> NodeEvidence:
         self.active = int(
             not self.lifecycle.http_idle.is_set()
             or (self.lifecycle.background.worker is not None and not self.lifecycle.background.worker.idle.is_set())
         )
         return super().observe_drained(attempt)
 
-    def startup(self, authority):
+    def startup(self, authority: NodeAuthority) -> None:
         self.lifecycle.close_admission()
         super().startup(authority)
         with self.connection() as db:

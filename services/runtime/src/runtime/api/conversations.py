@@ -12,11 +12,12 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query
 from sqlalchemy import and_, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from runtime.api.auth import Principal, current_principal
 from runtime.config import settings
 from runtime.loop.toolbroker import hmac_json
-from runtime.state.db import ContinuationInput, Conversation, Run, RunEventRow, SessionLocal
+from runtime.state.db import ContinuationInput, Conversation, Run, RunEventRow, SessionLocal, WorkbenchAttempt
 
 TERMINAL = {"completed", "failed", "canceled"}
 
@@ -26,7 +27,7 @@ def enabled() -> None:
         raise HTTPException(404, "isolated conversations disabled")
 
 
-def legacy(row: Any) -> bool:
+def legacy(row: WorkbenchAttempt) -> bool:
     descriptor = {
         "scope_id": row.scope_id,
         "action": "create",
@@ -38,7 +39,7 @@ def legacy(row: Any) -> bool:
     return row.fingerprint == hashlib.sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-async def owner(session: Any, conversation_id: str, principal: Principal, agent: str | None = None) -> Conversation:
+async def owner(session: AsyncSession, conversation_id: str, principal: Principal, agent: str | None = None) -> Conversation:
     from runtime.api.workbench import user_scope
 
     row = await session.get(Conversation, conversation_id)

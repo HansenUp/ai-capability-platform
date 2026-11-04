@@ -5,13 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, Self
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import JSON, Integer, String, UniqueConstraint, select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from typing_extensions import TypedDict
 
 from runtime.api.auth import Principal, current_principal, verify_jwt
 from runtime.config import settings
@@ -20,6 +21,36 @@ from runtime.state import db
 PREFIX = "/v1/isolated-observe"
 ENABLED = object()
 router = APIRouter(prefix=PREFIX)
+
+
+class ObservationPayload(TypedDict, total=False):
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cost: float | None
+    currency: Literal["CNY", "USD"] | None
+    instances: int
+    healthy: bool
+
+
+class ObservationView(TypedDict):
+    receipt_id: int
+    event_id: str
+    agent_id: str
+    kind: str
+    payload: ObservationPayload
+    received_at: str
+    trust: Literal["unverified"]
+    billing_eligible: Literal[False]
+    forwarded: Literal[False]
+
+
+class HistoryView(TypedDict):
+    trust: Literal["unverified"]
+    billing_eligible: Literal[False]
+    snapshot_guaranteed: Literal[False]
+    items: list[ObservationView]
+    next_after: int | None
 
 
 class Metadata(DeclarativeBase):
@@ -35,7 +66,7 @@ class Observation(Metadata):
     event_id: Mapped[str] = mapped_column(String(128))
     digest: Mapped[str] = mapped_column(String(64))
     kind: Mapped[str] = mapped_column(String(16))
-    payload: Mapped[dict] = mapped_column(JSON)
+    payload: Mapped[ObservationPayload] = mapped_column(JSON)
     received_at: Mapped[str] = mapped_column(String(40))
     __table_args__ = (UniqueConstraint("tenant", "reporter", "event_id"),)
 
@@ -52,7 +83,7 @@ class Usage(Strict):
     currency: Literal["CNY", "USD"] | None = None
 
     @model_validator(mode="after")
-    def currency_pair(self):
+    def currency_pair(self) -> Self:
         if (self.cost is None) != (self.currency is None):
             raise ValueError("cost and currency must both be present or absent")
         return self
@@ -66,10 +97,12 @@ class Status(Strict):
 class Event(Strict):
     event_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
     kind: Literal["usage", "status"]
-    payload: dict
+    payload: dict[str, str | int | float | bool | None]
 
 
-async def identity(request: Request, response: Response, principal: Principal = Depends(current_principal)):
+async def identity(
+    request: Request, response: Response, principal: Principal = Depends(current_principal)
+) -> tuple[Principal, dict[str, object]]:
     response.headers["Cache-Control"] = "no-store"
     if (
         getattr(request.app.state, "isolated_observe", None) is not ENABLED
@@ -85,7 +118,7 @@ async def identity(request: Request, response: Response, principal: Principal = 
     return principal, claims
 
 
-def view(row):
+def view(row: Observation) -> ObservationView:
     return {
         "receipt_id": row.id,
         "event_id": row.event_id,
@@ -100,7 +133,7 @@ def view(row):
 
 
 @router.post("/events")
-async def receive(request: Request, auth=Depends(identity)):
+async def receive(request: Request, auth: tuple[Principal, dict[str, object]] = Depends(identity)) -> ObservationView:
     principal, claims = auth
     if principal.auth_method != "client_credentials":
         raise HTTPException(403, "reporter service identity required")
@@ -142,6 +175,8 @@ async def receive(request: Request, auth=Depends(identity)):
                 Observation.tenant == binding[0], Observation.reporter == reporter, Observation.event_id == event.event_id
             )
         )
+        if row is None:
+            raise HTTPException(503, "observation receipt unavailable; delivery outcome unknown")
         if row.digest != digest:
             raise HTTPException(409, "event identity conflicts; do not overwrite")
         await session.commit()
@@ -149,7 +184,11 @@ async def receive(request: Request, auth=Depends(identity)):
 
 
 @router.get("/events")
-async def history(after: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100), auth=Depends(identity)):
+async def history(
+    after: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    auth: tuple[Principal, dict[str, object]] = Depends(identity),
+) -> HistoryView:
     principal, _ = auth
     if principal.auth_method != "user" or "platform-admin" not in principal.roles:
         raise HTTPException(403, "direct tenant administrator required")
