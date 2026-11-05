@@ -8,7 +8,7 @@ import {preflight} from "../demo-preflight.mjs";
 async function fixture(run) {
  const root=await mkdtemp(join(tmpdir(),"demo-preflight-"));
  try {
-  for(const name of [".venv/bin/python","scripts/verify_s12_workbench.py","scripts/local_demo.html","scripts/local_demo_ticket_readonly.html","apps/portal-web/demo.html","modules/vite.mjs","modules/vue.mjs","modules/playwright.mjs"]){
+  for(const name of [".venv/bin/python","scripts/verify_s12_workbench.py","scripts/local_demo_f10.html","scripts/local_demo.html","scripts/local_demo_ticket_readonly.html","apps/portal-web/demo.html","modules/vite.mjs","modules/vue.mjs","modules/playwright.mjs"]){
    const path=join(root,name);await mkdir(join(path,".."),{recursive:true});await writeFile(path,"synthetic static placeholder",{mode:0o700});
   }
   const options={root,args:[],env:{},resolveModule:name=>join(root,"modules",name==="@vitejs/plugin-vue"?"vue.mjs":`${name}.mjs`)};
@@ -34,4 +34,11 @@ test("unknown and conflicting modes refuse silent fallback",()=>fixture(async o=
 }));
 test("missing browser entry is detected before service startup",()=>fixture(async o=>{
  o.env.PLAYWRIGHT_MODULE=join(o.root,"missing.mjs");await assert.rejects(preflight(o),/PLAYWRIGHT_MODULE/);
+}));
+
+test("F10 lifetime is explicit, bounded and mode isolated",()=>fixture(async o=>{
+ for(const args of [["--f10-readonly","--lifetime-seconds=59"],["--f10-readonly","--lifetime-seconds=1681"],["--f10-readonly","--lifetime-seconds=1.5"],["--f10-readonly","--lifetime-seconds=Infinity"],["--lifetime-seconds=60"],["--f10-readonly","--lifetime-seconds=60","--lifetime-seconds=60"],["--f10-readonly","--f6-readonly"]])await assert.rejects(preflight({...o,args}),/DEMO_CONFIG/);
+ assert.equal((await preflight({...o,args:["--f10-readonly","--lifetime-seconds=60"]})).lifetimeSeconds,60);
+ assert.equal((await preflight({...o,args:["--f10-readonly"]})).lifetimeSeconds,1680);
+ await rm(join(o.root,"scripts/local_demo_f10.html"));await assert.rejects(preflight({...o,args:["--f10-readonly"]}),/F10体验入口/);
 }));
