@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>Isolated Portal queries</title></head><body>
+<label>合成身份<select id="actor" aria-label="合成身份"><option>alice</option><option>alice_fresh</option><option>bob</option><option>foreign</option></select></label><div id="app"></div>
+<script type="module">
+import {createApp,h} from 'vue';import {createRouter,createWebHashHistory,RouterView} from 'vue-router';
+import Queries from '../../src/views/Queries.vue';import AgentList from '../../src/views/AgentList.vue';import {portalTokenKey} from '../../src/runtime-session.ts';
+const tokens=await(await fetch('/synthetic-tokens')).json();
+const router=createRouter({history:createWebHashHistory(),routes:[{path:'/',component:AgentList},{path:'/queries',component:Queries}]});
+const app=createApp({render:()=>h(RouterView)});app.provide(portalTokenKey,async()=>tokens[document.querySelector('#actor').value]);app.use(router).mount('#app');
+</script></body></html>

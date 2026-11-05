@@ -35,7 +35,7 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-kicker">YOUR AGENT WORKSPACE</div><h2>可用 Agent</h2><p>选择已发布的 Agent，开始一项新任务或继续查看已有 Run。</p>
-  <router-link to="/tasks">我的任务</router-link>
+  <router-link to="/tasks">我的任务</router-link> · <router-link to="/queries">受限查询</router-link>
   <TaskGuide />
   <label>搜索 Agent <input v-model="query" /></label>
   <label for="catalog-version">筛选已发布版本</label><select id="catalog-version" v-model="version"><option value="">全部版本</option><option v-for="value in versions" :key="value" :value="value">{{ value }}</option></select>
