@@ -27,6 +27,7 @@ const identity = ref<"alice" | "bob">("alice");
 const selection = ref<"alice" | "bob">("alice");
 const generation = ref(0);
 const router = createRouter({ history: createWebHashHistory(), routes: [
+  { path: "/queries", component: () => import("./views/Queries.vue") },
   { path: "/tasks", component: Tasks },
   { path: "/", component: AgentList },
   { path: "/chat/:agentId", component: Chat },

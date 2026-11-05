@@ -25,8 +25,18 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8183"]
 CMD ["cedar-engine"]
 
+# ---- python-base：构建和运行阶段共用已修补的Debian 13基础层 ----
+FROM python:3.12-slim-trixie AS python-base
+# 修复CVE-2026-109518；经HTTPS获取官方安全更新，版本不足时构建失败，不放宽扫描门禁。
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g; s|http://security.debian.org|https://security.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+ && apt-get update -o APT::Update::Error-Mode=any \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --only-upgrade apt libapt-pkg7.0 \
+ && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge 3.0.4 \
+ && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg7.0)" ge 3.0.4 \
+ && rm -rf /var/lib/apt/lists/*
+
 # ---- builder：普通（非可编辑）安装到独立前缀，便于整体拷贝到运行阶段 ----
-FROM python:3.12-slim AS builder
+FROM python-base AS builder
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY packages/contract /build/packages/contract
@@ -36,7 +46,7 @@ RUN pip install --prefix=/install /build/packages/contract /build/services/polic
 
 # ---- runtime（默认目标）：仅包含安装产物，非 root 用户运行 ----
 # 默认 POLICY_ENGINE=cedar，经 CEDAR_URL 访问 cedar-engine；baseline 只能显式开启，POLICY_ENV=prod 时拒绝启动。
-FROM python:3.12-slim AS runtime
+FROM python-base AS runtime
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 COPY --from=builder /install /usr/local
 RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \

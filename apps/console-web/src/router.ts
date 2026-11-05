@@ -14,6 +14,7 @@ export const router = createRouter({
     { path: "/manage/directory", component: () => import("./views/Directory.vue") },
     { path: "/manage/runs", component: () => import("./views/Runs.vue") },
     { path: "/manage/queries", component: () => import("./views/QueryWorkbench.vue") },
+    { path: "/manage/order-compare", component: () => import("./views/OrderCompare.vue") },
     { path: "/manage/order-groups", component: () => import("./views/OrderGroups.vue") },
     { path: "/manage/order-counts", component: () => import("./views/OrderCounts.vue") },
     { path: "/manage/data-views", component: () => import("./views/DataViews.vue") },

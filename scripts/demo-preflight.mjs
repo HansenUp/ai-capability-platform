@@ -5,9 +5,14 @@ import {fileURLToPath} from "node:url";
 import {createRequire} from "node:module";
 
 export async function preflight({root, args, env, resolveModule}) {
-  const modes = ["--b3-read", "--f6-readonly", "--analytics-readonly", "--sales-readonly", "--ticket-readonly"];
+  const modes = ["--f10-readonly", "--b3-read", "--f6-readonly", "--analytics-readonly", "--sales-readonly", "--ticket-readonly"];
   const allowed = new Set([...modes, "--verify-only", "--preflight-only"]);
-  if (args.some(arg => !allowed.has(arg))) throw new Error("DEMO_CONFIG: 未识别参数；使用--help查看支持的启动模式。");
+  const lifetimeArgs = args.filter(arg => arg.startsWith("--lifetime-seconds="));
+  const ordinaryArgs = args.filter(arg => !arg.startsWith("--lifetime-seconds="));
+  if (lifetimeArgs.length > 1 || (lifetimeArgs.length && !args.includes("--f10-readonly"))) throw new Error("DEMO_CONFIG: lifetime-seconds仅供F10单一profile使用，不能重复。");
+  const lifetime = lifetimeArgs[0]?.slice("--lifetime-seconds=".length) ?? "1680";
+  if (!/^[1-9][0-9]*$/.test(lifetime) || Number(lifetime) < 60 || Number(lifetime) > 1680) throw new Error("DEMO_CONFIG: F10有效期必须为60–1680整数秒。");
+  if (ordinaryArgs.some(arg => !allowed.has(arg))) throw new Error("DEMO_CONFIG: 未识别参数；使用--help查看支持的启动模式。");
   if (modes.filter(mode => args.includes(mode)).length > 1) throw new Error("DEMO_CONFIG: 一次只能选择一种场景模式。");
   const consoleRequire = createRequire(join(root, "apps/console-web/package.json"));
   const browserRequire = createRequire(join(root, "apps/console-web/tests/browser/support.mjs"));
@@ -32,6 +37,7 @@ export async function preflight({root, args, env, resolveModule}) {
   } catch {throw new Error("DEMO_CONFIG: PLAYWRIGHT_MODULE无法解析；请指向已有本机Playwright入口，不会下载依赖或浏览器。");}
   await file(playwright, "PLAYWRIGHT_MODULE指定的本机入口");
   for (const page of ["scripts/local_demo.html", "scripts/local_demo_ticket_readonly.html", "apps/portal-web/demo.html"]) await file(join(root, page), page);
+  if (args.includes("--f10-readonly")) await file(join(root, "scripts/local_demo_f10.html"), "F10体验入口");
   if (env.S12_DEMO_EVIDENCE) {
     let parent = resolve(env.S12_DEMO_EVIDENCE);
     while (true) {
@@ -42,5 +48,5 @@ export async function preflight({root, args, env, resolveModule}) {
       }
     }
   }
-  return {python, vite: modules.vite, vue: modules["@vitejs/plugin-vue"], playwright};
+  return {python, vite: modules.vite, vue: modules["@vitejs/plugin-vue"], playwright, lifetimeSeconds: Number(lifetime)};
 }

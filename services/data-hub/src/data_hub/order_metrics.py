@@ -1,14 +1,20 @@
 """Deterministic bounded order cohort calculation, with no I/O or model calls."""
 
+import re
 from datetime import UTC, datetime, timedelta
 
 FIELDS = ("order_id", "created_at", "status", "amount_minor", "currency", "updated_at")
 STATUSES = ("pending", "completed", "cancelled")
+_SOURCE_OFFSET = re.compile(r"[+-](\d{2})(?::?(\d{2}))?(?::?(\d{2}))?(?:[.,]\d+)?\Z")
 
 
 def instant(value):
     if not isinstance(value, str):
         raise ValueError("timezone required")
+    # 保留来源合法ISO语法及亚毫秒精度；拒绝会被fromisoformat归一化的非法偏移分量。
+    offset = _SOURCE_OFFSET.search(value)
+    if offset and any(int(part) >= limit for part, limit in zip(offset.groups(), (24, 60, 60), strict=True) if part is not None):
+        raise ValueError("invalid timezone component")
     result = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if result.tzinfo is None:
         raise ValueError("timezone required")
@@ -66,7 +72,7 @@ def aggregate(result, arguments):
     for row in unique.values():
         try:
             created = instant(row["created_at"])
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return unavailable("创建时间无效")
         if row["status"] not in STATUSES:
             return unavailable("订单状态无效")
@@ -79,7 +85,7 @@ def aggregate(result, arguments):
     for row in cohort:
         try:
             instant(row["updated_at"])
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             unknown_updated += 1
         if row["status"] != "completed":
             continue
